@@ -92,17 +92,20 @@ python -m experiments.phase1_arc --mode contest   # full benchmark
 
 ### Expected performance
 
-Benchmarked on 4 CPU cores (x86_64). Times scale linearly with tasks, inversely with cores.
+Benchmarked on 2 CPU cores (x86_64). Times scale linearly with tasks, inversely with cores.
 
-| Mode | Sample tasks (8) | 50 real tasks | 400 real tasks (full) |
-|------|-----------------|---------------|----------------------|
-| `quick` | 8/8, ~5s | ~0/50, ~13s | ~2-4%, ~2 min |
-| `default` | 8/8, ~50s | 2/50 (4%), ~3 min | ~4%, ~10 min |
-| `contest` | 8/8, ~3 min | — | ~5-8%, ~1 hr |
+| Mode | Sample tasks (8) | 400 real tasks (full) |
+|------|-----------------|----------------------|
+| `quick` | 8/8, ~5s | ~39/400 (9.8%), ~6 min |
+| `default` | 8/8, ~50s | ~39/400 (9.8%), ~15 min |
+| `contest` | 8/8, ~3 min | ~10-12%, ~1 hr |
 
-**On M1 Max (10 cores):** roughly 2.5x faster than the times above.
+**89 primitives** including connected components, grid partitioning, diagonal ops, and anomaly removal.
+**Depth-3 exhaustive enumeration** with smart subtree reuse finds 3-step programs efficiently.
 
-The 4% solve rate on real ARC tasks is the Phase 1 baseline. The key metric is whether
+**On M1 Max (10 cores):** roughly 5x faster than the times above.
+
+The ~10% solve rate is the Phase 1 baseline. The key metric is whether
 solve rate **increases across rounds** as the library grows — that validates compounding.
 
 ### Overriding individual parameters
@@ -226,7 +229,7 @@ agi-core/
 │
 ├── grammars/                # PLUGGABLE — one file per domain (all 4 interfaces)
 │   ├── symbolic_math.py     # Domain: 1D symbolic regression (15 math primitives)
-│   └── arc.py               # Domain: ARC-AGI grid transformations (48 primitives)
+│   └── arc.py               # Domain: ARC-AGI grid transformations (89 primitives)
 │
 ├── experiments/             # Thin domain-specific wrappers over core/runner.py
 │   └── phase1_arc.py        # ARC curriculum training (dataset loading + ARC wiring)
@@ -260,7 +263,7 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** 🔧 ARC-AGI-1 training, curriculum style (48 primitives, beam search, wake-sleep)
+- **Phase 1** 🔧 ARC-AGI-1 training, curriculum style (89 primitives, beam search, wake-sleep)
 - **Phase 2** ARC-AGI-1 eval, zero-shot transfer
 - **Phase 3** Second domain (Zork), same core, cold start
 - **Phase 4** Cross-domain library transfer

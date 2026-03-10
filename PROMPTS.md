@@ -172,4 +172,14 @@
 
 ---
 
+## Session 4 — Claude Code Web (March 10, 2026)
+
+### Prompt 28: Continue Improving
+
+> continue
+
+[User asked to continue improving the system. Claude analyzed near-miss tasks, studied agi-mvp-general's object-level primitives, and added 25 new primitives covering connected components, grid partitioning, diagonal operations, and anomaly removal. Also upgraded depth-3 exhaustive enumeration with smart subtree reuse.]
+
+---
+
 *This document will be updated with each new session.*

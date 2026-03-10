@@ -265,4 +265,64 @@ Pipeline run: `python -m experiments.phase1_arc --pipeline --mode quick`
 
 ---
 
+## Session 4 — Claude Code Web (March 10, 2026)
+
+### Decision: 25 New Primitives — Object-Level, Grid Partitioning, Diagonal
+
+**Context:** Session 3 solved 33/400 (8.2%) training with 64 primitives and depth-2 exhaustive search. Analysis of near-miss tasks showed the system lacked object-level reasoning, grid partitioning, and anomaly removal capabilities.
+
+**Research methodology:** Studied agi-mvp-general's `objects.py` (connected components), `decompose.py` (grid partitioning), and `spatial/` (line extension). Analyzed 15 ARC tasks to identify missing operation categories. Examined 8 near-miss tasks (error < 0.03) to find targeted primitives.
+
+**Decision:** Add 25 new primitives (89 total) in three batches:
+
+**Batch 1: Connected components (9 primitives)**
+- `keep_largest_only`, `keep_smallest_only` — isolate objects by size
+- `remove_largest_obj`, `remove_smallest_obj` — remove objects by size
+- `count_objects`, `recolor_each_obj` — object analysis
+- `mirror_objects_h`, `mirror_objects_v` — per-object mirroring within bbox
+- `flood_fill_bg` — fill enclosed background regions
+
+**Batch 2: Grid partitioning & structural (7 primitives)**
+- `extract_tl_cell`, `extract_br_cell`, `remove_grid_lines` — grid structure ops
+- `shift_rows_right`, `shift_rows_left` — diagonal staircase patterns
+- `extend_lines`, `extend_diagonals` — line/ray completion
+
+**Batch 3: Color/pattern & anomaly removal (9 primitives)**
+- `binarize`, `color_to_mc`, `upscale_pattern` — color transforms
+- `denoise_majority`, `fill_rectangles` — noise removal
+- `extract_minority_c`, `extract_majority_c` — color isolation
+- `replace_noise_objs`, `hollow_objects` — object cleanup
+
+**Result:** 39/400 (9.8%) training — 6 new tasks solved using new primitives.
+
+### Decision: Depth-3 Exhaustive Enumeration with Smart Pruning
+
+**Context:** Previous depth-3 used K³ evaluations (brute-force triple combinations), which was expensive and explored many redundant combinations.
+
+**Decision:** New depth-3 approach: take top-K depth-2 programs as complete subtrees, wrap each with every unary outer. Cost: N×K evaluations instead of K³. Includes:
+- Early exit: stop enumeration immediately when a perfect solve is found
+- Semantic dedup: filter duplicate outputs between depth levels
+- Default depth increased from 2 to 3 (affordable with N×K cost)
+
+**Rationale:** An N×K depth-3 search evaluates ~1,780 additional programs per task (89 prims × 20 top-K). This is far cheaper than K³ = 8,000 and produces better results because the depth-2 subtrees are pre-filtered by quality.
+
+### Benchmark Results: After This Session
+
+| Config | Training (400) | Eval (400) | Time |
+|--------|---------------|------------|------|
+| Session 3 baseline (depth-2, 64 prims) | 33/400 (8.2%) | 3/400 (0.75%) | 5m |
+| Session 4 (depth-3, 89 prims) | 39/400 (9.8%) | 4/400 (1.0%) | 6m |
+
+**New tasks solved by new primitives:**
+- `007bbfb7: upscale_pattern` — self-similar tiling
+- `08ed6ac7: recolor_each_obj` — assign unique colors to objects
+- `0b148d64: crop_nonzero(extract_minority_c)` — isolate rare color
+- `a87f7484: crop_nonzero(extract_majority_c)` — isolate dominant color
+- `e26a3af2: fill_rectangles(denoise_3x3)` — rectangle completion
+- `623ea044: extend_diagonals` — diagonal ray tracing
+
+**Comparison with agi-mvp-general:** 35/400 (8.8%) on evaluation set. Gap remains significant — agi-mvp-general uses 304 primitives, 13 specialized search phases, and object decomposition pipeline.
+
+---
+
 *This document will be updated with each new session and major decision.*
