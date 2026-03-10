@@ -12,8 +12,10 @@ The loop:
 
 from __future__ import annotations
 import logging
+import math
 import random
 import time
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -30,6 +32,69 @@ from .interfaces import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Transition Matrix — DreamCoder-style generative prior
+# =============================================================================
+
+class TransitionMatrix:
+    """
+    Learns P(child_op | parent_op) from successful programs.
+
+    This biases random program generation toward compositions
+    that have been observed in solutions. The key DreamCoder insight:
+    not all compositions are equally likely to be useful.
+    """
+
+    def __init__(self, smoothing: float = 0.1):
+        self._counts: dict[str, Counter] = defaultdict(Counter)
+        self._totals: dict[str, int] = defaultdict(int)
+        self._smoothing = smoothing
+
+    def observe_program(self, program: Program) -> None:
+        """Record parent->child transitions from a program tree."""
+        for child in program.children:
+            self._counts[program.root][child.root] += 1
+            self._totals[program.root] += 1
+            self.observe_program(child)
+
+    def probability(self, parent_op: str, child_op: str, n_primitives: int) -> float:
+        """P(child_op | parent_op) with Laplace smoothing."""
+        count = self._counts[parent_op][child_op]
+        total = self._totals[parent_op]
+        smooth = self._smoothing
+        return (count + smooth) / (total + smooth * n_primitives)
+
+    def weighted_choice(self, parent_op: str, primitives: list[Primitive],
+                        rng: random.Random) -> Primitive:
+        """Choose a child primitive biased by the transition matrix."""
+        n = len(primitives)
+        if not self._totals.get(parent_op):
+            return rng.choice(primitives)
+
+        weights = [
+            self.probability(parent_op, p.name, n) for p in primitives
+        ]
+        total_w = sum(weights)
+        if total_w <= 0:
+            return rng.choice(primitives)
+
+        r = rng.random() * total_w
+        cumulative = 0.0
+        for i, w in enumerate(weights):
+            cumulative += w
+            if r <= cumulative:
+                return primitives[i]
+        return primitives[-1]
+
+    @property
+    def size(self) -> int:
+        """Number of observed transitions."""
+        return sum(self._totals.values())
+
+    def __repr__(self):
+        return f"TransitionMatrix({self.size} transitions, {len(self._counts)} parents)"
 
 
 # =============================================================================
@@ -126,6 +191,7 @@ class Learner:
         self.sleep_cfg = sleep_config or SleepConfig()
 
         self._rng = random.Random(self.search_cfg.seed)
+        self._transition_matrix = TransitionMatrix()
 
     # -------------------------------------------------------------------------
     # WAKE PHASE: observe → hypothesize → execute → score → store
@@ -232,12 +298,13 @@ class Learner:
 
     def sleep(self) -> SleepResult:
         """
-        Consolidation phase.
+        Consolidation phase — the "dream" step.
 
         1. Collect all solved programs
-        2. Extract sub-trees that recur across multiple solutions
-        3. Score them by how much they compress the search
-        4. Add the best as new named primitives to the library
+        2. Build transition matrix P(child_op | parent_op) from solutions
+        3. Extract sub-trees that recur across multiple solutions
+        4. Score by compression value: tasks_used × log(size)
+        5. Add the best as new named primitives to the library
         """
         t0 = time.time()
         cfg = self.sleep_cfg
@@ -245,7 +312,17 @@ class Learner:
         solutions = self.memory.get_solutions()
         lib_before = len(self.memory.get_library())
 
-        # 1. Extract all sub-trees from all solutions
+        # 1. Build transition matrix from ALL solved programs
+        #    This is the DreamCoder insight: learn which compositions work
+        for task_id, scored in solutions.items():
+            self._transition_matrix.observe_program(scored.program)
+
+        logger.info(
+            f"  [sleep] Transition matrix: {self._transition_matrix.size} transitions "
+            f"from {len(solutions)} solved programs"
+        )
+
+        # 2. Extract all sub-trees from all solutions
         subtree_counts: dict[str, list[tuple[Program, str]]] = {}
         for task_id, scored in solutions.items():
             for subtree in self._enumerate_subtrees(scored.program):
@@ -254,18 +331,19 @@ class Learner:
                     subtree_counts[key] = []
                 subtree_counts[key].append((subtree, task_id))
 
-        # 2. Filter: must appear in >= min_occurrences different tasks,
+        # 3. Filter: must appear in >= min_occurrences different tasks,
         #    must be >= min_size nodes (no trivial single-node entries)
         candidates = []
         for key, occurrences in subtree_counts.items():
             task_ids = list(set(tid for _, tid in occurrences))
             subtree = occurrences[0][0]
             if len(task_ids) >= cfg.min_occurrences and subtree.size >= cfg.min_size:
-                # Usefulness = tasks_used_in * size (bigger reusable chunks = more compression)
-                usefulness = len(task_ids) * subtree.size
+                # Usefulness = tasks_used_in × log(size+1)
+                # Log scaling prevents huge subtrees from dominating
+                usefulness = len(task_ids) * math.log(subtree.size + 1)
                 candidates.append((subtree, task_ids, usefulness))
 
-        # 3. Sort by usefulness, add top entries to library
+        # 4. Sort by usefulness, add top entries to library
         candidates.sort(key=lambda c: c[2], reverse=True)
 
         existing_reprs = {repr(e.program) for e in self.memory.get_library()}
@@ -288,11 +366,11 @@ class Learner:
             new_entries.append(entry)
             existing_reprs.add(repr(subtree))
 
-        # 4. Add to memory
+        # 5. Add to memory
         for entry in new_entries:
             self.memory.add_to_library(entry)
 
-        # 5. Decay old entries
+        # 6. Decay old entries
         for entry in self.memory.get_library():
             if entry not in new_entries:
                 self.memory.update_usefulness(
@@ -378,21 +456,54 @@ class Learner:
     # -------------------------------------------------------------------------
 
     def _init_beam(self, primitives: list[Primitive], n: int) -> list[Program]:
-        """Generate n small random programs from the available primitives."""
+        """
+        Generate n random programs of varying depth (1-3).
+
+        Uses the transition matrix to bias toward known-good compositions
+        when available. Falls back to uniform random when no prior exists.
+        """
         beam = []
-        for _ in range(n):
-            # Start with depth-1 or depth-2 random compositions
-            prim = self._rng.choice(primitives)
-            if prim.arity == 0:
-                prog = Program(root=prim.name)
-            else:
-                children = []
-                for _ in range(prim.arity):
-                    child_prim = self._rng.choice(primitives)
-                    children.append(Program(root=child_prim.name))
-                prog = Program(root=prim.name, children=children)
+        use_prior = self._transition_matrix.size > 0
+
+        for i in range(n):
+            # Vary depth: 40% depth-1, 40% depth-2, 20% depth-3
+            r = self._rng.random()
+            max_depth = 1 if r < 0.4 else (2 if r < 0.8 else 3)
+            prog = self._random_program(primitives, max_depth, use_prior)
             beam.append(prog)
         return beam
+
+    def _random_program(self, primitives: list[Primitive], max_depth: int,
+                        use_prior: bool, parent_op: str = "") -> Program:
+        """Generate a random program tree up to max_depth."""
+        if max_depth <= 1:
+            # Leaf: pick a primitive (prefer arity-0 or arity-1 as leaf)
+            leaf_prims = [p for p in primitives if p.arity <= 1]
+            if not leaf_prims:
+                leaf_prims = primitives
+            if use_prior and parent_op:
+                prim = self._transition_matrix.weighted_choice(
+                    parent_op, leaf_prims, self._rng)
+            else:
+                prim = self._rng.choice(leaf_prims)
+            return Program(root=prim.name)
+
+        # Internal node: pick a primitive with arity > 0
+        if use_prior and parent_op:
+            prim = self._transition_matrix.weighted_choice(
+                parent_op, primitives, self._rng)
+        else:
+            prim = self._rng.choice(primitives)
+
+        if prim.arity == 0:
+            return Program(root=prim.name)
+
+        children = []
+        for _ in range(prim.arity):
+            child = self._random_program(
+                primitives, max_depth - 1, use_prior, prim.name)
+            children.append(child)
+        return Program(root=prim.name, children=children)
 
     def _evaluate_program(self, program: Program, task: Task) -> ScoredProgram:
         """Evaluate a program on all training examples, return scored result."""

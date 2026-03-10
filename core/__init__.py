@@ -17,6 +17,7 @@ from .interfaces import (
     Memory,
 )
 from .learner import (
+    TransitionMatrix,
     Learner,
     SearchConfig,
     SleepConfig,

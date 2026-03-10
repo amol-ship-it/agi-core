@@ -8,3 +8,4 @@ library.json
 dist/
 build/
 .venv/
+data/
