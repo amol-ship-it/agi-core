@@ -23,6 +23,13 @@ class SearchConfig:
     semantic_dedup: bool = True     # deduplicate beam by output vector
     dedup_precision: int = 6        # decimal places for output hashing
 
+    # Exhaustive enumeration: try ALL programs up to this depth before beam search.
+    # depth 1 = all single primitives, depth 2 = all pairs, depth 3 = all triples.
+    # Set to 0 to disable. Enumeration is cheap for depth <= 2 (N + N² programs).
+    exhaustive_depth: int = 2
+    # For depth 2+, limit inner primitives to top-K ranked by depth-1 performance.
+    exhaustive_top_k: int = 15
+
 
 @dataclass
 class SleepConfig:
@@ -39,3 +46,7 @@ class CurriculumConfig:
     sort_by_difficulty: bool = True
     wake_sleep_rounds: int = 3
     workers: int = 0  # 0 = auto-detect (performance cores), 1 = sequential
+    # Within-run sequential compounding: process tasks one at a time,
+    # immediately promoting solved programs to the library so the next
+    # task benefits. When True, overrides workers to 1.
+    sequential_compounding: bool = False

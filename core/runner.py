@@ -231,6 +231,14 @@ Examples:
                         help="Disable log file (console only)")
     parser.add_argument("--verbose", action="store_true",
                         help="Debug logging")
+    parser.add_argument("--exhaustive-depth", type=int, default=2,
+                        help="Exhaustive enumeration depth (0=disabled, 2=pairs)")
+    parser.add_argument("--exhaustive-top-k", type=int, default=20,
+                        help="Top-K primitives for depth-2+ enumeration")
+    parser.add_argument("--sequential-compounding", action="store_true",
+                        help="Process tasks sequentially with immediate concept promotion")
+    parser.add_argument("--culture", type=str, default="",
+                        help="Path to culture file to load (cross-run knowledge transfer)")
     return parser
 
 
@@ -395,6 +403,16 @@ class ExperimentConfig:
     min_size: int = 2
     max_library_size: int = 500
 
+    # Exhaustive enumeration
+    exhaustive_depth: int = 2
+    exhaustive_top_k: int = 20
+
+    # Sequential compounding
+    sequential_compounding: bool = False
+
+    # Culture file (load pre-trained library)
+    culture_path: str = ""
+
     # Output
     runs_dir: str = DEFAULT_RUNS_DIR
     no_log: bool = False
@@ -513,6 +531,12 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         evals_per_task = beam_width * max_gens
         total_budget = evals_per_task * len(tasks) * rounds
 
+    # Load culture file if specified (cross-run knowledge transfer)
+    if cfg.culture_path and os.path.isfile(cfg.culture_path):
+        memory.load_culture(cfg.culture_path)
+        print(f"\n  Culture loaded: {len(memory.get_library())} library entries, "
+              f"{len(memory.get_solutions())} solutions")
+
     learner = Learner(
         environment=cfg.environment,
         grammar=cfg.grammar,
@@ -527,6 +551,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             energy_beta=cfg.energy_beta,
             solve_threshold=cfg.solve_threshold,
             seed=cfg.seed,
+            exhaustive_depth=cfg.exhaustive_depth,
+            exhaustive_top_k=cfg.exhaustive_top_k,
         ),
         sleep_config=SleepConfig(
             min_occurrences=cfg.min_occurrences,
@@ -554,6 +580,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             sort_by_difficulty=True,
             wake_sleep_rounds=rounds,
             workers=workers,
+            sequential_compounding=cfg.sequential_compounding,
         ),
         on_task_done=tracker.on_task_done,
     )
@@ -692,6 +719,11 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
 
     save_metrics_json(metrics, metrics_json_path)
     save_metrics_csv(metrics, metrics_csv_path)
+
+    # Save culture file (proper serialization with program reconstruction)
+    culture_path = os.path.join(runs_dir, f"{prefix}_culture.json")
+    memory.save_culture(culture_path)
+    # Also save legacy format
     memory.save(library_path)
 
     print()
