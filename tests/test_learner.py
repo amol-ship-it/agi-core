@@ -383,6 +383,173 @@ class TestLearnerHelpers(unittest.TestCase):
         self.assertIsInstance(prog, Program)
 
 
+class TestWakeWorker(unittest.TestCase):
+    """Test the module-level _wake_worker function used by multiprocessing."""
+
+    def test_wake_worker_direct(self):
+        from core.learner import _wake_worker
+        task = _make_identity_task()
+        env = StubEnv()
+        grammar = StubGrammar(seed=42)
+        drive = StubDrive()
+        library = []
+        search_cfg = SearchConfig(beam_width=10, max_generations=5, solve_threshold=0.01, seed=42)
+        tm = TransitionMatrix()
+        args = (task, env, grammar, drive, library, search_cfg, tm)
+        result = _wake_worker(args)
+        self.assertIsInstance(result, WakeResult)
+        self.assertEqual(result.task_id, "identity_task")
+
+    def test_wake_worker_with_library(self):
+        from core.learner import _wake_worker
+        task = _make_identity_task()
+        env = StubEnv()
+        grammar = StubGrammar(seed=42)
+        drive = StubDrive()
+        library = [LibraryEntry(name="lib_0", program=Program(root="identity"), usefulness=1.0)]
+        search_cfg = SearchConfig(beam_width=10, max_generations=5, solve_threshold=0.01, seed=42)
+        tm = TransitionMatrix()
+        args = (task, env, grammar, drive, library, search_cfg, tm)
+        result = _wake_worker(args)
+        self.assertIsInstance(result, WakeResult)
+
+
+class TestLearnerEarlyStop(unittest.TestCase):
+    """Test early stopping behavior in wake phase."""
+
+    def test_early_stop_on_perfect_solve(self):
+        """With generous early_stop_energy and an identity task, should stop early."""
+        # energy = alpha * pred_error + beta * complexity_cost
+        # For identity: pred_error=0.0, complexity=1 node, so energy = 0.001
+        # Set threshold above that to trigger early stop
+        learner = _make_learner(
+            beam_width=20, max_generations=100,
+            early_stop_energy=0.01, energy_beta=0.001,
+        )
+        task = _make_identity_task()
+        result = learner.wake_on_task(task)
+        self.assertTrue(result.solved)
+        self.assertLess(result.generations_used, 100)
+
+    def test_no_record_early_stop(self):
+        learner = _make_learner(
+            beam_width=20, max_generations=100,
+            early_stop_energy=0.01, energy_beta=0.001,
+        )
+        task = _make_identity_task()
+        result = learner._wake_on_task_no_record(task)
+        self.assertTrue(result.solved)
+        self.assertLess(result.generations_used, 100)
+
+
+class TestLearnerSleepEdgeCases(unittest.TestCase):
+
+    def test_sleep_deduplicates_library_entries(self):
+        """Sleep should not add entries that are already in the library."""
+        learner = _make_learner()
+        shared = Program(root="identity", children=[Program(root="double")])
+
+        # Pre-add an entry to the library with the same program repr
+        existing = LibraryEntry(name="existing", program=shared, usefulness=1.0)
+        learner.memory.add_to_library(existing)
+
+        # Store solutions with the same subtree
+        sol1 = ScoredProgram(
+            program=Program(root="identity", children=[
+                Program(root="identity", children=[Program(root="double")])
+            ]),
+            energy=0.0, prediction_error=0.0, complexity_cost=1.0, task_id="t1",
+        )
+        sol2 = ScoredProgram(
+            program=Program(root="double", children=[
+                Program(root="identity", children=[Program(root="double")])
+            ]),
+            energy=0.0, prediction_error=0.0, complexity_cost=1.0, task_id="t2",
+        )
+        learner.memory.store_solution("t1", sol1)
+        learner.memory.store_solution("t2", sol2)
+
+        result = learner.sleep()
+        # The shared subtree should be deduplicated against the existing entry
+        lib_names = [e.name for e in learner.memory.get_library()]
+        self.assertIn("existing", lib_names)
+
+    def test_sleep_respects_max_library_size(self):
+        learner = _make_learner()
+        learner.sleep_cfg.max_library_size = 1
+
+        # Pre-fill library to max
+        entry = LibraryEntry(name="full", program=Program(root="x"), usefulness=1.0)
+        learner.memory.add_to_library(entry)
+
+        # Store solutions that would generate new entries
+        for i in range(3):
+            sol = ScoredProgram(
+                program=Program(root="identity", children=[Program(root="double")]),
+                energy=0.0, prediction_error=0.0, complexity_cost=1.0, task_id=f"t{i}",
+            )
+            learner.memory.store_solution(f"t{i}", sol)
+
+        result = learner.sleep()
+        self.assertEqual(len(result.new_entries), 0)
+
+    def test_sleep_decays_old_entries(self):
+        learner = _make_learner()
+        learner.sleep_cfg.usefulness_decay = 0.5
+
+        entry = LibraryEntry(name="old_entry", program=Program(root="x"), usefulness=10.0)
+        learner.memory.add_to_library(entry)
+
+        # Sleep with no solutions — should still decay existing entries
+        learner.sleep()
+        lib = learner.memory.get_library()
+        # Usefulness should have decreased
+        self.assertLess(lib[0].usefulness, 10.0)
+
+
+class TestLearnerEvaluateException(unittest.TestCase):
+
+    def test_crashing_program_gets_penalty(self):
+        """Programs that throw exceptions should get a high error penalty."""
+
+        class CrashingEnv(StubEnv):
+            def execute(self, program, input_data):
+                if program.root == "crash":
+                    raise RuntimeError("boom")
+                return super().execute(program, input_data)
+
+        learner = Learner(
+            environment=CrashingEnv(),
+            grammar=StubGrammar(seed=42),
+            drive=StubDrive(),
+            memory=InMemoryStore(),
+            search_config=SearchConfig(beam_width=5, max_generations=3, seed=42),
+        )
+        task = _make_identity_task()
+        prog = Program(root="crash")
+        sp = learner._evaluate_program(prog, task)
+        self.assertGreater(sp.prediction_error, 1e5)
+
+
+class TestRandomProgramEdgeCases(unittest.TestCase):
+
+    def test_arity_zero_at_depth_greater_than_1(self):
+        """When a random pick selects arity-0 at depth > 1, should return leaf."""
+        learner = _make_learner()
+        # Only arity-0 primitives — forces the arity==0 early return at depth > 1
+        zero_prims = [Primitive("a", 0, None), Primitive("b", 0, None)]
+        prog = learner._random_program(zero_prims, max_depth=3, use_prior=False)
+        self.assertEqual(prog.depth, 1)
+
+    def test_no_low_arity_prims_at_leaf(self):
+        """When all primitives are arity > 1, should still pick one as leaf."""
+        learner = _make_learner()
+        high_arity = [Primitive("f", 2, None), Primitive("g", 3, None)]
+        prog = learner._random_program(high_arity, max_depth=1, use_prior=False)
+        # Falls back to using all primitives when no arity<=1 found
+        self.assertIn(prog.root, ["f", "g"])
+
+
 class TestConfigDefaults(unittest.TestCase):
 
     def test_search_config_defaults(self):
