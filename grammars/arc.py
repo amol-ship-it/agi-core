@@ -1143,6 +1143,126 @@ def upscale_pattern(grid: Grid) -> Grid:
     return result
 
 
+# =============================================================================
+# Near-miss-targeted primitives: anomaly removal, rectangle ops
+# =============================================================================
+
+def denoise_majority(grid: Grid) -> Grid:
+    """Replace each cell with the majority color in its 3x3 neighborhood.
+
+    More aggressive than denoise_3x3: replaces ANY cell that disagrees
+    with its neighborhood majority, not just cells with a 3x3 mode.
+    Effective for removing scattered noise within uniform objects.
+    """
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+    for r in range(h):
+        for c in range(w):
+            neighbors = []
+            for dr in range(-1, 2):
+                for dc in range(-1, 2):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w:
+                        neighbors.append(int(arr[nr, nc]))
+            majority = Counter(neighbors).most_common(1)[0][0]
+            result[r, c] = majority
+    return from_np(result)
+
+
+def fill_rectangles(grid: Grid) -> Grid:
+    """Find rectangular regions and fill holes within them.
+
+    For each connected component, if it's roughly rectangular
+    (compactness > 0.6), fill the entire bounding box with its color.
+    """
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+    result = [row[:] for row in grid]
+    for comp in comps:
+        min_r, min_c, max_r, max_c = comp["bbox"]
+        bbox_area = (max_r - min_r + 1) * (max_c - min_c + 1)
+        compactness = comp["size"] / bbox_area if bbox_area > 0 else 0
+        if compactness > 0.6:
+            # Fill entire bounding box
+            for r in range(min_r, max_r + 1):
+                for c in range(min_c, max_c + 1):
+                    result[r][c] = comp["color"]
+    return result
+
+
+def extract_minority_color(grid: Grid) -> Grid:
+    """Keep only the least common non-zero color, zero everything else."""
+    flat = [c for row in grid for c in row if c != 0]
+    if not flat:
+        return [row[:] for row in grid]
+    counts = Counter(flat)
+    minority = counts.most_common()[-1][0]
+    return [[c if c == minority else 0 for c in row] for row in grid]
+
+
+def extract_majority_color(grid: Grid) -> Grid:
+    """Keep only the most common non-zero color, zero everything else."""
+    flat = [c for row in grid for c in row if c != 0]
+    if not flat:
+        return [row[:] for row in grid]
+    majority = Counter(flat).most_common(1)[0][0]
+    return [[c if c == majority else 0 for c in row] for row in grid]
+
+
+def replace_noise_in_objects(grid: Grid) -> Grid:
+    """For each connected component, replace any enclosed different-color
+    cells with the component's color.
+
+    Finds objects, then for each cell inside an object's bounding box
+    that's a different non-zero color, replaces it with the object's color.
+    """
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+
+    # Sort by size descending — larger objects get priority
+    comps.sort(key=lambda c: c["size"], reverse=True)
+    result = [row[:] for row in grid]
+    claimed: set[tuple[int, int]] = set()
+
+    for comp in comps:
+        min_r, min_c, max_r, max_c = comp["bbox"]
+        bbox_area = (max_r - min_r + 1) * (max_c - min_c + 1)
+        compactness = comp["size"] / bbox_area if bbox_area > 0 else 0
+        if compactness > 0.5:
+            for r in range(min_r, max_r + 1):
+                for c in range(min_c, max_c + 1):
+                    if (r, c) not in claimed and result[r][c] != 0:
+                        result[r][c] = comp["color"]
+                        claimed.add((r, c))
+
+    return result
+
+
+def hollow_objects(grid: Grid) -> Grid:
+    """Convert filled objects to their outlines only (hollow them out)."""
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+
+    for comp in comps:
+        for r, c in comp["pixels"]:
+            # Check if this pixel is on the border (has a non-same-color neighbor)
+            is_border = False
+            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                nr, nc = r + dr, c + dc
+                if nr < 0 or nr >= h or nc < 0 or nc >= w or grid[nr][nc] != comp["color"]:
+                    is_border = True
+                    break
+            if is_border:
+                result[r][c] = comp["color"]
+    return result
+
+
 # --- Composable binary operations (for composing two grids) ---
 
 def overlay(base: Grid, top: Grid) -> Grid:
@@ -1239,6 +1359,13 @@ def _build_arc_primitives() -> list[Primitive]:
         ("binarize",            binarize),
         ("color_to_mc",         color_to_most_common),
         ("upscale_pattern",     upscale_pattern),
+        # --- Near-miss targeted: anomaly removal, rectangle ops ---
+        ("denoise_majority",    denoise_majority),
+        ("fill_rectangles",     fill_rectangles),
+        ("extract_minority_c",  extract_minority_color),
+        ("extract_majority_c",  extract_majority_color),
+        ("replace_noise_objs",  replace_noise_in_objects),
+        ("hollow_objects",      hollow_objects),
     ]
 
     for name, fn in unary_ops:

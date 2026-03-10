@@ -40,6 +40,9 @@ from grammars.arc import (
     shift_rows_right, shift_rows_left,
     extend_lines, extend_diagonal_lines,
     binarize, color_to_most_common, upscale_pattern,
+    denoise_majority, fill_rectangles,
+    extract_minority_color, extract_majority_color,
+    replace_noise_in_objects, hollow_objects,
 )
 
 
@@ -748,12 +751,61 @@ class TestColorAndPatternOps(unittest.TestCase):
             shift_rows_right, shift_rows_left,
             extend_lines, extend_diagonal_lines,
             binarize, color_to_most_common, upscale_pattern,
+            denoise_majority, fill_rectangles,
+            extract_minority_color, extract_majority_color,
+            replace_noise_in_objects, hollow_objects,
         ]
         for fn in new_fns:
             result = fn(grid)
             self.assertIsInstance(result, list, f"{fn.__name__} didn't return list")
             self.assertTrue(len(result) > 0, f"{fn.__name__} returned empty")
             self.assertIsInstance(result[0], list, f"{fn.__name__} row not list")
+
+
+class TestNearMissPrimitives(unittest.TestCase):
+    """Test primitives targeting near-miss tasks."""
+
+    def test_denoise_majority(self):
+        # Grid with scattered noise
+        grid = [[1, 1, 1], [1, 2, 1], [1, 1, 1]]
+        result = denoise_majority(grid)
+        # Center cell (2) should become 1 (majority of 3x3 neighborhood)
+        self.assertEqual(result[1][1], 1)
+
+    def test_fill_rectangles(self):
+        # L-shaped object with hole
+        grid = [[1, 1, 0], [1, 0, 0], [0, 0, 0]]
+        result = fill_rectangles(grid)
+        # Compactness of L-shape = 3/4 = 0.75 > 0.6, so fill bbox
+        self.assertEqual(result[0][0], 1)
+        self.assertEqual(result[1][1], 1)  # hole filled
+
+    def test_extract_minority_color(self):
+        grid = [[1, 1, 1], [1, 2, 1], [1, 1, 1]]
+        result = extract_minority_color(grid)
+        self.assertEqual(result[1][1], 2)
+        self.assertEqual(result[0][0], 0)
+
+    def test_extract_majority_color(self):
+        grid = [[1, 1, 1], [1, 2, 1], [1, 1, 1]]
+        result = extract_majority_color(grid)
+        self.assertEqual(result[0][0], 1)
+        self.assertEqual(result[1][1], 0)
+
+    def test_replace_noise_in_objects(self):
+        # Rectangle of 1s with a noise pixel (2) inside
+        grid = [[1, 1, 1], [1, 2, 1], [1, 1, 1]]
+        result = replace_noise_in_objects(grid)
+        # The 2 should be replaced with 1
+        self.assertEqual(result[1][1], 1)
+
+    def test_hollow_objects(self):
+        grid = [[1, 1, 1], [1, 1, 1], [1, 1, 1]]
+        result = hollow_objects(grid)
+        # Center should be 0 (interior), borders should be 1
+        self.assertEqual(result[1][1], 0)
+        self.assertEqual(result[0][0], 1)
+        self.assertEqual(result[0][1], 1)
 
 
 class TestARCFullLoop(unittest.TestCase):
