@@ -423,11 +423,15 @@ class TestARCDrive(unittest.TestCase):
         self.assertAlmostEqual(error, 0.0)
 
     def test_total_mismatch(self):
+        """All pixels wrong but same shape → high error, partial credit for shape/density."""
         drive = ARCDrive()
         pred = [[1, 1], [1, 1]]
         exp = [[2, 2], [2, 2]]
         error = drive.prediction_error(pred, exp)
-        self.assertAlmostEqual(error, 1.0)
+        # New structural similarity scorer gives partial credit for matching
+        # dimensions (0.15) and nonzero density (0.10), so error ≈ 0.75
+        self.assertGreater(error, 0.5)
+        self.assertLess(error, 1.0)
 
     def test_shape_mismatch_penalty(self):
         drive = ARCDrive()
