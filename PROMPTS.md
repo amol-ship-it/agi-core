@@ -76,6 +76,18 @@
 
 > Let me paste some prompts here that I gave to Claude chat on mobile for your information. Please incorporate them into the documentation as you see fit. I was hoping we can just keep a live document which contains all my instructions to you in chronological order, as well as another document with your responses and judgements?
 
+### Prompt 10: Persistent Instructions (from Claude Cowork Global Instructions)
+
+> Use the scientific method, proceed fast incrementally with short, tight feedback loops, and do several targeted, focussed experiments in parallel as needed.
+> It is ok to do some minimal pip utility installs, for example pytest, pytest-cov, numpy, scipy, matplotlib etc. I want to avoid calling external services and really heavyweight external dependencies which make the code hard to understand.
+> The code and repository should be world class, i.e. minimal and elegant but comprehensive, well commented and documented, working and well tested all the time with as high code and branch coverage in tests as possible. Note the coverage in the documentation. Ideally, use TDD (test driven development) as much as possible and if and when it makes sense. Follow the best practices.
+> Also upload to github every time or give commands to do that.
+> If you claim something is done verify it. When you return control to me after code or other changes, make sure that they are indeed working as expected.
+> Unit test and integration test all the code. In fact, use TDD (test driven development) where possible and where it makes sense.
+> Keep all documentation up to date and consistent with the code, remove obsolete stuff and add comprehensive documentation for all new features and keep updating it as changes happen.
+> Use multiple files for documentation as needed, in a docs folder if it makes sense, but tie them together in README.md so that the user can find them easily.
+> Always keep documentation files listing the entire prompt I have given you, as well as your thoughts each time and the results we got along the way, as well as the plan and next steps.
+
 ---
 
 *This document will be updated with each new session.*
