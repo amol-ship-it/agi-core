@@ -194,6 +194,51 @@ def _handle_sigint(signum, frame):
 
 
 # =============================================================================
+# Human-readable number parsing
+# =============================================================================
+
+def parse_human_int(s: str) -> int:
+    """Parse a human-readable integer with optional suffix or commas.
+
+    Examples:
+        "50M"          → 50_000_000
+        "50m"          → 50_000_000
+        "8,000,000"    → 8_000_000
+        "500K"         → 500_000
+        "1.5B"         → 1_500_000_000
+        "1_000_000"    → 1_000_000
+        "0"            → 0
+        "8000000"      → 8_000_000
+    """
+    s = s.strip().replace(",", "").replace("_", "")
+    if not s:
+        raise argparse.ArgumentTypeError("empty value")
+
+    suffixes = {
+        "k": 1_000,
+        "m": 1_000_000,
+        "b": 1_000_000_000,
+        "t": 1_000_000_000_000,
+    }
+    last = s[-1].lower()
+    if last in suffixes:
+        try:
+            return int(float(s[:-1]) * suffixes[last])
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"invalid number: {s!r}. Examples: 50M, 8,000,000, 500K, 0")
+
+    try:
+        return int(float(s))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid number: {s!r}. Examples: 50M, 8,000,000, 500K, 0")
+
+
+DEFAULT_COMPUTE_CAP = 0  # 0 = unlimited (beam×gens defines the budget)
+
+
+# =============================================================================
 # Argument parsing with defaults shown
 # =============================================================================
 
@@ -211,11 +256,18 @@ Presets (the only knob most users need):
 
 Times scale linearly with task count and inversely with core count.
 
+Compute cap examples:
+  --compute-cap 50M          # 50 million total evaluations
+  --compute-cap 8,000,000    # 8 million (commas OK)
+  --compute-cap 500K         # 500 thousand
+  --compute-cap 0            # unlimited (default)
+
 Examples:
   python -m experiments.phase1_arc                    # sensible defaults
   python -m experiments.phase1_arc --mode quick       # fast iteration
   python -m experiments.phase1_arc --mode contest     # full benchmark
   python -m experiments.phase1_arc --max-tasks 50     # subset of tasks
+  python -m experiments.phase1_arc --compute-cap 10M  # cap total evals
 """,
     )
     parser.add_argument("--mode", type=str, default="default",
@@ -235,6 +287,10 @@ Examples:
                         help=f"Parallel workers (0 = performance cores = {perf_cores})")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED,
                         help="Random seed for reproducibility")
+    parser.add_argument("--compute-cap", type=parse_human_int,
+                        default=str(DEFAULT_COMPUTE_CAP),
+                        help="Total eval budget (0=unlimited). "
+                             "Accepts: 50M, 8,000,000, 500K, 0")
     parser.add_argument("--runs-dir", type=str, default=RUNS_DIR,
                         help="Directory for all run artifacts")
     parser.add_argument("--no-log", action="store_true",
@@ -457,6 +513,8 @@ def _run(args, run_timestamp, runs_dir, prefix,
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     _hline("═")
 
+    compute_cap = args.compute_cap
+
     print(f"\n  Mode:       {args.mode}")
     print(f"  Rounds:     {rounds}")
     print(f"  Beam:       {beam_width}")
@@ -464,6 +522,10 @@ def _run(args, run_timestamp, runs_dir, prefix,
     print(f"  Workers:    {workers} / {machine['cpu_count']} cores "
           f"({machine.get('chip', machine['arch'])})")
     print(f"  Seed:       {args.seed}")
+    if compute_cap > 0:
+        print(f"  Compute cap: {compute_cap:,} total evals")
+    else:
+        print(f"  Compute cap: unlimited")
     print(f"  Verbose:    {args.verbose}")
 
     print()
@@ -507,6 +569,17 @@ def _run(args, run_timestamp, runs_dir, prefix,
 
     evals_per_task = beam_width * max_gens
     total_budget = evals_per_task * len(tasks) * rounds
+
+    # Apply compute cap: reduce max_generations if total budget exceeds cap
+    if compute_cap > 0 and total_budget > compute_cap:
+        # Budget = beam_width * max_gens * n_tasks * rounds
+        # Solve for max_gens: max_gens = compute_cap / (beam_width * n_tasks * rounds)
+        capped_gens = max(1, compute_cap // (beam_width * len(tasks) * rounds))
+        print(f"\n  Compute cap active: reducing gens {max_gens} → {capped_gens} "
+              f"(budget {total_budget:,} → {beam_width * capped_gens * len(tasks) * rounds:,})")
+        max_gens = capped_gens
+        evals_per_task = beam_width * max_gens
+        total_budget = evals_per_task * len(tasks) * rounds
 
     learner = Learner(
         environment=env,
@@ -638,6 +711,7 @@ def _run(args, run_timestamp, runs_dir, prefix,
             "seed": args.seed,
             "n_tasks": len(tasks),
             "n_primitives": len(grammar.base_primitives()),
+            "compute_cap": compute_cap,
             "machine": machine,
             "verbose": args.verbose,
         },

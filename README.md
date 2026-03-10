@@ -127,6 +127,7 @@ python -m experiments.phase1_arc --workers 1             # sequential
 | `--max-generations` | from preset | Generations per task |
 | `--workers` | 0 (perf cores) | Parallel workers (0 = performance cores only) |
 | `--seed` | 42 | Random seed (deterministic) |
+| `--compute-cap` | 0 (unlimited) | Total eval budget. Accepts: `50M`, `8,000,000`, `500K`, `0` |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
 | `--no-log` | off | Disable log file (console only) |
 | `--verbose` | off | Debug logging |
