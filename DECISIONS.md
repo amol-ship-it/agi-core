@@ -311,17 +311,25 @@ Pipeline run: `python -m experiments.phase1_arc --pipeline --mode quick`
 | Config | Training (400) | Eval (400) | Time |
 |--------|---------------|------------|------|
 | Session 3 baseline (depth-2, 64 prims) | 33/400 (8.2%) | 3/400 (0.75%) | 5m |
-| Session 4 (depth-3, 89 prims) | 39/400 (9.8%) | 4/400 (1.0%) | 6m |
+| Session 4 (depth-3, 89 prims) | 39/400 (9.8%) | 4/400 (1.0%) | 6m train + 10m eval |
 
-**New tasks solved by new primitives:**
+**New training tasks solved by new primitives (6 of 39):**
 - `007bbfb7: upscale_pattern` — self-similar tiling
 - `08ed6ac7: recolor_each_obj` — assign unique colors to objects
 - `0b148d64: crop_nonzero(extract_minority_c)` — isolate rare color
 - `a87f7484: crop_nonzero(extract_majority_c)` — isolate dominant color
-- `e26a3af2: fill_rectangles(denoise_3x3)` — rectangle completion
+- `e26a3af2: fill_rectangles(denoise_3x3)` — rectangle completion + denoising
 - `623ea044: extend_diagonals` — diagonal ray tracing
 
+**Eval tasks solved (4):**
+- `5b6cbef5: upscale_pattern` — NEW (from new primitive)
+- `60c09cac: scale_2x` — existing
+- `e1baa8a4: unique_rows(unique_cols)` — NEW (from depth-3 composition)
+- `fc754716: outline(replace_bg_mc)` — existing
+
 **Comparison with agi-mvp-general:** 35/400 (8.8%) on evaluation set. Gap remains significant — agi-mvp-general uses 304 primitives, 13 specialized search phases, and object decomposition pipeline.
+
+**Analysis of remaining gap:** The eval-to-train ratio improved slightly (1.0% vs 9.8%) compared to session 3 (0.75% vs 8.0%). The bottleneck remains: most unsolved tasks require multi-step conditional reasoning (if object has property X, apply transform Y) or complex object interactions that can't be expressed as simple primitive compositions. Next steps would be: (a) object decomposition pipeline (perceive→transform-per-object→reassemble), (b) input-adaptive primitives that analyze training examples to infer task-specific operations.
 
 ---
 
