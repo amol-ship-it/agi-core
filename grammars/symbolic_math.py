@@ -260,7 +260,7 @@ def make_task(
 
 
 # =============================================================================
-# Quick demo: run the loop on a simple mystery function
+# Demo: the SAME core algorithm discovers mathematical formulas
 # =============================================================================
 
 if __name__ == "__main__":
@@ -271,12 +271,24 @@ if __name__ == "__main__":
     from core import Learner, InMemoryStore, SearchConfig, CurriculumConfig
     from core import WakeResult, extract_metrics, print_compounding_table
 
-    print("=" * 70)
-    print("  SYMBOLIC REGRESSION DEMO")
-    print("  The same core algorithm discovers mathematical formulas")
-    print("=" * 70)
+    _W = 72
 
-    # Create tasks of increasing difficulty
+    print()
+    print("=" * _W)
+    print("  SYMBOLIC REGRESSION — Formula Discovery Demo")
+    print("=" * _W)
+    print()
+    print("  The challenge: given (x, y) data points from a mystery function,")
+    print("  discover the symbolic formula that generated them.")
+    print()
+    print("  The approach: beam search over compositions of math primitives,")
+    print("  with wake-sleep learning. The SAME core algorithm that solves")
+    print("  ARC grid puzzles — only the primitives change.")
+    print()
+    print("─" * _W)
+    print("  TARGET FORMULAS (what the algorithm must rediscover):")
+    print("─" * _W)
+
     tasks = [
         make_task(lambda x: 2 * x + 1,               task_id="linear",    difficulty=1),
         make_task(lambda x: x ** 2,                   task_id="quadratic", difficulty=2),
@@ -285,24 +297,24 @@ if __name__ == "__main__":
     ]
 
     target_formulas = {
-        "linear": "y = 2x + 1",
-        "quadratic": "y = x²",
+        "linear":     "y = 2x + 1",
+        "quadratic":  "y = x²",
         "sin_plus_x": "y = sin(x) + x",
-        "sin_x2_2x": "y = sin(x²) + 2x",
+        "sin_x2_2x":  "y = sin(x²) + 2x",
     }
 
-    print(f"\n  Tasks ({len(tasks)} target functions to rediscover):")
-    for t in tasks:
-        print(f"    {t.task_id:<14s}  {target_formulas[t.task_id]:<25s}  (difficulty={t.difficulty})")
+    for i, t in enumerate(tasks, 1):
+        formula = target_formulas[t.task_id]
+        n_train = len(t.train_examples)
+        print(f"  {i}. {formula:<25s}  ({n_train} data points, difficulty={t.difficulty})")
     print()
 
-    # Wire up the 4 plugins
+    # Wire up the 4 interfaces — this is ALL a domain needs to provide
     env = SymbolicMathEnv()
     grammar = SymbolicMathGrammar(seed=42)
     drive = SymbolicMathDrive()
     memory = InMemoryStore()
 
-    # Create the learner — the invariant core
     learner = Learner(
         environment=env,
         grammar=grammar,
@@ -312,53 +324,102 @@ if __name__ == "__main__":
             beam_width=100,
             max_generations=80,
             energy_beta=0.001,
-            solve_threshold=0.01,  # MSE < 0.01 counts as solved
+            solve_threshold=0.01,
             seed=42,
         ),
     )
 
-    print(f"  Primitives:  {len(grammar.base_primitives())} "
-          f"({', '.join(p.name for p in grammar.base_primitives())})")
-    print(f"  Beam width:  100")
-    print(f"  Generations: 80 per task")
-    print(f"  Workers:     {Learner.performance_core_count()}")
+    prims = grammar.base_primitives()
+    print(f"  Building blocks: {len(prims)} primitives")
+    print(f"    {', '.join(p.name for p in prims)}")
+    print(f"  Search: beam_width=100, max_generations=80 per task")
+    print(f"  Rounds: 3 wake-sleep cycles")
     print()
 
-    # Live progress callback
+    # Track results per round for the summary
+    round_results: dict[int, dict[str, str | None]] = {}
     t0 = time.time()
 
     def on_task_done(round_num, task_index, total_tasks, wr: WakeResult):
         elapsed = time.time() - t0
         icon = "✓" if wr.solved else "✗"
-        energy_str = f"{wr.best.energy:.4f}" if wr.best else "N/A"
-        prog_str = repr(wr.best.program) if wr.best else ""
         target = target_formulas.get(wr.task_id, "")
-        print(f"  {icon} R{round_num} [{task_index}/{total_tasks}] "
-              f"{wr.task_id:<14s} E={energy_str:<8s} "
-              f"{wr.wall_time:.1f}s  [{elapsed:.0f}s elapsed]")
+        prog_str = repr(wr.best.program) if wr.best else ""
+
+        if round_num not in round_results:
+            round_results[round_num] = {}
+
         if wr.solved:
-            print(f"       target:  {target}")
-            print(f"       found:   {prog_str}")
+            round_results[round_num][wr.task_id] = prog_str
+            print(f"  {icon}  {target:<25s} → {prog_str}")
+        else:
+            round_results[round_num][wr.task_id] = None
+            energy_str = f"{wr.best.prediction_error:.4f}" if wr.best else "N/A"
+            print(f"  {icon}  {target:<25s}    (best MSE: {energy_str})")
 
     # Run the curriculum
+    for round_num in range(1, 4):
+        lib_size = len(memory.get_library())
+        print("─" * _W)
+        print(f"  ROUND {round_num}/3   "
+              f"(library: {lib_size} learned abstractions)")
+        print("─" * _W)
+
     results = learner.run_curriculum(
         tasks,
-        CurriculumConfig(
-            sort_by_difficulty=True,
-            wake_sleep_rounds=3,
-        ),
+        CurriculumConfig(sort_by_difficulty=True, wake_sleep_rounds=3),
         on_task_done=on_task_done,
     )
+    total_time = time.time() - t0
 
-    # Print the compounding curve
-    print("\n" + "=" * 70)
-    print("  COMPOUNDING CURVE — does solve rate increase across rounds?")
-    print("=" * 70)
+    # Summary table
+    print()
+    print("=" * _W)
+    print("  RESULTS — Compounding in Action")
+    print("=" * _W)
+    print()
+
     metrics = extract_metrics(results)
-    print_compounding_table(metrics)
 
-    # Save library
-    memory.save("library.json")
-    print(f"\nLibrary entries: {len(memory.get_library())}")
-    for entry in memory.get_library():
-        print(f"  {entry.name}: {entry.program} (useful={entry.usefulness:.1f}, reused={entry.reuse_count}x)")
+    # Show what was solved in each round
+    for m in metrics:
+        rn = m.round_number
+        solved_count = m.tasks_solved
+        total = m.tasks_total
+        bar = "█" * solved_count + "░" * (total - solved_count)
+        print(f"  Round {rn}:  {bar}  {solved_count}/{total} solved ({m.solve_rate:.0%})")
+
+        if rn in round_results:
+            for tid in ["linear", "quadratic", "sin_plus_x", "sin_x2_2x"]:
+                result = round_results[rn].get(tid)
+                if result:
+                    print(f"           ✓ {target_formulas[tid]} → {result}")
+
+    # Compounding curve
+    if len(metrics) >= 2:
+        first_rate = metrics[0].solve_rate
+        last_rate = metrics[-1].solve_rate
+        print()
+        if last_rate > first_rate:
+            print(f"  COMPOUNDING: {first_rate:.0%} → {last_rate:.0%} "
+                  f"(+{last_rate - first_rate:.0%} from library growth)")
+        elif last_rate == first_rate:
+            print(f"  PLATEAU: solve rate stayed at {first_rate:.0%}")
+
+    # Library
+    lib = memory.get_library()
+    if lib:
+        print()
+        print(f"  Library: {len(lib)} abstractions extracted during sleep")
+        for entry in lib:
+            print(f"    {entry.name}: {entry.program} "
+                  f"(reused in {len(entry.source_tasks)} tasks)")
+
+    print()
+    print(f"  Total time: {total_time:.1f}s")
+    print()
+    print("  KEY INSIGHT: The same core algorithm (core/learner.py) runs this")
+    print("  demo and ARC grid puzzles. Only the primitives differ.")
+    print("  Try: python -m grammars.arc")
+    print()
+    print("=" * _W)

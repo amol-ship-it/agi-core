@@ -45,4 +45,5 @@ These instructions apply to every session automatically.
 ## Core Architecture Invariant
 
 - The core loop (`core/`) must NEVER import anything domain-specific.
-- Domain adapters live in `grammars/`, `environments/`, `drives/`.
+- Each domain provides all 4 interfaces (Environment, Grammar, DriveSignal, Memory) in a single file under `grammars/`.
+- Experiment scripts in `experiments/` are thin wrappers that wire domain plugins into the generic `core/runner.py`.

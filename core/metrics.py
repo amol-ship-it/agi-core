@@ -50,8 +50,10 @@ def extract_metrics(results: list[RoundResult]) -> list[CompoundingMetrics]:
             if solved_energies else float("inf")
         )
 
-        # Average reuse across library (placeholder — needs memory access)
-        avg_reuse = 0.0  # TODO: compute from memory.get_library()
+        # Average reuse: computed from library entries in sleep result
+        lib_entries = rr.sleep_result.new_entries
+        all_reuse = [e.reuse_count for e in lib_entries] if lib_entries else []
+        avg_reuse = sum(all_reuse) / len(all_reuse) if all_reuse else 0.0
 
         wake_time = sum(w.wall_time for w in rr.wake_results)
         sleep_time = rr.sleep_result.wall_time

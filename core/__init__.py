@@ -34,6 +34,17 @@ from .metrics import (
     save_metrics_json,
     save_metrics_csv,
 )
+from .runner import (
+    ExperimentConfig,
+    run_experiment,
+    make_parser,
+    resolve_from_preset,
+    PRESETS,
+    ProgressTracker,
+    TeeWriter,
+    parse_human_int,
+    fmt_duration,
+)
 
 __all__ = [
     # Data types
@@ -48,4 +59,7 @@ __all__ = [
     # Metrics
     "CompoundingMetrics", "extract_metrics", "print_compounding_table",
     "save_metrics_json", "save_metrics_csv",
+    # Runner
+    "ExperimentConfig", "run_experiment", "make_parser", "resolve_from_preset",
+    "PRESETS", "ProgressTracker", "TeeWriter", "parse_human_int", "fmt_duration",
 ]
