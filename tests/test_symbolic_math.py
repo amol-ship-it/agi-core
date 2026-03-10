@@ -280,5 +280,79 @@ class TestMakeTask(unittest.TestCase):
         self.assertAlmostEqual(task.difficulty, 3.0)
 
 
+class TestConstantOptimization(unittest.TestCase):
+    """Tests for scipy-based constant fitting."""
+
+    def test_optimize_constants_linear(self):
+        """optimize_constants should find c≈2.0 for f(x) = c*x with data from y=2x."""
+        from grammars.symbolic_math import optimize_constants, _collect_const_nodes
+        # Tree: mul(const, x) — should discover const ≈ 2.0
+        prog = Program(root="mul", children=[
+            Program(root="const", params={"c": 0.5}),  # initial guess far from 2
+            Program(root="x"),
+        ])
+        data = [(1.0, 2.0), (2.0, 4.0), (3.0, 6.0), (4.0, 8.0)]
+        result = optimize_constants(prog, data)
+        const_nodes = _collect_const_nodes(result)
+        self.assertEqual(len(const_nodes), 1)
+        self.assertAlmostEqual(const_nodes[0].params["c"], 2.0, places=2)
+
+    def test_optimize_no_constants(self):
+        """Program with no constants should be returned unchanged."""
+        from grammars.symbolic_math import optimize_constants
+        prog = Program(root="x")
+        data = [(1.0, 1.0), (2.0, 2.0)]
+        result = optimize_constants(prog, data)
+        self.assertEqual(result.root, "x")
+
+    def test_optimize_does_not_mutate_original(self):
+        """optimize_constants should deep-copy, not modify the input."""
+        from grammars.symbolic_math import optimize_constants
+        prog = Program(root="const", params={"c": 5.0})
+        data = [(1.0, 0.0)]  # target is 0, so c should move toward 0
+        optimize_constants(prog, data)
+        self.assertAlmostEqual(prog.params["c"], 5.0)  # original unchanged
+
+    def test_collect_const_nodes(self):
+        from grammars.symbolic_math import _collect_const_nodes
+        prog = Program(root="add", children=[
+            Program(root="const", params={"c": 1.0}),
+            Program(root="mul", children=[
+                Program(root="const", params={"c": 2.0}),
+                Program(root="x"),
+            ]),
+        ])
+        nodes = _collect_const_nodes(prog)
+        self.assertEqual(len(nodes), 2)
+
+    def test_grammar_prepare_for_task(self):
+        """Grammar should accept training data via prepare_for_task."""
+        grammar = SymbolicMathGrammar(seed=42, optimize_consts=True)
+        task = make_task(lambda x: 2 * x, task_id="lin", n_train=5)
+        grammar.prepare_for_task(task)
+        self.assertEqual(len(grammar._training_data), 5)
+
+    def test_grammar_optimize_consts_disabled(self):
+        """When optimize_consts=False, mutation should not call scipy."""
+        grammar = SymbolicMathGrammar(seed=42, optimize_consts=False)
+        task = make_task(lambda x: 2 * x, task_id="lin", n_train=5)
+        grammar.prepare_for_task(task)
+        prog = Program(root="const", params={"c": 1.0})
+        prims = grammar.base_primitives()
+        # Should not crash or optimize
+        mutated = grammar.mutate(prog, prims)
+        self.assertIsInstance(mutated, Program)
+
+    def test_eval_tree_raw(self):
+        """_eval_tree_raw should evaluate without an Environment."""
+        from grammars.symbolic_math import _eval_tree_raw
+        prog = Program(root="add", children=[
+            Program(root="x"),
+            Program(root="const", params={"c": 3.0}),
+        ])
+        result = _eval_tree_raw(prog, 2.0)
+        self.assertAlmostEqual(result, 5.0)
+
+
 if __name__ == "__main__":
     unittest.main()

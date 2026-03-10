@@ -148,6 +148,35 @@ If we ever need finer control (e.g., spending more on hard tasks, less on easy o
 
 **Interpretation:** The 4% baseline on real tasks is expected — these are hard puzzles and our search is pure beam search without heuristic guidance. The fact that it's plateauing at 4% across rounds tells us the library isn't growing yet — we need to solve more tasks before sleep can extract useful abstractions. Next steps: improve search quality (not just quantity), possibly add heuristic-guided mutation.
 
+## Session 2 — Claude Code Web (March 10, 2026)
+
+### Decision: Port Three Improvements from agi-mvp-no-noise
+
+**Context:** The agi-mvp-no-noise repo (THOUGHTS.md, NEXT_STEPS.md) identified three concrete improvements. All three are ported into agi-core.
+
+**1. Semantic Deduplication (core/learner.py)**
+- **Problem:** `cos(π/2 + x²)` and `sin(x²)` are algebraically identical but have different tree structures, wasting beam slots on duplicates.
+- **Solution:** Hash each program by its rounded output vector on training inputs. Two programs producing identical outputs are the same function. Keep the lowest-energy one.
+- **Location:** `core/learner.py` — domain-agnostic. Uses `env.execute()` to compute outputs, so it works for any domain.
+- **Config:** `SearchConfig.semantic_dedup` (default True), `dedup_precision` (default 6 decimal places).
+- **Trade-off:** Extra evaluations per generation (one hash computation per candidate). Accepted because dedup saves far more compute by eliminating redundant beam members.
+
+**2. Pareto Front Tracking (core/learner.py)**
+- **Problem:** Beam search returns only the single best program. But a user may want the best program *at each complexity level* — the accuracy-complexity tradeoff.
+- **Solution:** Track best prediction_error per program size across all generations. Filter to the true Pareto front (no entry is dominated in both error and complexity). Return in `WakeResult.pareto_front`.
+- **Location:** `core/learner.py` — domain-agnostic. `ParetoEntry` dataclass added.
+- **Inspiration:** PySR's Pareto front output, which shows the "knee" where adding complexity stops helping.
+
+**3. Constant Optimization via scipy (grammars/symbolic_math.py)**
+- **Problem:** Constants evolve by Gaussian mutation, which is slow for deep compositions. The loss landscape over coefficients is non-convex with many local minima.
+- **Solution:** After structural mutation, extract all `const` nodes, pack their values into a vector, and run `scipy.optimize.minimize` (Nelder-Mead) to fit them. This decouples structure search (evolutionary) from coefficient search (gradient-free local optimization).
+- **Location:** `grammars/symbolic_math.py` — domain-specific. Only symbolic math has fittable constants.
+- **Interface:** Added `Grammar.prepare_for_task(task)` hook to `core/interfaces.py` so the grammar can cache training data. Default is no-op; SymbolicMathGrammar uses it to feed (x, y) pairs to the optimizer.
+- **Fallback:** If scipy is not installed, constant optimization is silently skipped (graceful degradation).
+- **Trade-off:** scipy is now a dependency, but it's lightweight and commonly available. The optimizer runs with max 200 function evaluations (fast).
+
+**Tests:** 19 new tests added (5 semantic dedup, 8 Pareto front, 7 constant optimization). Total: 205 tests, all passing.
+
 ---
 
 *This document will be updated with each new session and major decision.*

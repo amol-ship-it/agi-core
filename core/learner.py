@@ -116,6 +116,8 @@ class SearchConfig:
     early_stop_energy: float = 0.0  # stop if energy <= this (perfect solve)
     solve_threshold: float = 1e-4   # prediction_error <= this counts as solved
     seed: Optional[int] = None
+    semantic_dedup: bool = True     # deduplicate beam by output vector
+    dedup_precision: int = 6        # decimal places for output hashing
 
 
 @dataclass
@@ -136,6 +138,19 @@ class CurriculumConfig:
 
 
 @dataclass
+class ParetoEntry:
+    """One point on the Pareto front: best program at a given complexity."""
+    complexity: int           # node count
+    prediction_error: float
+    energy: float
+    program: Program
+
+    def __repr__(self):
+        return (f"ParetoEntry(complexity={self.complexity}, "
+                f"error={self.prediction_error:.6g}, program={self.program})")
+
+
+@dataclass
 class WakeResult:
     """What comes out of one wake phase."""
     task_id: str
@@ -144,6 +159,8 @@ class WakeResult:
     generations_used: int
     evaluations: int = 0    # total program evaluations (deterministic compute measure)
     wall_time: float = 0.0
+    pareto_front: list[ParetoEntry] = field(default_factory=list)
+    dedup_count: int = 0    # how many duplicates were removed
 
 
 @dataclass
@@ -279,6 +296,9 @@ class Learner:
         t0 = time.time()
         cfg = self.search_cfg
 
+        # Let the grammar cache task-specific data (e.g. training pairs)
+        self.grammar.prepare_for_task(task)
+
         # Combine hand-coded primitives with learned library entries
         base_prims = self.grammar.base_primitives()
         library_prims = self.grammar.inject_library(self.memory.get_library())
@@ -290,6 +310,8 @@ class Learner:
         best_so_far: Optional[ScoredProgram] = None
         gens_used = 0
         n_evals = 0
+        total_deduped = 0
+        pareto: dict[int, ParetoEntry] = {}
 
         for gen in range(cfg.max_generations):
             gens_used = gen + 1
@@ -300,6 +322,7 @@ class Learner:
                 sp = self._evaluate_program(prog, task)
                 n_evals += 1
                 scored.append(sp)
+                self._update_pareto_front(pareto, sp)
 
                 # Track global best
                 if best_so_far is None or sp.energy < best_so_far.energy:
@@ -309,6 +332,11 @@ class Learner:
             if best_so_far and best_so_far.energy <= cfg.early_stop_energy:
                 logger.info(f"  [wake] Task {task.task_id}: perfect solve at gen {gen}")
                 break
+
+            # Semantic dedup: remove programs with identical output vectors
+            if cfg.semantic_dedup:
+                scored, n_removed = self._semantic_dedup(scored, task)
+                total_deduped += n_removed
 
             # Keep the best
             scored.sort(key=lambda s: s.energy)
@@ -348,11 +376,13 @@ class Learner:
                 # Credit library entries that were used
                 self._credit_library_usage(best_so_far.program)
 
+        front = self._extract_pareto_front(pareto)
         wall = time.time() - t0
         logger.info(
             f"  [wake] Task {task.task_id}: solved={solved}, "
             f"energy={best_so_far.energy:.6f}, gens={gens_used}, "
-            f"evals={n_evals}, time={wall:.1f}s"
+            f"evals={n_evals}, deduped={total_deduped}, "
+            f"pareto={len(front)}, time={wall:.1f}s"
         )
         return WakeResult(
             task_id=task.task_id,
@@ -361,6 +391,8 @@ class Learner:
             generations_used=gens_used,
             evaluations=n_evals,
             wall_time=wall,
+            pareto_front=front,
+            dedup_count=total_deduped,
         )
 
     def _wake_on_task_no_record(self, task: Task) -> WakeResult:
@@ -372,6 +404,7 @@ class Learner:
         t0 = time.time()
         cfg = self.search_cfg
 
+        self.grammar.prepare_for_task(task)
         base_prims = self.grammar.base_primitives()
         library_prims = self.grammar.inject_library(self.memory.get_library())
         all_prims = base_prims + library_prims
@@ -380,6 +413,8 @@ class Learner:
         best_so_far: Optional[ScoredProgram] = None
         gens_used = 0
         n_evals = 0
+        total_deduped = 0
+        pareto: dict[int, ParetoEntry] = {}
 
         for gen in range(cfg.max_generations):
             gens_used = gen + 1
@@ -389,11 +424,16 @@ class Learner:
                 sp = self._evaluate_program(prog, task)
                 n_evals += 1
                 scored.append(sp)
+                self._update_pareto_front(pareto, sp)
                 if best_so_far is None or sp.energy < best_so_far.energy:
                     best_so_far = sp
 
             if best_so_far and best_so_far.energy <= cfg.early_stop_energy:
                 break
+
+            if cfg.semantic_dedup:
+                scored, n_removed = self._semantic_dedup(scored, task)
+                total_deduped += n_removed
 
             scored.sort(key=lambda s: s.energy)
             survivors = [s.program for s in scored[: cfg.beam_width]]
@@ -416,11 +456,13 @@ class Learner:
         if best_so_far:
             best_so_far.task_id = task.task_id
 
+        front = self._extract_pareto_front(pareto)
         wall = time.time() - t0
         logger.info(
             f"  [wake] Task {task.task_id}: solved={solved}, "
             f"energy={best_so_far.energy:.6f}, gens={gens_used}, "
-            f"evals={n_evals}, time={wall:.1f}s"
+            f"evals={n_evals}, deduped={total_deduped}, "
+            f"pareto={len(front)}, time={wall:.1f}s"
         )
         return WakeResult(
             task_id=task.task_id,
@@ -429,6 +471,8 @@ class Learner:
             generations_used=gens_used,
             evaluations=n_evals,
             wall_time=wall,
+            pareto_front=front,
+            dedup_count=total_deduped,
         )
 
     # -------------------------------------------------------------------------
@@ -805,6 +849,64 @@ class Learner:
             prediction_error=pred_err,
             complexity_cost=comp_cost,
         )
+
+    def _semantic_hash(self, program: Program, task: Task) -> str:
+        """Hash a program by its outputs on training inputs.
+
+        Two programs that produce identical output vectors are semantically
+        equivalent (e.g. cos(π/2 + x²) and sin(x²)).  Rounding to
+        `dedup_precision` decimal places provides tolerance for floating-point
+        noise while still catching true duplicates.
+        """
+        precision = self.search_cfg.dedup_precision
+        outputs = []
+        for inp, _ in task.train_examples:
+            try:
+                val = self.env.execute(program, inp)
+                outputs.append(round(float(val), precision))
+            except Exception:
+                outputs.append(None)
+        return str(outputs)
+
+    def _semantic_dedup(self, scored: list[ScoredProgram],
+                        task: Task) -> tuple[list[ScoredProgram], int]:
+        """Remove semantically duplicate programs from the scored list.
+
+        Keeps the lowest-energy program for each unique output vector.
+        Returns (deduplicated list, number removed).
+        """
+        seen: dict[str, ScoredProgram] = {}
+        for sp in scored:
+            key = self._semantic_hash(sp.program, task)
+            if key not in seen or sp.energy < seen[key].energy:
+                seen[key] = sp
+        deduped = sorted(seen.values(), key=lambda s: s.energy)
+        return deduped, len(scored) - len(deduped)
+
+    def _update_pareto_front(self, pareto: dict[int, ParetoEntry],
+                             sp: ScoredProgram) -> None:
+        """Update the Pareto front with a scored program if it improves
+        the best-known error at its complexity level."""
+        c = sp.program.size
+        if c not in pareto or sp.prediction_error < pareto[c].prediction_error:
+            pareto[c] = ParetoEntry(
+                complexity=c,
+                prediction_error=sp.prediction_error,
+                energy=sp.energy,
+                program=sp.program,
+            )
+
+    def _extract_pareto_front(self, pareto: dict[int, ParetoEntry]) -> list[ParetoEntry]:
+        """Return the true Pareto front: entries where no other entry has
+        both lower complexity AND lower error."""
+        entries = sorted(pareto.values(), key=lambda e: e.complexity)
+        front = []
+        best_error = float('inf')
+        for entry in entries:
+            if entry.prediction_error < best_error:
+                front.append(entry)
+                best_error = entry.prediction_error
+        return front
 
     def _enumerate_subtrees(self, program: Program) -> list[Program]:
         """Yield every sub-tree in a program (including the root)."""
