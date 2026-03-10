@@ -188,23 +188,42 @@ def _wake_worker(args: tuple) -> "WakeResult":
     Receives a snapshot of the learner state, reconstructs a mini-Learner,
     and returns the WakeResult. This function is at module level so it can
     be pickled by ProcessPoolExecutor.
-    """
-    task, env, grammar, drive, library, search_cfg, transition_matrix = args
 
-    # Reconstruct a lightweight learner with the snapshot
+    Each worker gets a per-task seed derived from the base seed + task index,
+    ensuring deterministic results regardless of worker scheduling order.
+    """
+    task, env, grammar, drive, library, search_cfg, transition_matrix, task_seed = args
+
+    # Reconstruct a lightweight learner with a per-task seed
     from .memory import InMemoryStore
     memory = InMemoryStore()
     for entry in library:
         memory.add_to_library(entry)
+
+    # Override seed with per-task seed for deterministic parallel execution
+    worker_cfg = SearchConfig(
+        beam_width=search_cfg.beam_width,
+        mutations_per_candidate=search_cfg.mutations_per_candidate,
+        crossover_fraction=search_cfg.crossover_fraction,
+        max_generations=search_cfg.max_generations,
+        energy_alpha=search_cfg.energy_alpha,
+        energy_beta=search_cfg.energy_beta,
+        early_stop_energy=search_cfg.early_stop_energy,
+        solve_threshold=search_cfg.solve_threshold,
+        seed=task_seed,
+    )
 
     learner = Learner(
         environment=env,
         grammar=grammar,
         drive=drive,
         memory=memory,
-        search_config=search_cfg,
+        search_config=worker_cfg,
     )
     learner._transition_matrix = transition_matrix
+
+    # Re-seed the grammar's RNG with the per-task seed for deterministic mutations
+    grammar._rng = random.Random(task_seed)
 
     # Solve — but skip memory recording (main process handles that)
     return learner._wake_on_task_no_record(task)
@@ -455,7 +474,7 @@ class Learner:
         #    must be >= min_size nodes (no trivial single-node entries)
         candidates = []
         for key, occurrences in subtree_counts.items():
-            task_ids = list(set(tid for _, tid in occurrences))
+            task_ids = sorted(set(tid for _, tid in occurrences))
             subtree = occurrences[0][0]
             if len(task_ids) >= cfg.min_occurrences and subtree.size >= cfg.min_size:
                 # Usefulness = tasks_used_in × log(size+1)
@@ -612,11 +631,16 @@ class Learner:
 
         Each worker gets a snapshot of the current state (library, config,
         transition matrix) and solves tasks independently. Results are merged
-        back into the main process's memory.
+        back into the main process's memory in deterministic (index) order.
 
         Falls back to sequential if workers=1 or if the task count is small.
+
+        Ctrl-C handling: the pool is NOT used as a context manager. On
+        KeyboardInterrupt, we call pool.shutdown(wait=False, cancel_futures=True)
+        which kills workers immediately instead of blocking on __exit__.
         """
         total_tasks = len(tasks)
+        base_seed = self.search_cfg.seed or 0
 
         if workers <= 1 or len(tasks) <= 2:
             # Sequential — simple path
@@ -631,41 +655,52 @@ class Learner:
         # Snapshot state for workers (picklable data only)
         library_snapshot = self.memory.get_library()
         search_cfg = self.search_cfg
-        sleep_cfg = self.sleep_cfg
         transition_matrix = self._transition_matrix
 
-        # Build worker args: (task, env, grammar, drive, library, search_cfg, tm)
-        # Each worker reconstructs a mini-Learner with the snapshot.
-        worker_args = [
-            (task, self.env, self.grammar, self.drive,
-             library_snapshot, search_cfg, transition_matrix)
-            for task in tasks
-        ]
+        # Build worker args with per-task seeds for deterministic parallel execution.
+        # Each task gets seed = hash(base_seed, round_num, task_index) so that:
+        #   - Different tasks get different RNG streams
+        #   - Same task always gets the same stream (deterministic)
+        #   - Different rounds get different streams (library changes anyway)
+        worker_args = []
+        for i, task in enumerate(tasks):
+            task_seed = hash((base_seed, round_num, i)) & 0x7FFFFFFF
+            worker_args.append(
+                (task, self.env, self.grammar, self.drive,
+                 library_snapshot, search_cfg, transition_matrix, task_seed)
+            )
 
         wake_results: list[WakeResult] = [None] * len(tasks)  # type: ignore
         completed_count = 0
+
+        # Don't use ProcessPoolExecutor as context manager — its __exit__
+        # calls shutdown(wait=True), which blocks on Ctrl-C even when workers
+        # ignore SIGINT. Instead, manage manually and call shutdown(wait=False)
+        # on interrupt for immediate cleanup.
+        pool = ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_worker_init,
+        )
         try:
-            # Use initializer to make workers ignore SIGINT — the parent
-            # process handles it and terminates the pool. Without this,
-            # Ctrl-C gets stuck waiting for in-flight workers to finish.
-            with ProcessPoolExecutor(
-                max_workers=workers,
-                initializer=_worker_init,
-            ) as pool:
-                futures = {
-                    pool.submit(_wake_worker, args): i
-                    for i, args in enumerate(worker_args)
-                }
-                for future in as_completed(futures):
-                    idx = futures[future]
-                    wr = future.result()
-                    wake_results[idx] = wr
-                    completed_count += 1
-                    if on_task_done:
-                        on_task_done(round_num, completed_count, total_tasks, wr)
+            futures = {
+                pool.submit(_wake_worker, args): i
+                for i, args in enumerate(worker_args)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                wr = future.result()
+                wake_results[idx] = wr
+                completed_count += 1
+                if on_task_done:
+                    on_task_done(round_num, completed_count, total_tasks, wr)
+            pool.shutdown(wait=True)
+        except KeyboardInterrupt:
+            # Kill workers immediately — don't wait for them to finish
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
         except (OSError, RuntimeError) as e:
+            pool.shutdown(wait=False, cancel_futures=True)
             # Fallback to sequential if multiprocessing fails
-            # (e.g., pickling issues, resource limits)
             logger.warning(f"Parallel wake failed ({e}), falling back to sequential")
             wake_results = []
             for i, task in enumerate(tasks):
@@ -675,9 +710,9 @@ class Learner:
                     on_task_done(round_num, i + 1, total_tasks, wr)
             return wake_results
 
-        # Merge results back into main memory
+        # Merge results back into main memory in deterministic (index) order
         for wr in wake_results:
-            if wr.best:
+            if wr and wr.best:
                 self.memory.record_episode(
                     wr.task_id, [], wr.best.program, wr.best.energy)
                 if wr.solved:

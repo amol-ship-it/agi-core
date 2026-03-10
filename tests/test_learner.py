@@ -395,7 +395,7 @@ class TestWakeWorker(unittest.TestCase):
         library = []
         search_cfg = SearchConfig(beam_width=10, max_generations=5, solve_threshold=0.01, seed=42)
         tm = TransitionMatrix()
-        args = (task, env, grammar, drive, library, search_cfg, tm)
+        args = (task, env, grammar, drive, library, search_cfg, tm, 42)
         result = _wake_worker(args)
         self.assertIsInstance(result, WakeResult)
         self.assertEqual(result.task_id, "identity_task")
@@ -409,7 +409,7 @@ class TestWakeWorker(unittest.TestCase):
         library = [LibraryEntry(name="lib_0", program=Program(root="identity"), usefulness=1.0)]
         search_cfg = SearchConfig(beam_width=10, max_generations=5, solve_threshold=0.01, seed=42)
         tm = TransitionMatrix()
-        args = (task, env, grammar, drive, library, search_cfg, tm)
+        args = (task, env, grammar, drive, library, search_cfg, tm, 42)
         result = _wake_worker(args)
         self.assertIsInstance(result, WakeResult)
 
