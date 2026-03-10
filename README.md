@@ -209,28 +209,31 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 ```
 agi-core/
-├── core/                    # THE INVARIANT LOOP — never changes per domain
+├── core/                    # THE INVARIANT CORE — never imports domain code
 │   ├── __init__.py          # Public API
-│   ├── interfaces.py        # 4 abstract interfaces
-│   ├── learner.py           # Wake-sleep loop + transition matrix prior
+│   ├── interfaces.py        # 4 abstract interfaces (Environment, Grammar, DriveSignal, Memory)
+│   ├── learner.py           # Wake-sleep loop + beam search + transition matrix
+│   ├── runner.py            # Generic experiment runner (TeeWriter, ProgressTracker, presets)
 │   ├── memory.py            # Default in-memory store
 │   └── metrics.py           # Compounding curve measurement
 │
-├── grammars/                # PLUGGABLE — one per domain
-│   ├── symbolic_math.py     # 1D symbolic regression
-│   ├── arc.py               # ARC-AGI grid transformations (48 primitives)
-│   └── zork.py              # TODO: text adventure actions
+├── grammars/                # PLUGGABLE — one file per domain (all 4 interfaces)
+│   ├── symbolic_math.py     # Domain: 1D symbolic regression (15 math primitives)
+│   └── arc.py               # Domain: ARC-AGI grid transformations (48 primitives)
+│
+├── experiments/             # Thin domain-specific wrappers over core/runner.py
+│   └── phase1_arc.py        # ARC curriculum training (dataset loading + ARC wiring)
+│
+├── tests/                   # Test suite (186 tests)
+│   ├── test_arc.py
+│   ├── test_interfaces.py
+│   ├── test_learner.py
+│   ├── test_memory.py
+│   ├── test_metrics.py
+│   └── test_symbolic_math.py
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
-│
-├── experiments/             # Experiment scripts
-│   └── phase1_arc.py        # Phase 1 curriculum training runner
-│
-├── tests/                   # Test suite (16 tests)
-│   └── test_arc.py
-│
 ├── data/                    # External datasets (git-ignored)
-│   └── ARC-AGI/
 │
 ├── CLAUDE.md                # Persistent instructions for Claude Code sessions
 ├── PROMPTS.md               # Chronological log of all prompts
