@@ -140,4 +140,36 @@
 
 ---
 
+## Session 3 — Claude Code Web (March 10, 2026)
+
+### Prompt 22: Improve ARC-AGI Solve Rate with One Algorithm
+
+> [Task notification with comprehensive agi-mvp-general research report comparing agi-mvp-general (304 primitives, 13 search phases, 97/400 train, 35/400 eval) with agi-core (48 primitives, pure beam search, 12/400 train). User wants to improve agi-core's solve rate by studying what makes agi-mvp-general effective and porting insights.]
+
+### Prompt 23: One Algorithm, Think Harder
+
+> one algorithm, but think harder
+
+[User rejected the initial multi-phase approach. Insisted that improvements must stay within the generic beam search architecture — no domain-specific search phases. The insight: exhaustive enumeration IS beam search with beam_width = vocabulary_size^depth.]
+
+### Prompt 24: Approve Adaptive Beam Width Plan
+
+> yes
+
+[User approved Phase 1: adaptive beam width / exhaustive enumeration approach.]
+
+### Prompt 25: No Data Leakage from Evaluation Set
+
+> Your numbers are based on the training set I hope. Do not even look at the evaluation set to avoid data leakage. That set should only be used to get scores, but not for understanding.
+
+### Prompt 26: Evaluation Set is the Real Metric
+
+> However, the actual accuracy needs to be given based on evaluation set scores. agi-mvp-general gets 35/400 correct on the evaluation set with full search.
+
+### Prompt 27: Follow TDD and Scientific Method
+
+> I hope you are following my instructions and guidelines of using TDD and the scientific method, and keeping this minimal, validated and verified and not just based on theory, but actual numbers.
+
+---
+
 *This document will be updated with each new session.*
