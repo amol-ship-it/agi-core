@@ -20,8 +20,10 @@ import json
 import logging
 import os
 import platform
+import signal
 import sys
 import time
+from datetime import datetime, timezone
 
 from core import (
     Learner,
@@ -29,6 +31,7 @@ from core import (
     SearchConfig,
     SleepConfig,
     CurriculumConfig,
+    WakeResult,
     extract_metrics,
     print_compounding_table,
     save_metrics_json,
@@ -74,6 +77,8 @@ PRESETS = {
     },
 }
 
+DEFAULT_SEED = 42
+
 
 # =============================================================================
 # Auto-detect ARC dataset
@@ -112,10 +117,34 @@ def detect_machine() -> dict:
     return info
 
 
+# =============================================================================
+# Signal handling — Ctrl-C kills immediately
+# =============================================================================
+
+_interrupted = False
+
+
+def _handle_sigint(signum, frame):
+    """Handle Ctrl-C: first press prints message and exits, immediate."""
+    global _interrupted
+    if _interrupted:
+        # Second Ctrl-C: hard exit
+        os._exit(1)
+    _interrupted = True
+    print("\n\nInterrupted by Ctrl-C. Shutting down...", flush=True)
+    sys.exit(130)
+
+
+# =============================================================================
+# Argument parsing with defaults shown
+# =============================================================================
+
 def parse_args():
+    perf_cores = Learner.performance_core_count()
+
     parser = argparse.ArgumentParser(
         description="Phase 1: ARC-AGI-1 Curriculum Training",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog="""
 Presets (the only knob most users need):
   quick     Fast dev loop     (~2 min on 400 tasks, 4 cores)
@@ -134,36 +163,136 @@ Examples:
     )
     parser.add_argument("--mode", type=str, default="default",
                         choices=list(PRESETS.keys()),
-                        help="Preset: quick, default, or contest")
+                        help="Preset configuration")
     parser.add_argument("--data-dir", type=str, default=None,
-                        help="Path to ARC-AGI training dir (auto-detected)")
+                        help="Path to ARC-AGI training dir (auto-detected if not set)")
     parser.add_argument("--max-tasks", type=int, default=None,
-                        help="Limit number of tasks (0 = all)")
+                        help="Limit number of tasks (0 = all, default: from preset)")
     parser.add_argument("--rounds", type=int, default=None,
-                        help="Wake-sleep rounds (overrides preset)")
+                        help="Wake-sleep rounds (default: from preset)")
     parser.add_argument("--beam-width", type=int, default=None,
-                        help="Beam width (overrides preset)")
+                        help="Beam width (default: from preset)")
     parser.add_argument("--max-generations", type=int, default=None,
-                        help="Max generations per task (overrides preset)")
+                        help="Max generations per task (default: from preset)")
     parser.add_argument("--workers", type=int, default=0,
-                        help="Parallel workers (0 = all cores)")
-    parser.add_argument("--seed", type=int, default=42,
+                        help=f"Parallel workers (0 = performance cores = {perf_cores})")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED,
                         help="Random seed for reproducibility")
-    parser.add_argument("--output-dir", type=str, default="experiments/results",
-                        help="Output directory")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Output directory (default: runs/<timestamp>)")
     parser.add_argument("--verbose", action="store_true",
                         help="Debug logging")
     return parser.parse_args()
 
 
+# =============================================================================
+# Logging setup — dual output (console + file)
+# =============================================================================
+
+def setup_logging(output_dir: str, verbose: bool) -> logging.Logger:
+    """Configure logging to stream to both console and a log file."""
+    os.makedirs(output_dir, exist_ok=True)
+    log_path = os.path.join(output_dir, "console.log")
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+    # Console handler — INFO level (or DEBUG if verbose)
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.DEBUG if verbose else logging.INFO)
+    console.setFormatter(logging.Formatter("%(message)s"))
+    root_logger.addHandler(console)
+
+    # File handler — always DEBUG level for full record
+    file_handler = logging.FileHandler(log_path, mode="w")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-5s %(message)s", datefmt="%H:%M:%S"))
+    root_logger.addHandler(file_handler)
+
+    return logging.getLogger(__name__)
+
+
+# =============================================================================
+# Live progress callback
+# =============================================================================
+
+class ProgressTracker:
+    """Streams per-task progress to console and JSONL file."""
+
+    def __init__(self, progress_path: str, t0: float):
+        self._file = open(progress_path, "w")
+        self._t0 = t0
+        self._solved_total = 0
+        self._tasks_total = 0
+
+    def on_task_done(
+        self,
+        round_num: int,
+        task_index: int,
+        total_tasks: int,
+        wr: WakeResult,
+    ) -> None:
+        """Called after each task completes. Streams live output."""
+        self._tasks_total += 1
+        if wr.solved:
+            self._solved_total += 1
+
+        elapsed = time.time() - self._t0
+        status = "SOLVED" if wr.solved else "      "
+        energy_str = f"{wr.best.energy:.4f}" if wr.best else "    N/A"
+
+        # Live console line
+        print(
+            f"  R{round_num} [{task_index:>3}/{total_tasks}] "
+            f"{status} {wr.task_id:<20s} "
+            f"E={energy_str}  gens={wr.generations_used:<4d} "
+            f"evals={wr.evaluations:<6d} {wr.wall_time:.1f}s  "
+            f"[{elapsed:.0f}s elapsed]",
+            flush=True,
+        )
+
+        # Live JSONL record
+        record = {
+            "round": round_num,
+            "task_id": wr.task_id,
+            "solved": wr.solved,
+            "energy": wr.best.energy if wr.best else None,
+            "prediction_error": wr.best.prediction_error if wr.best else None,
+            "generations": wr.generations_used,
+            "evaluations": wr.evaluations,
+            "wall_time": round(wr.wall_time, 3),
+            "program": repr(wr.best.program) if wr.best else None,
+            "elapsed": round(elapsed, 1),
+        }
+        self._file.write(json.dumps(record) + "\n")
+        self._file.flush()
+
+    def close(self):
+        self._file.close()
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
 def main():
+    # Install signal handler FIRST for immediate Ctrl-C response
+    signal.signal(signal.SIGINT, _handle_sigint)
+
     args = parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(message)s",
-    )
-    logger = logging.getLogger(__name__)
+    # -------------------------------------------------------------------------
+    # Timestamp — shared across ALL output files for this run
+    # -------------------------------------------------------------------------
+    run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        output_dir = os.path.join("runs", run_timestamp)
+
+    logger = setup_logging(output_dir, args.verbose)
 
     # -------------------------------------------------------------------------
     # Machine + preset resolution
@@ -175,7 +304,7 @@ def main():
     beam_width = args.beam_width if args.beam_width is not None else preset["beam_width"]
     max_gens = args.max_generations if args.max_generations is not None else preset["max_generations"]
     max_tasks = args.max_tasks if args.max_tasks is not None else preset["max_tasks"]
-    workers = args.workers if args.workers > 0 else machine["cpu_count"]
+    workers = args.workers if args.workers > 0 else Learner.performance_core_count()
 
     # -------------------------------------------------------------------------
     # Load tasks
@@ -205,7 +334,6 @@ def main():
     memory = InMemoryStore()
 
     # Compute budget per task = beam_width × max_generations
-    # This is implicit — no separate knob needed.
     evals_per_task = beam_width * max_gens
     total_budget = evals_per_task * len(tasks) * rounds
 
@@ -243,17 +371,18 @@ def main():
     logger.info(f"  Beam:       {beam_width}")
     logger.info(f"  Gens:       {max_gens}")
     logger.info(f"  Budget:     ~{evals_per_task:,} evals/task, ~{total_budget:,} total")
-    logger.info(f"  Workers:    {workers} ({machine.get('chip', machine['arch'])})")
+    logger.info(f"  Workers:    {workers} / {machine['cpu_count']} cores ({machine.get('chip', machine['arch'])})")
     logger.info(f"  Primitives: {len(grammar.base_primitives())}")
     logger.info(f"  Seed:       {args.seed}")
+    logger.info(f"  Output:     {output_dir}/")
+    logger.info(f"  Timestamp:  {run_timestamp}")
     logger.info(f"{'='*70}\n")
 
     # -------------------------------------------------------------------------
-    # Set up live JSONL progress log
+    # Set up live progress tracker
     # -------------------------------------------------------------------------
-    os.makedirs(args.output_dir, exist_ok=True)
-    progress_path = os.path.join(args.output_dir, "phase1_progress.jsonl")
-    progress_file = open(progress_path, "w")
+    progress_path = os.path.join(output_dir, f"{run_timestamp}_progress.jsonl")
+    tracker = ProgressTracker(progress_path, time.time())
 
     # -------------------------------------------------------------------------
     # Run
@@ -266,25 +395,10 @@ def main():
             wake_sleep_rounds=rounds,
             workers=workers,
         ),
+        on_task_done=tracker.on_task_done,
     )
     total_time = time.time() - t0
-
-    # Write per-task results to JSONL
-    for rr in results:
-        for wr in rr.wake_results:
-            record = {
-                "round": rr.round_number,
-                "task_id": wr.task_id,
-                "solved": wr.solved,
-                "energy": wr.best.energy if wr.best else None,
-                "prediction_error": wr.best.prediction_error if wr.best else None,
-                "generations": wr.generations_used,
-                "evaluations": wr.evaluations,
-                "wall_time": round(wr.wall_time, 3),
-                "program": repr(wr.best.program) if wr.best else None,
-            }
-            progress_file.write(json.dumps(record) + "\n")
-    progress_file.close()
+    tracker.close()
 
     # -------------------------------------------------------------------------
     # Report
@@ -310,14 +424,15 @@ def main():
             print(f"\n>>> REGRESSION: {first_rate:.1%} -> {last_rate:.1%}")
 
     # -------------------------------------------------------------------------
-    # Save results
+    # Save results — all files share the same timestamp prefix
     # -------------------------------------------------------------------------
-    save_metrics_json(metrics, os.path.join(args.output_dir, "phase1_metrics.json"))
-    save_metrics_csv(metrics, os.path.join(args.output_dir, "phase1_metrics.csv"))
-    memory.save(os.path.join(args.output_dir, "phase1_library.json"))
+    save_metrics_json(metrics, os.path.join(output_dir, f"{run_timestamp}_metrics.json"))
+    save_metrics_csv(metrics, os.path.join(output_dir, f"{run_timestamp}_metrics.csv"))
+    memory.save(os.path.join(output_dir, f"{run_timestamp}_library.json"))
 
     # Save run config for reproducibility
     run_config = {
+        "timestamp": run_timestamp,
         "mode": args.mode,
         "rounds": rounds,
         "beam_width": beam_width,
@@ -331,7 +446,7 @@ def main():
         "total_evaluations": total_evals,
         "machine": machine,
     }
-    with open(os.path.join(args.output_dir, "phase1_config.json"), "w") as f:
+    with open(os.path.join(output_dir, f"{run_timestamp}_config.json"), "w") as f:
         json.dump(run_config, f, indent=2)
 
     # Library summary
@@ -344,7 +459,7 @@ def main():
     if len(library) > 20:
         print(f"  ... and {len(library) - 20} more")
 
-    print(f"\nResults saved to {args.output_dir}/")
+    print(f"\nResults saved to {output_dir}/")
 
 
 if __name__ == "__main__":

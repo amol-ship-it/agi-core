@@ -132,7 +132,7 @@ class CurriculumConfig:
     """Knobs for curriculum-ordered learning."""
     sort_by_difficulty: bool = True
     wake_sleep_rounds: int = 3
-    workers: int = 0  # 0 = auto-detect (all cores), 1 = sequential
+    workers: int = 0  # 0 = auto-detect (performance cores), 1 = sequential
 
 
 @dataclass
@@ -506,10 +506,24 @@ class Learner:
     # FULL CURRICULUM: wake-sleep rounds over ordered tasks
     # -------------------------------------------------------------------------
 
+    @staticmethod
+    def performance_core_count() -> int:
+        """
+        Return the number of performance cores (not all logical cores).
+
+        Uses max(1, total_cores - 2) to leave headroom for the OS and UI,
+        preventing the machine from becoming unresponsive during long runs.
+        """
+        total = os.cpu_count() or 1
+        if total <= 2:
+            return 1
+        return total - 2
+
     def run_curriculum(
         self,
         tasks: list[Task],
         config: CurriculumConfig | None = None,
+        on_task_done: "Optional[callable]" = None,
     ) -> list[RoundResult]:
         """
         Run multiple wake-sleep rounds over a task set.
@@ -518,20 +532,25 @@ class Learner:
         should be visible in the RoundResults: solve rate should
         increase across rounds as the library grows.
 
-        Uses all available CPU cores for the wake phase (tasks are independent).
+        Uses performance cores for the wake phase (tasks are independent).
         Set workers=1 in CurriculumConfig to disable parallelism.
+
+        Args:
+            on_task_done: Optional callback(round_num, task_index, total_tasks,
+                          wake_result) called after each task completes.
+                          Used for live progress streaming.
         """
         cfg = config or CurriculumConfig()
 
         if cfg.sort_by_difficulty:
             tasks = sorted(tasks, key=lambda t: t.difficulty)
 
-        # Resolve worker count: 0 = all performance cores
+        # Resolve worker count: 0 = performance cores (not all cores)
         if cfg.workers <= 0:
             cfg = CurriculumConfig(
                 sort_by_difficulty=cfg.sort_by_difficulty,
                 wake_sleep_rounds=cfg.wake_sleep_rounds,
-                workers=os.cpu_count() or 1,
+                workers=self.performance_core_count(),
             )
 
         results = []
@@ -541,7 +560,8 @@ class Learner:
             logger.info(f"    Workers: {cfg.workers}")
 
             # WAKE: attempt all tasks (parallel across CPU cores)
-            wake_results = self._wake_parallel(tasks, cfg.workers)
+            wake_results = self._wake_parallel(
+                tasks, cfg.workers, round_num + 1, on_task_done)
 
             # SLEEP: consolidate (sequential — mutates shared state)
             sleep_result = self.sleep()
@@ -570,7 +590,13 @@ class Learner:
 
         return results
 
-    def _wake_parallel(self, tasks: list[Task], workers: int) -> list[WakeResult]:
+    def _wake_parallel(
+        self,
+        tasks: list[Task],
+        workers: int,
+        round_num: int = 1,
+        on_task_done: "Optional[callable]" = None,
+    ) -> list[WakeResult]:
         """
         Run wake_on_task across tasks using a process pool.
 
@@ -580,12 +606,16 @@ class Learner:
 
         Falls back to sequential if workers=1 or if the task count is small.
         """
+        total_tasks = len(tasks)
+
         if workers <= 1 or len(tasks) <= 2:
             # Sequential — simple path
             wake_results = []
-            for task in tasks:
+            for i, task in enumerate(tasks):
                 wr = self.wake_on_task(task)
                 wake_results.append(wr)
+                if on_task_done:
+                    on_task_done(round_num, i + 1, total_tasks, wr)
             return wake_results
 
         # Snapshot state for workers (picklable data only)
@@ -603,6 +633,7 @@ class Learner:
         ]
 
         wake_results: list[WakeResult] = [None] * len(tasks)  # type: ignore
+        completed_count = 0
         try:
             with ProcessPoolExecutor(max_workers=workers) as pool:
                 futures = {
@@ -613,14 +644,19 @@ class Learner:
                     idx = futures[future]
                     wr = future.result()
                     wake_results[idx] = wr
+                    completed_count += 1
+                    if on_task_done:
+                        on_task_done(round_num, completed_count, total_tasks, wr)
         except (OSError, RuntimeError) as e:
             # Fallback to sequential if multiprocessing fails
             # (e.g., pickling issues, resource limits)
             logger.warning(f"Parallel wake failed ({e}), falling back to sequential")
             wake_results = []
-            for task in tasks:
+            for i, task in enumerate(tasks):
                 wr = self.wake_on_task(task)
                 wake_results.append(wr)
+                if on_task_done:
+                    on_task_done(round_num, i + 1, total_tasks, wr)
             return wake_results
 
         # Merge results back into main memory

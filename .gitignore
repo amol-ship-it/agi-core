@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 experiments/results/
+runs/
 library.json
 *.egg-info/
 dist/
