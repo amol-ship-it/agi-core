@@ -181,6 +181,13 @@ class Grammar(ABC):
         """Combine sub-trees from two programs into a new program."""
         ...
 
+    def prepare_for_task(self, task: "Task") -> None:
+        """Called before the wake phase begins on a task.
+
+        Grammars can use this to cache task-specific data (e.g. training
+        examples for constant optimization).  Default: no-op.
+        """
+
     def inject_library(self, entries: list[LibraryEntry]) -> list[Primitive]:
         """
         Convert library entries into primitives usable by the grammar.

@@ -22,6 +22,7 @@ from .learner import (
     SearchConfig,
     SleepConfig,
     CurriculumConfig,
+    ParetoEntry,
     WakeResult,
     SleepResult,
     RoundResult,
@@ -53,7 +54,7 @@ __all__ = [
     "Environment", "Grammar", "DriveSignal", "Memory",
     # Learner
     "Learner", "SearchConfig", "SleepConfig", "CurriculumConfig",
-    "WakeResult", "SleepResult", "RoundResult",
+    "ParetoEntry", "WakeResult", "SleepResult", "RoundResult",
     # Memory
     "InMemoryStore",
     # Metrics

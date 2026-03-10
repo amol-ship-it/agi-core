@@ -570,5 +570,166 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertEqual(cfg.workers, 0)
 
 
+# =============================================================================
+# Semantic deduplication tests
+# =============================================================================
+
+class TestSemanticDedup(unittest.TestCase):
+
+    def test_dedup_removes_identical_outputs(self):
+        """Two programs producing the same outputs should be deduplicated."""
+        learner = _make_learner(semantic_dedup=True, dedup_precision=6)
+        task = _make_identity_task()
+        # Two identity programs = same outputs
+        sp1 = ScoredProgram(
+            program=Program(root="identity"), energy=0.5,
+            prediction_error=0.0, complexity_cost=1.0,
+        )
+        sp2 = ScoredProgram(
+            program=Program(root="identity"), energy=0.8,
+            prediction_error=0.0, complexity_cost=2.0,
+        )
+        deduped, n_removed = learner._semantic_dedup([sp1, sp2], task)
+        self.assertEqual(n_removed, 1)
+        self.assertEqual(len(deduped), 1)
+        # Should keep the lower-energy one
+        self.assertAlmostEqual(deduped[0].energy, 0.5)
+
+    def test_dedup_keeps_different_outputs(self):
+        """Programs with different outputs should both be kept."""
+        learner = _make_learner(semantic_dedup=True)
+        task = _make_identity_task()
+        sp1 = ScoredProgram(
+            program=Program(root="identity"), energy=0.5,
+            prediction_error=0.0, complexity_cost=1.0,
+        )
+        sp2 = ScoredProgram(
+            program=Program(root="double"), energy=0.8,
+            prediction_error=1.0, complexity_cost=1.0,
+        )
+        deduped, n_removed = learner._semantic_dedup([sp1, sp2], task)
+        self.assertEqual(n_removed, 0)
+        self.assertEqual(len(deduped), 2)
+
+    def test_semantic_hash_deterministic(self):
+        """Same program + same task should always produce the same hash."""
+        learner = _make_learner()
+        task = _make_identity_task()
+        prog = Program(root="identity")
+        h1 = learner._semantic_hash(prog, task)
+        h2 = learner._semantic_hash(prog, task)
+        self.assertEqual(h1, h2)
+
+    def test_dedup_disabled(self):
+        """When semantic_dedup=False, no dedup should happen."""
+        learner = _make_learner(semantic_dedup=False)
+        task = _make_identity_task()
+        result = learner.wake_on_task(task)
+        self.assertEqual(result.dedup_count, 0)
+
+    def test_wake_reports_dedup_count(self):
+        """Wake result should report how many duplicates were removed."""
+        learner = _make_learner(semantic_dedup=True)
+        task = _make_identity_task()
+        result = learner.wake_on_task(task)
+        self.assertIsInstance(result.dedup_count, int)
+        self.assertGreaterEqual(result.dedup_count, 0)
+
+
+# =============================================================================
+# Pareto front tests
+# =============================================================================
+
+class TestParetoFront(unittest.TestCase):
+
+    def test_pareto_front_returned(self):
+        """Wake result should contain a non-empty Pareto front."""
+        from core.learner import ParetoEntry
+        learner = _make_learner()
+        task = _make_identity_task()
+        result = learner.wake_on_task(task)
+        self.assertIsInstance(result.pareto_front, list)
+        self.assertGreater(len(result.pareto_front), 0)
+        for entry in result.pareto_front:
+            self.assertIsInstance(entry, ParetoEntry)
+
+    def test_pareto_front_sorted_by_complexity(self):
+        """Pareto front entries should be in increasing complexity order."""
+        learner = _make_learner()
+        task = _make_identity_task()
+        result = learner.wake_on_task(task)
+        complexities = [e.complexity for e in result.pareto_front]
+        self.assertEqual(complexities, sorted(complexities))
+
+    def test_pareto_front_error_decreasing(self):
+        """On the true Pareto front, error should decrease as complexity increases."""
+        learner = _make_learner()
+        task = _make_identity_task()
+        result = learner.wake_on_task(task)
+        if len(result.pareto_front) >= 2:
+            errors = [e.prediction_error for e in result.pareto_front]
+            for i in range(len(errors) - 1):
+                self.assertGreaterEqual(errors[i], errors[i + 1])
+
+    def test_update_pareto_front(self):
+        """_update_pareto_front should keep the best error per complexity."""
+        from core.learner import ParetoEntry
+        learner = _make_learner()
+        pareto: dict[int, ParetoEntry] = {}
+
+        sp1 = ScoredProgram(
+            program=Program(root="identity"), energy=1.0,
+            prediction_error=0.5, complexity_cost=1.0,
+        )
+        learner._update_pareto_front(pareto, sp1)
+        self.assertEqual(pareto[1].prediction_error, 0.5)
+
+        # Better error at same complexity should replace
+        sp2 = ScoredProgram(
+            program=Program(root="double"), energy=0.5,
+            prediction_error=0.1, complexity_cost=1.0,
+        )
+        learner._update_pareto_front(pareto, sp2)
+        self.assertEqual(pareto[1].prediction_error, 0.1)
+
+        # Worse error should not replace
+        sp3 = ScoredProgram(
+            program=Program(root="identity"), energy=2.0,
+            prediction_error=0.9, complexity_cost=1.0,
+        )
+        learner._update_pareto_front(pareto, sp3)
+        self.assertEqual(pareto[1].prediction_error, 0.1)
+
+    def test_extract_pareto_front_filters_dominated(self):
+        """_extract_pareto_front should remove dominated entries."""
+        from core.learner import ParetoEntry
+        learner = _make_learner()
+        pareto = {
+            1: ParetoEntry(1, 0.5, 1.0, Program(root="a")),
+            2: ParetoEntry(2, 0.8, 1.0, Program(root="b")),  # dominated by complexity=1
+            3: ParetoEntry(3, 0.1, 1.0, Program(root="c")),  # not dominated
+        }
+        front = learner._extract_pareto_front(pareto)
+        # Only complexity=1 (error=0.5) and complexity=3 (error=0.1) are non-dominated
+        self.assertEqual(len(front), 2)
+        self.assertEqual(front[0].complexity, 1)
+        self.assertEqual(front[1].complexity, 3)
+
+    def test_pareto_entry_repr(self):
+        from core.learner import ParetoEntry
+        entry = ParetoEntry(3, 0.001, 0.5, Program(root="x"))
+        r = repr(entry)
+        self.assertIn("complexity=3", r)
+        self.assertIn("x", r)
+
+    def test_no_record_also_has_pareto(self):
+        """_wake_on_task_no_record should also return a Pareto front."""
+        learner = _make_learner()
+        task = _make_identity_task()
+        result = learner._wake_on_task_no_record(task)
+        self.assertIsInstance(result.pareto_front, list)
+        self.assertGreater(len(result.pareto_front), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,12 @@ from core import (
     Primitive, Program, Task, Observation,
 )
 
+try:
+    from scipy.optimize import minimize as _scipy_minimize
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+
 
 # =============================================================================
 # Primitives: the atomic building blocks for symbolic math
@@ -59,6 +65,98 @@ MATH_PRIMITIVES = [
 ]
 
 _PRIM_MAP = {p.name: p for p in MATH_PRIMITIVES}
+
+
+# =============================================================================
+# Constant optimization: fit coefficients for a fixed tree structure
+# =============================================================================
+
+def _collect_const_nodes(program: Program) -> list[Program]:
+    """Return all 'const' leaf nodes in the tree (mutable references)."""
+    result = []
+    if program.root == "const":
+        result.append(program)
+    for child in program.children:
+        result.extend(_collect_const_nodes(child))
+    return result
+
+
+def _eval_tree_raw(node: Program, x: float) -> float:
+    """Evaluate a tree at a single x value (standalone, no Environment needed)."""
+    prim = _PRIM_MAP.get(node.root)
+    if prim is None:
+        return 0.0
+    if prim.arity == 0:
+        if node.root == "const":
+            return node.params.get("c", 1.0)
+        return prim.fn({"x": x})
+    elif prim.arity == 1:
+        child_val = _eval_tree_raw(node.children[0], x) if node.children else 0.0
+        return prim.fn(child_val)
+    elif prim.arity == 2:
+        left = _eval_tree_raw(node.children[0], x) if len(node.children) > 0 else 0.0
+        right = _eval_tree_raw(node.children[1], x) if len(node.children) > 1 else 0.0
+        return prim.fn(left, right)
+    return 0.0
+
+
+def optimize_constants(program: Program,
+                       data: list[tuple[float, float]],
+                       max_evals: int = 200) -> Program:
+    """Fit the constant nodes in a program tree using scipy.
+
+    Given a fixed tree structure, extracts all 'const' nodes, packs their
+    values into a vector, minimizes MSE via Nelder-Mead, and writes the
+    optimized values back.  Falls back to the original program if scipy
+    is unavailable or optimization fails.
+
+    Args:
+        program: The expression tree (will be deep-copied).
+        data: List of (x, y) training pairs.
+        max_evals: Maximum function evaluations for the optimizer.
+
+    Returns:
+        A new Program with optimized constant values.
+    """
+    if not _HAS_SCIPY:
+        return program
+
+    prog = copy.deepcopy(program)
+    const_nodes = _collect_const_nodes(prog)
+    if not const_nodes:
+        return prog  # nothing to optimize
+
+    # Pack initial values
+    x0 = [n.params.get("c", 1.0) for n in const_nodes]
+
+    def objective(coeffs):
+        # Write coefficients into the tree
+        for node, val in zip(const_nodes, coeffs):
+            node.params["c"] = val
+        # Compute MSE
+        total = 0.0
+        for x, y in data:
+            try:
+                pred = _eval_tree_raw(prog, x)
+                if not math.isfinite(pred):
+                    return 1e12
+                total += (pred - y) ** 2
+            except Exception:
+                return 1e12
+        return total / len(data)
+
+    try:
+        result = _scipy_minimize(
+            objective, x0, method="Nelder-Mead",
+            options={"maxfev": max_evals, "xatol": 1e-8, "fatol": 1e-10},
+        )
+        # Write final values
+        for node, val in zip(const_nodes, result.x):
+            node.params["c"] = float(val)
+    except Exception:
+        pass  # keep original values on failure
+
+    return prog
 
 
 # =============================================================================
@@ -111,8 +209,14 @@ class SymbolicMathEnv(Environment):
 
 class SymbolicMathGrammar(Grammar):
 
-    def __init__(self, seed: int = 42):
+    def __init__(self, seed: int = 42, optimize_consts: bool = True):
         self._rng = random.Random(seed)
+        self.optimize_consts = optimize_consts
+        self._training_data: list[tuple[float, float]] = []
+
+    def prepare_for_task(self, task: Task) -> None:
+        """Cache training data for constant optimization during mutations."""
+        self._training_data = list(task.train_examples)
 
     def base_primitives(self) -> list[Primitive]:
         return list(MATH_PRIMITIVES)
@@ -180,6 +284,10 @@ class SymbolicMathGrammar(Grammar):
             # Occasionally mutate a constant
             if target.root == "const":
                 target.params["c"] = target.params.get("c", 1.0) + self._rng.gauss(0, 0.5)
+
+            # Optimize constants after structural mutation
+            if self.optimize_consts and self._training_data and _collect_const_nodes(prog):
+                prog = optimize_constants(prog, self._training_data)
 
             return prog
 

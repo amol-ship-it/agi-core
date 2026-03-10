@@ -128,6 +128,16 @@
 
 > I hope you are using layered abstractions effectively here, not just copying blindly from the other code. i.e. Use the core domain agnostic layer effectively in this codebase. Because we want to extend this to more difficult tasks in the future like ARC-AGI-2, Zork, robotics and general intelligence!
 
+## Session 2 — Claude Code Web (March 10, 2026)
+
+### Prompt 20: Port Improvements from agi-mvp-no-noise
+
+> agi-mvp-no-noise is on my github, and also in ~/github. [User asked Claude to study the repo and port the best ideas into agi-core: semantic deduplication, Pareto front tracking, and constant optimization.]
+
+### Prompt 21: Push to Main & Follow Guidelines
+
+> Should we push the changes to main and make sure my guidelines are followed? [User requested compliance audit, PR creation, and merge to main before proceeding with new features.]
+
 ---
 
 *This document will be updated with each new session.*

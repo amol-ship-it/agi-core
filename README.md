@@ -175,6 +175,9 @@ python -m pytest tests/ -v --cov=core --cov=grammars --cov-report=term-missing
 
 1. **WAKE**: For each task, search for a program that transforms input to output.
    Uses beam search with mutation and crossover over a library of primitives.
+   - **Semantic deduplication** removes algebraically-equivalent programs from the beam (e.g. `cos(π/2+x²)` = `sin(x²)`) by hashing output vectors.
+   - **Pareto front tracking** records the best program at each complexity level, showing the full accuracy-complexity tradeoff.
+   - **Constant optimization** (symbolic math only): after structural mutations, fits constants via `scipy.optimize.minimize` (Nelder-Mead), decoupling structure search from coefficient search.
 2. **SLEEP**: Analyze all solved programs. Extract recurring sub-programs.
    Add them to the library as new reusable abstractions.
 3. **REPEAT**: The grown library biases future search toward proven compositions.
@@ -224,7 +227,7 @@ agi-core/
 ├── experiments/             # Thin domain-specific wrappers over core/runner.py
 │   └── phase1_arc.py        # ARC curriculum training (dataset loading + ARC wiring)
 │
-├── tests/                   # Test suite (186 tests)
+├── tests/                   # Test suite (205 tests)
 │   ├── test_arc.py
 │   ├── test_interfaces.py
 │   ├── test_learner.py
@@ -238,7 +241,7 @@ agi-core/
 ├── CLAUDE.md                # Persistent instructions for Claude Code sessions
 ├── PROMPTS.md               # Chronological log of all prompts
 ├── DECISIONS.md             # Chronological log of all decisions
-├── requirements.txt         # Python dependencies (numpy, pytest)
+├── requirements.txt         # Python dependencies (numpy, scipy, pytest)
 └── README.md                # This file
 ```
 
