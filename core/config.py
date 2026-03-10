@@ -22,6 +22,10 @@ class SearchConfig:
     seed: Optional[int] = None
     semantic_dedup: bool = True     # deduplicate beam by output vector
     dedup_precision: int = 6        # decimal places for output hashing
+    # Near-miss refinement: try appending/prepending primitives to programs
+    # with prediction_error < this threshold. High-ROI: catches "almost right"
+    # programs that need one more step (e.g. a color fix or crop).
+    near_miss_threshold: float = 0.20
 
     # Exhaustive enumeration: try ALL programs up to this depth before beam search.
     # depth 1 = all single primitives, depth 2 = all pairs, depth 3 = all triples.
