@@ -225,10 +225,16 @@ def make_task(
 
 if __name__ == "__main__":
     import logging
+    import time
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     from core import Learner, InMemoryStore, SearchConfig, CurriculumConfig
-    from core import extract_metrics, print_compounding_table
+    from core import WakeResult, extract_metrics, print_compounding_table
+
+    print("=" * 70)
+    print("  SYMBOLIC REGRESSION DEMO")
+    print("  The same core algorithm discovers mathematical formulas")
+    print("=" * 70)
 
     # Create tasks of increasing difficulty
     tasks = [
@@ -237,6 +243,18 @@ if __name__ == "__main__":
         make_task(lambda x: math.sin(x) + x,          task_id="sin_plus_x", difficulty=3),
         make_task(lambda x: math.sin(x ** 2) + 2 * x, task_id="sin_x2_2x", difficulty=5),
     ]
+
+    target_formulas = {
+        "linear": "y = 2x + 1",
+        "quadratic": "y = x²",
+        "sin_plus_x": "y = sin(x) + x",
+        "sin_x2_2x": "y = sin(x²) + 2x",
+    }
+
+    print(f"\n  Tasks ({len(tasks)} target functions to rediscover):")
+    for t in tasks:
+        print(f"    {t.task_id:<14s}  {target_formulas[t.task_id]:<25s}  (difficulty={t.difficulty})")
+    print()
 
     # Wire up the 4 plugins
     env = SymbolicMathEnv()
@@ -259,6 +277,29 @@ if __name__ == "__main__":
         ),
     )
 
+    print(f"  Primitives:  {len(grammar.base_primitives())} "
+          f"({', '.join(p.name for p in grammar.base_primitives())})")
+    print(f"  Beam width:  100")
+    print(f"  Generations: 80 per task")
+    print(f"  Workers:     {Learner.performance_core_count()}")
+    print()
+
+    # Live progress callback
+    t0 = time.time()
+
+    def on_task_done(round_num, task_index, total_tasks, wr: WakeResult):
+        elapsed = time.time() - t0
+        icon = "✓" if wr.solved else "✗"
+        energy_str = f"{wr.best.energy:.4f}" if wr.best else "N/A"
+        prog_str = repr(wr.best.program) if wr.best else ""
+        target = target_formulas.get(wr.task_id, "")
+        print(f"  {icon} R{round_num} [{task_index}/{total_tasks}] "
+              f"{wr.task_id:<14s} E={energy_str:<8s} "
+              f"{wr.wall_time:.1f}s  [{elapsed:.0f}s elapsed]")
+        if wr.solved:
+            print(f"       target:  {target}")
+            print(f"       found:   {prog_str}")
+
     # Run the curriculum
     results = learner.run_curriculum(
         tasks,
@@ -266,11 +307,12 @@ if __name__ == "__main__":
             sort_by_difficulty=True,
             wake_sleep_rounds=3,
         ),
+        on_task_done=on_task_done,
     )
 
     # Print the compounding curve
     print("\n" + "=" * 70)
-    print("COMPOUNDING CURVE")
+    print("  COMPOUNDING CURVE — does solve rate increase across rounds?")
     print("=" * 70)
     metrics = extract_metrics(results)
     print_compounding_table(metrics)
