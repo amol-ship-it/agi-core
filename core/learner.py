@@ -86,6 +86,8 @@ def _wake_worker(args: tuple) -> WakeResult:
         seed=task_seed,
         semantic_dedup=search_cfg.semantic_dedup,
         dedup_precision=search_cfg.dedup_precision,
+        exhaustive_depth=search_cfg.exhaustive_depth,
+        exhaustive_top_k=search_cfg.exhaustive_top_k,
     )
 
     learner = Learner(
@@ -141,16 +143,17 @@ class Learner:
 
     def wake_on_task(self, task: Task) -> WakeResult:
         """
-        Attempt to solve a single task via beam search.
+        Attempt to solve a single task via exhaustive enumeration + beam search.
 
-        1. Get base primitives + library primitives
-        2. Generate initial random candidates
-        3. For each generation:
-           a. Evaluate all candidates (execute + score)
-           b. Semantic dedup (remove programs with identical outputs)
-           c. Keep the beam_width best
-           d. Mutate and crossover to produce next generation
-        4. Store the best solution if it's good enough
+        Phase 1: Exhaustive enumeration of ALL programs up to exhaustive_depth.
+                 This is cheap (N + N×K for depth 2) and catches easy tasks.
+        Phase 2: Beam search with mutation/crossover for harder tasks.
+                 Seeds the beam with the best programs from enumeration.
+
+        The key compounding insight: learned library entries are 0-arity
+        primitives. A depth-1 program using a learned concept IS a depth-3+
+        program in disguise. So exhaustive depth-1 search over a rich
+        vocabulary reaches further than deep search over a small one.
         """
         t0 = time.time()
         cfg = self.search_cfg
@@ -163,14 +166,46 @@ class Learner:
         library_prims = self.grammar.inject_library(self.memory.get_library())
         all_prims = base_prims + library_prims
 
-        # Initialize beam with small random programs
-        beam = self._init_beam(all_prims, cfg.beam_width)
-
         best_so_far: Optional[ScoredProgram] = None
-        gens_used = 0
         n_evals = 0
         total_deduped = 0
         pareto: dict[int, ParetoEntry] = {}
+        enum_candidates: list[ScoredProgram] = []
+
+        # --- Phase 1: Exhaustive enumeration ---
+        if cfg.exhaustive_depth >= 1:
+            enum_candidates, n_enum_evals = self._exhaustive_enumerate(
+                all_prims, task, cfg.exhaustive_depth, cfg.exhaustive_top_k)
+            n_evals += n_enum_evals
+            for sp in enum_candidates:
+                self._update_pareto_front(pareto, sp)
+                if best_so_far is None or sp.energy < best_so_far.energy:
+                    best_so_far = sp
+
+            # Early exit if enumeration found a perfect solve
+            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                best_so_far.task_id = task.task_id
+                self.memory.record_episode(
+                    task.task_id, task.train_examples,
+                    best_so_far.program, best_so_far.energy)
+                self.memory.store_solution(task.task_id, best_so_far)
+                self._credit_library_usage(best_so_far.program)
+                front = self._extract_pareto_front(pareto)
+                wall = time.time() - t0
+                logger.info(
+                    f"  [wake] Task {task.task_id}: SOLVED by enumeration, "
+                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                return WakeResult(
+                    task_id=task.task_id, solved=True, best=best_so_far,
+                    generations_used=0, evaluations=n_evals, wall_time=wall,
+                    pareto_front=front, dedup_count=0)
+
+        # --- Phase 2: Beam search (seeded with top enumeration results) ---
+        seed_progs = [sp.program for sp in sorted(
+            enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
+        n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
+        beam = seed_progs + self._init_beam(all_prims, n_random)
+        gens_used = 0
 
         for gen in range(cfg.max_generations):
             gens_used = gen + 1
@@ -268,12 +303,40 @@ class Learner:
         library_prims = self.grammar.inject_library(self.memory.get_library())
         all_prims = base_prims + library_prims
 
-        beam = self._init_beam(all_prims, cfg.beam_width)
         best_so_far: Optional[ScoredProgram] = None
-        gens_used = 0
         n_evals = 0
         total_deduped = 0
         pareto: dict[int, ParetoEntry] = {}
+        enum_candidates: list[ScoredProgram] = []
+
+        # --- Phase 1: Exhaustive enumeration ---
+        if cfg.exhaustive_depth >= 1:
+            enum_candidates, n_enum_evals = self._exhaustive_enumerate(
+                all_prims, task, cfg.exhaustive_depth, cfg.exhaustive_top_k)
+            n_evals += n_enum_evals
+            for sp in enum_candidates:
+                self._update_pareto_front(pareto, sp)
+                if best_so_far is None or sp.energy < best_so_far.energy:
+                    best_so_far = sp
+
+            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                best_so_far.task_id = task.task_id
+                front = self._extract_pareto_front(pareto)
+                wall = time.time() - t0
+                logger.info(
+                    f"  [wake] Task {task.task_id}: SOLVED by enumeration, "
+                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                return WakeResult(
+                    task_id=task.task_id, solved=True, best=best_so_far,
+                    generations_used=0, evaluations=n_evals, wall_time=wall,
+                    pareto_front=front, dedup_count=0)
+
+        # --- Phase 2: Beam search ---
+        seed_progs = [sp.program for sp in sorted(
+            enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
+        n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
+        beam = seed_progs + self._init_beam(all_prims, n_random)
+        gens_used = 0
 
         for gen in range(cfg.max_generations):
             gens_used = gen + 1
@@ -489,11 +552,15 @@ class Learner:
         for round_num in range(cfg.wake_sleep_rounds):
             logger.info(f"=== Round {round_num + 1}/{cfg.wake_sleep_rounds} ===")
             logger.info(f"    Library size: {len(self.memory.get_library())}")
-            logger.info(f"    Workers: {cfg.workers}")
 
-            # WAKE: attempt all tasks (parallel across CPU cores)
-            wake_results = self._wake_parallel(
-                tasks, cfg.workers, round_num + 1, on_task_done)
+            if cfg.sequential_compounding:
+                logger.info("    Mode: sequential compounding")
+                wake_results = self._wake_sequential_compounding(
+                    tasks, round_num + 1, on_task_done)
+            else:
+                logger.info(f"    Workers: {cfg.workers}")
+                wake_results = self._wake_parallel(
+                    tasks, cfg.workers, round_num + 1, on_task_done)
 
             # SLEEP: consolidate (sequential — mutates shared state)
             sleep_result = self.sleep()
@@ -623,6 +690,141 @@ class Learner:
                     self._credit_library_usage(wr.best.program)
 
         return wake_results
+
+    # -------------------------------------------------------------------------
+    # Sequential compounding — within-run knowledge transfer
+    # -------------------------------------------------------------------------
+
+    def _wake_sequential_compounding(
+        self,
+        tasks: list[Task],
+        round_num: int = 1,
+        on_task_done: "Optional[callable]" = None,
+    ) -> list[WakeResult]:
+        """
+        Process tasks one at a time with immediate concept promotion.
+
+        After each solved task, extract subtrees and add promising ones
+        to the library immediately. Next task sees the expanded vocabulary.
+        This is where "one algorithm compounds" becomes measurable.
+        """
+        total_tasks = len(tasks)
+        wake_results = []
+
+        for i, task in enumerate(tasks):
+            wr = self.wake_on_task(task)
+            wake_results.append(wr)
+            if on_task_done:
+                on_task_done(round_num, i + 1, total_tasks, wr)
+
+            # Immediate concept promotion on solve
+            if wr.solved and wr.best:
+                self._immediate_promote(wr.best, task.task_id)
+
+        return wake_results
+
+    def _immediate_promote(self, scored: ScoredProgram, task_id: str) -> None:
+        """
+        Immediately promote a solved program's subtrees to the library.
+
+        Unlike full sleep (which waits for min_occurrences across multiple tasks),
+        this promotes any non-trivial subtree from a single solve.
+        """
+        existing_reprs = {repr(e.program) for e in self.memory.get_library()}
+
+        for subtree in self._enumerate_subtrees(scored.program):
+            if subtree.size < 2:
+                continue
+            key = repr(subtree)
+            if key in existing_reprs:
+                continue
+            if len(self.memory.get_library()) >= self.sleep_cfg.max_library_size:
+                break
+
+            entry = LibraryEntry(
+                name=f"promoted_{len(self.memory.get_library())}",
+                program=subtree,
+                usefulness=math.log(subtree.size + 1),
+                reuse_count=0,
+                source_tasks=[task_id],
+                domain="",
+            )
+            self.memory.add_to_library(entry)
+            existing_reprs.add(key)
+
+        logger.info(
+            f"  [promote] Task {task_id}: library now has "
+            f"{len(self.memory.get_library())} entries"
+        )
+
+    # -------------------------------------------------------------------------
+    # Exhaustive enumeration — the bootstrap phase
+    # -------------------------------------------------------------------------
+
+    def _exhaustive_enumerate(
+        self,
+        primitives: list[Primitive],
+        task: Task,
+        max_depth: int = 2,
+        top_k: int = 15,
+    ) -> tuple[list[ScoredProgram], int]:
+        """
+        Enumerate ALL programs up to max_depth and evaluate them.
+
+        Depth 1: try every single primitive (N programs).
+        Depth 2: try every pair outer(inner(x)) for top-K inner prims (N×K programs).
+        Depth 3: try top-K³ triples (K³ programs).
+
+        Returns (scored_programs, num_evaluations).
+        """
+        scored: list[ScoredProgram] = []
+        n_evals = 0
+
+        # --- Depth 1: all single primitives ---
+        unary_prims = [p for p in primitives if p.arity <= 1]
+        for prim in unary_prims:
+            prog = Program(root=prim.name)
+            sp = self._evaluate_program(prog, task)
+            scored.append(sp)
+            n_evals += 1
+
+        if max_depth < 2:
+            return scored, n_evals
+
+        # --- Depth 2: all pairs outer(inner(x)) ---
+        depth1_ranked = sorted(scored, key=lambda s: s.prediction_error)
+        top_inner = depth1_ranked[:top_k] if len(depth1_ranked) > top_k else depth1_ranked
+
+        for outer in unary_prims:
+            for inner_sp in top_inner:
+                prog = Program(root=outer.name, children=[
+                    Program(root=inner_sp.program.root)])
+                sp = self._evaluate_program(prog, task)
+                scored.append(sp)
+                n_evals += 1
+
+        if max_depth < 3:
+            return scored, n_evals
+
+        # --- Depth 3: top-K triples ---
+        depth2_ranked = sorted(scored, key=lambda s: s.prediction_error)
+        seen = set()
+        top_names = []
+        for sp in depth2_ranked[:top_k]:
+            if sp.program.root not in seen:
+                seen.add(sp.program.root)
+                top_names.append(sp.program.root)
+
+        for outer in top_names:
+            for mid in top_names:
+                for inner in top_names:
+                    prog = Program(root=outer, children=[
+                        Program(root=mid, children=[Program(root=inner)])])
+                    sp = self._evaluate_program(prog, task)
+                    scored.append(sp)
+                    n_evals += 1
+
+        return scored, n_evals
 
     # -------------------------------------------------------------------------
     # Private helpers

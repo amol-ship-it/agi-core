@@ -179,4 +179,90 @@ If we ever need finer control (e.g., spending more on hard tasks, less on easy o
 
 ---
 
+## Session 3 — Claude Code Web (March 10, 2026)
+
+### Decision: Exhaustive Enumeration Before Beam Search
+
+**Context:** agi-mvp-general solves 24.3% on training by using exhaustive search up to depth-3, not evolution. Beam search with width=150 explores a tiny fraction of the space; most random programs produce garbage grids.
+
+**Key insight:** Exhaustive enumeration for short programs IS beam search with beam_width = vocabulary_size^depth. It's the same algorithm, different budget.
+
+**Decision:** Add `SearchConfig.exhaustive_depth` (default 2). Before beam search:
+- Depth 1: try ALL single primitives (N programs)
+- Depth 2: try ALL top-K pairs outer(inner(x)) (N×K programs)
+
+**Result:** 12/400 (3%) → 33/400 (8.2%) on training. 32 of 33 solved by enumeration, 1 by beam search. Confirms enumeration IS the primary solver for ARC.
+
+**Compounding insight:** Learned library entries are 0-arity primitives. A depth-1 program using a learned concept IS a depth-3+ program in disguise. As vocabulary grows via sleep/promotion, depth-1 enumeration covers what previously required depth-3+.
+
+### Decision: 16 New ARC Primitives
+
+**Context:** Gap between 48 primitives and agi-mvp-general's 304. But most of those 304 are parameterized color ops.
+
+**Decision:** Add 16 high-value spatial/object primitives:
+- Object isolation: extract_largest, extract_smallest (3 tasks solved)
+- Symmetry: make_symmetric_h/v, anti_diagonal_mirror (6 tasks solved via symmetry+repeat combos)
+- Pattern: repeat_right/down, add/remove_border
+- Sorting: sort_rows/cols, unique_rows/cols (2 tasks solved)
+- Color: recolor_by_rank, extend_lines_h/v
+
+**Result:** 14 of 33 solved tasks use new primitives. Not dead weight.
+
+### Decision: Task-Specific Color Primitives
+
+**Context:** Fixed `keep_c1`..`keep_c9` are rarely the right color ops. Most ARC tasks involve task-specific color mappings.
+
+**Decision:** `ARCGrammar.prepare_for_task()` analyzes training examples to generate dynamic color primitives (fill_bg_X, remove_X, swap_X_to_Y) based on which colors appear/disappear.
+
+**Rationale:** This keeps the core algorithm generic (the Grammar interface already has `prepare_for_task`) while giving ARC-specific color intelligence. 3 tasks solved using task-specific color prims.
+
+### Decision: Sequential Compounding Mode
+
+**Context:** Tasks processed in parallel can't share knowledge within a round. Easy tasks should seed concepts for hard tasks.
+
+**Decision:** `CurriculumConfig.sequential_compounding=True`. Process tasks one at a time; after each solve, immediately promote non-trivial subtrees to the library.
+
+**Result:** In practice, with depth-1 and depth-2 programs, subtrees are too small (size < 2) to promote useful concepts. Compounding via sequential processing added 0 new solves beyond parallel. The bottleneck is that unsolved tasks need fundamentally different operations (object-level reasoning, conditional programs), not more compositions of existing primitives.
+
+**Lessons:** Sequential compounding will become valuable when: (a) deeper programs are found (more subtrees to promote), or (b) object-level primitives enable compositions that weren't possible before.
+
+### Decision: Culture Persistence (Cross-Run Knowledge Transfer)
+
+**Context:** agi-mvp-general's culture.py saves/loads learned concepts across runs. Training produces culture; evaluation loads it.
+
+**Decision:** `InMemoryStore.save_culture()` / `load_culture()` with proper JSON serialization of Program trees (not just repr strings). Solutions are also saved for culture transfer.
+
+**Rationale:** Proper round-trip serialization is essential for the train→eval pipeline. Using `_program_to_dict` / `_program_from_dict` instead of repr/eval for safety and correctness.
+
+### Decision: Train/Eval Pipeline
+
+**Context:** agi-mvp-general gets 35/400 on the evaluation set. We need to measure on eval but never use eval data for development decisions.
+
+**Decision:** `experiments/phase1_arc.py` supports `--pipeline` (train→eval), `--eval` (eval only with `--culture`), and proper data split detection. Training data for all development; evaluation data only for final scoring.
+
+### Benchmark Results: After This Session
+
+| Config | Training (400) | Time |
+|--------|---------------|------|
+| Baseline (beam only, 48 prims) | 12/400 (3.0%) | 26s |
+| + exhaustive depth=2 + 64 prims | 33/400 (8.2%) | 155s |
+| + sequential compounding (2 rounds) | 32/400 (8.0%) | 304s |
+
+### Evaluation Set Results (Scoring Only — Not for Development)
+
+Pipeline run: `python -m experiments.phase1_arc --pipeline --mode quick`
+
+| Split | Solved | Rate | Time | Library |
+|-------|--------|------|------|---------|
+| Training (2 rounds) | 32/400 | 8.0% | 3m00s | 2 abstractions |
+| Evaluation (2 rounds, with culture) | 3/400 | 0.75% | 3m50s | 3 abstractions |
+
+**Comparison with agi-mvp-general:** 35/400 (8.8%) on evaluation set.
+
+**Analysis:** The eval-to-train ratio (0.75% vs 8.0%) shows significant overfitting to training distribution. The evaluation set tasks require more complex transformations than our depth-2 exhaustive search can produce. Key bottleneck: our 64 primitives + depth-2 compositions express ~4,160 unique programs. Most eval tasks need object-level reasoning, conditional logic, or deeper compositions that cannot be expressed in 2 operations.
+
+**Bug fix:** `NameError: name 'runs_dir' is not defined` in `core/runner.py` line 724. Fixed by deriving culture path from library_path instead of using undefined variable.
+
+---
+
 *This document will be updated with each new session and major decision.*

@@ -444,6 +444,225 @@ def or_halves_h(grid: Grid) -> Grid:
     return from_np(result)
 
 
+# --- Extract / isolate objects ---
+
+def extract_largest_object(grid: Grid) -> Grid:
+    """Extract the largest connected non-zero region (4-connected), cropped."""
+    arr = to_np(grid)
+    rows, cols = arr.shape
+    visited = np.zeros_like(arr, dtype=bool)
+    best_mask = None
+    best_size = 0
+    for r in range(rows):
+        for c in range(cols):
+            if arr[r, c] != 0 and not visited[r, c]:
+                mask = np.zeros_like(arr, dtype=bool)
+                queue = [(r, c)]
+                visited[r, c] = True
+                mask[r, c] = True
+                size = 0
+                while queue:
+                    cr, cc = queue.pop()
+                    size += 1
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < rows and 0 <= nc < cols and not visited[nr, nc] and arr[nr, nc] != 0:
+                            visited[nr, nc] = True
+                            mask[nr, nc] = True
+                            queue.append((nr, nc))
+                if size > best_size:
+                    best_size = size
+                    best_mask = mask
+    if best_mask is None:
+        return [[0]]
+    result = np.where(best_mask, arr, 0)
+    nz = np.argwhere(result != 0)
+    r_min, c_min = nz.min(axis=0)
+    r_max, c_max = nz.max(axis=0)
+    return from_np(result[r_min:r_max + 1, c_min:c_max + 1])
+
+
+def extract_smallest_object(grid: Grid) -> Grid:
+    """Extract the smallest connected non-zero region (4-connected), cropped."""
+    arr = to_np(grid)
+    rows, cols = arr.shape
+    visited = np.zeros_like(arr, dtype=bool)
+    best_mask = None
+    best_size = float('inf')
+    for r in range(rows):
+        for c in range(cols):
+            if arr[r, c] != 0 and not visited[r, c]:
+                mask = np.zeros_like(arr, dtype=bool)
+                queue = [(r, c)]
+                visited[r, c] = True
+                mask[r, c] = True
+                size = 0
+                while queue:
+                    cr, cc = queue.pop()
+                    size += 1
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < rows and 0 <= nc < cols and not visited[nr, nc] and arr[nr, nc] != 0:
+                            visited[nr, nc] = True
+                            mask[nr, nc] = True
+                            queue.append((nr, nc))
+                if size < best_size:
+                    best_size = size
+                    best_mask = mask
+    if best_mask is None:
+        return [[0]]
+    result = np.where(best_mask, arr, 0)
+    nz = np.argwhere(result != 0)
+    r_min, c_min = nz.min(axis=0)
+    r_max, c_max = nz.max(axis=0)
+    return from_np(result[r_min:r_max + 1, c_min:c_max + 1])
+
+
+# --- Symmetry operations ---
+
+def anti_diagonal_mirror(grid: Grid) -> Grid:
+    """Mirror along the anti-diagonal."""
+    arr = to_np(grid)
+    return from_np(np.flip(np.flip(arr, 0), 1).T)
+
+
+def make_symmetric_h(grid: Grid) -> Grid:
+    """Make the grid horizontally symmetric by mirroring the left half."""
+    arr = to_np(grid)
+    rows, cols = arr.shape
+    result = arr.copy()
+    for c in range(cols // 2):
+        result[:, cols - 1 - c] = result[:, c]
+    return from_np(result)
+
+
+def make_symmetric_v(grid: Grid) -> Grid:
+    """Make the grid vertically symmetric by mirroring the top half."""
+    arr = to_np(grid)
+    rows, cols = arr.shape
+    result = arr.copy()
+    for r in range(rows // 2):
+        result[rows - 1 - r, :] = result[r, :]
+    return from_np(result)
+
+
+# --- Pattern replication ---
+
+def repeat_pattern_right(grid: Grid) -> Grid:
+    """Repeat the grid once to the right."""
+    arr = to_np(grid)
+    return from_np(np.concatenate([arr, arr], axis=1))
+
+
+def repeat_pattern_down(grid: Grid) -> Grid:
+    """Repeat the grid once downward."""
+    arr = to_np(grid)
+    return from_np(np.concatenate([arr, arr], axis=0))
+
+
+# --- Border operations ---
+
+def add_border(grid: Grid) -> Grid:
+    """Add a 1-pixel border of the most common non-zero color."""
+    mc = most_common_color(grid)
+    if mc == 0:
+        mc = 1
+    arr = to_np(grid)
+    return from_np(np.pad(arr, 1, mode='constant', constant_values=mc))
+
+
+def remove_border(grid: Grid) -> Grid:
+    """Remove the 1-pixel border."""
+    arr = to_np(grid)
+    if arr.shape[0] <= 2 or arr.shape[1] <= 2:
+        return grid
+    return from_np(arr[1:-1, 1:-1])
+
+
+# --- Sorting / reordering ---
+
+def sort_rows_by_color_count(grid: Grid) -> Grid:
+    """Sort rows by the number of non-zero colors (ascending)."""
+    rows = [row[:] for row in grid]
+    rows.sort(key=lambda r: sum(1 for c in r if c != 0))
+    return rows
+
+
+def sort_cols_by_color_count(grid: Grid) -> Grid:
+    """Sort columns by the number of non-zero colors (ascending)."""
+    arr = to_np(grid)
+    counts = np.sum(arr != 0, axis=0)
+    order = np.argsort(counts)
+    return from_np(arr[:, order])
+
+
+# --- Unique row/col operations ---
+
+def unique_rows(grid: Grid) -> Grid:
+    """Keep only unique rows (first occurrence)."""
+    seen = []
+    result = []
+    for row in grid:
+        key = tuple(row)
+        if key not in seen:
+            seen.append(key)
+            result.append(row[:])
+    return result if result else [[0]]
+
+
+def unique_cols(grid: Grid) -> Grid:
+    """Keep only unique columns (first occurrence)."""
+    arr = to_np(grid)
+    _, idx = np.unique(arr, axis=1, return_index=True)
+    result = arr[:, sorted(idx)]
+    return from_np(result) if result.size > 0 else [[0]]
+
+
+# --- Color mapping ---
+
+def recolor_by_size_rank(grid: Grid) -> Grid:
+    """Recolor: most frequent non-zero color -> 1, next -> 2, etc."""
+    flat = [c for row in grid for c in row if c != 0]
+    if not flat:
+        return [row[:] for row in grid]
+    counts = Counter(flat)
+    ranked = [c for c, _ in counts.most_common()]
+    mapping = {c: i + 1 for i, c in enumerate(ranked)}
+    return [[mapping.get(c, c) if c != 0 else 0 for c in row] for row in grid]
+
+
+# --- Extend lines ---
+
+def extend_lines_h(grid: Grid) -> Grid:
+    """Extend non-zero pixels horizontally to fill their row."""
+    arr = to_np(grid)
+    result = arr.copy()
+    rows, cols = arr.shape
+    for r in range(rows):
+        colors = arr[r, arr[r] != 0]
+        if len(colors) > 0:
+            mc = Counter(colors.tolist()).most_common(1)[0][0]
+            for c in range(cols):
+                if result[r, c] == 0:
+                    result[r, c] = mc
+    return from_np(result)
+
+
+def extend_lines_v(grid: Grid) -> Grid:
+    """Extend non-zero pixels vertically to fill their column."""
+    arr = to_np(grid)
+    result = arr.copy()
+    rows, cols = arr.shape
+    for c in range(cols):
+        colors = arr[arr[:, c] != 0, c]
+        if len(colors) > 0:
+            mc = Counter(colors.tolist()).most_common(1)[0][0]
+            for r in range(rows):
+                if result[r, c] == 0:
+                    result[r, c] = mc
+    return from_np(result)
+
+
 # --- Object detection helpers ---
 
 def count_colors(grid: Grid) -> int:
@@ -518,6 +737,23 @@ def _build_arc_primitives() -> list[Primitive]:
         ("xor_halves_h",    xor_halves_h),
         ("or_halves_h",     or_halves_h),
         ("replace_bg_mc",   replace_bg_with_most_common),
+        # --- New spatial/object primitives ---
+        ("extract_largest",     extract_largest_object),
+        ("extract_smallest",    extract_smallest_object),
+        ("anti_diag_mirror",    anti_diagonal_mirror),
+        ("make_sym_h",          make_symmetric_h),
+        ("make_sym_v",          make_symmetric_v),
+        ("repeat_right",        repeat_pattern_right),
+        ("repeat_down",         repeat_pattern_down),
+        ("add_border",          add_border),
+        ("remove_border",       remove_border),
+        ("sort_rows",           sort_rows_by_color_count),
+        ("sort_cols",           sort_cols_by_color_count),
+        ("unique_rows",         unique_rows),
+        ("unique_cols",         unique_cols),
+        ("recolor_by_rank",     recolor_by_size_rank),
+        ("extend_lines_h",      extend_lines_h),
+        ("extend_lines_v",      extend_lines_v),
     ]
 
     for name, fn in unary_ops:
@@ -628,13 +864,59 @@ class ARCGrammar(Grammar):
     Programs are trees where:
     - Leaves are unary primitives applied directly to the input grid
     - Internal nodes compose the outputs of their children
+
+    Key feature: prepare_for_task() analyzes training examples to create
+    task-specific color primitives inferred from input/output pairs.
     """
 
     def __init__(self, seed: int = 42):
         self._rng = random.Random(seed)
+        self._task_prims: list[Primitive] = []
 
     def base_primitives(self) -> list[Primitive]:
-        return list(ARC_PRIMITIVES)
+        return list(ARC_PRIMITIVES) + self._task_prims
+
+    def prepare_for_task(self, task: Task) -> None:
+        """Analyze training examples to create task-specific color primitives."""
+        self._task_prims = []
+        if not task.train_examples:
+            return
+
+        all_in_colors: set[int] = set()
+        all_out_colors: set[int] = set()
+        for inp, out in task.train_examples:
+            all_in_colors.update(c for row in inp for c in row)
+            all_out_colors.update(c for row in out for c in row)
+
+        new_colors = all_out_colors - all_in_colors - {0}
+        removed_colors = all_in_colors - all_out_colors - {0}
+        prim_names = {p.name for p in ARC_PRIMITIVES}
+
+        for c in new_colors:
+            name = f"task_fill_bg_{c}"
+            if name not in prim_names:
+                self._task_prims.append(Primitive(
+                    name=name, arity=1, fn=_make_replace_color(0, c), domain="arc"))
+                prim_names.add(name)
+
+        for c in removed_colors:
+            name = f"task_remove_{c}"
+            if name not in prim_names:
+                self._task_prims.append(Primitive(
+                    name=name, arity=1, fn=_make_replace_color(c, 0), domain="arc"))
+                prim_names.add(name)
+
+        for old_c in removed_colors:
+            for new_c in new_colors:
+                name = f"task_swap_{old_c}_to_{new_c}"
+                if name not in prim_names:
+                    self._task_prims.append(Primitive(
+                        name=name, arity=1, fn=_make_replace_color(old_c, new_c), domain="arc"))
+                    prim_names.add(name)
+
+        # Register task prims in _PRIM_MAP for execution
+        for p in self._task_prims:
+            _PRIM_MAP[p.name] = p
 
     def compose(self, outer: Primitive, inner_programs: list[Program]) -> Program:
         return Program(root=outer.name, children=inner_programs)

@@ -16,6 +16,29 @@ from .interfaces import Memory
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# Program serialization (JSON-safe tree representation)
+# =============================================================================
+
+def _program_to_dict(prog: Program) -> dict:
+    """Serialize a Program tree to a JSON-safe dict."""
+    d = {"root": prog.root}
+    if prog.children:
+        d["children"] = [_program_to_dict(c) for c in prog.children]
+    if prog.params:
+        d["params"] = prog.params
+    return d
+
+
+def _program_from_dict(d: dict) -> Program:
+    """Reconstruct a Program tree from a dict."""
+    return Program(
+        root=d["root"],
+        children=[_program_from_dict(c) for c in d.get("children", [])],
+        params=d.get("params", {}),
+    )
+
+
 class InMemoryStore(Memory):
     """
     Simple in-memory implementation of all 3 memory systems.
@@ -66,10 +89,85 @@ class InMemoryStore(Memory):
     def get_solutions(self):
         return dict(self._solutions)
 
-    # --- Persistence ---
+    # --- Persistence (culture file) ---
 
-    def save(self, path):
-        """Save library to JSON (solutions + episodes are ephemeral)."""
+    def save_culture(self, path: str) -> None:
+        """
+        Save the learned culture (library + solution summaries) to JSON.
+
+        The culture file is the cross-run knowledge transfer mechanism.
+        Training produces a culture file; evaluation loads it.
+        """
+        data = {
+            "version": "1.0",
+            "library": [
+                {
+                    "name": e.name,
+                    "program": _program_to_dict(e.program),
+                    "usefulness": e.usefulness,
+                    "reuse_count": e.reuse_count,
+                    "source_tasks": e.source_tasks,
+                    "domain": e.domain,
+                }
+                for e in self._library
+            ],
+            "solutions": {
+                task_id: {
+                    "program": _program_to_dict(sp.program),
+                    "energy": sp.energy,
+                    "prediction_error": sp.prediction_error,
+                }
+                for task_id, sp in self._solutions.items()
+            },
+            "solutions_count": len(self._solutions),
+            "library_count": len(self._library),
+        }
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+        logger.info(f"Culture saved to {path} ({len(self._library)} library, {len(self._solutions)} solutions)")
+
+    def load_culture(self, path: str) -> None:
+        """
+        Load a culture file, reconstructing Programs from their serialized form.
+
+        This restores the library so that evaluation can use concepts learned
+        during training. Solutions are loaded as well for culture transfer.
+        """
+        with open(path) as f:
+            data = json.load(f)
+
+        # Reconstruct library entries
+        for entry_data in data.get("library", []):
+            program = _program_from_dict(entry_data["program"])
+            entry = LibraryEntry(
+                name=entry_data["name"],
+                program=program,
+                usefulness=entry_data.get("usefulness", 1.0),
+                reuse_count=entry_data.get("reuse_count", 0),
+                source_tasks=entry_data.get("source_tasks", []),
+                domain=entry_data.get("domain", ""),
+            )
+            self._library.append(entry)
+
+        # Reconstruct solutions for culture transfer
+        for task_id, sol_data in data.get("solutions", {}).items():
+            program = _program_from_dict(sol_data["program"])
+            sp = ScoredProgram(
+                program=program,
+                energy=sol_data.get("energy", 0.0),
+                prediction_error=sol_data.get("prediction_error", 0.0),
+                complexity_cost=float(program.size),
+                task_id=task_id,
+            )
+            self._solutions[task_id] = sp
+
+        logger.info(
+            f"Culture loaded from {path} "
+            f"({len(self._library)} library, {len(self._solutions)} solutions)")
+
+    # Legacy API compatibility
+    def save(self, path: str) -> None:
+        """Save library to JSON (legacy format for backward compat)."""
         data = {
             "library": [
                 {
@@ -89,11 +187,9 @@ class InMemoryStore(Memory):
             json.dump(data, f, indent=2)
         logger.info(f"Memory saved to {path} ({len(self._library)} library entries)")
 
-    def load(self, path):
-        """Load library from JSON. Programs stored as repr — need grammar to reconstruct."""
+    def load(self, path: str):
+        """Load from JSON (legacy API). Returns raw data for backward compat."""
         with open(path) as f:
             data = json.load(f)
         logger.info(f"Memory loaded from {path} ({len(data.get('library', []))} library entries)")
-        # Note: full reconstruction requires the grammar to parse repr back to Program.
-        # For now, just load metadata. The caller should reconstruct programs.
         return data
