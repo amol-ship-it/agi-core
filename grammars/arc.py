@@ -1263,6 +1263,232 @@ def hollow_objects(grid: Grid) -> Grid:
     return result
 
 
+# =============================================================================
+# Cyclic shift primitives
+# =============================================================================
+
+def shift_down_1(grid: Grid) -> Grid:
+    """Cyclically shift all rows down by 1 (bottom row wraps to top)."""
+    if not grid:
+        return grid
+    return [grid[-1][:]] + [row[:] for row in grid[:-1]]
+
+
+def shift_up_1(grid: Grid) -> Grid:
+    """Cyclically shift all rows up by 1 (top row wraps to bottom)."""
+    if not grid:
+        return grid
+    return [row[:] for row in grid[1:]] + [grid[0][:]]
+
+
+def shift_left_1(grid: Grid) -> Grid:
+    """Cyclically shift all columns left by 1 (left col wraps to right)."""
+    if not grid or not grid[0]:
+        return grid
+    return [row[1:] + [row[0]] for row in grid]
+
+
+def shift_right_1(grid: Grid) -> Grid:
+    """Cyclically shift all columns right by 1 (right col wraps to left)."""
+    if not grid or not grid[0]:
+        return grid
+    return [[row[-1]] + row[:-1] for row in grid]
+
+
+# =============================================================================
+# Symmetry completion primitives
+# =============================================================================
+
+def complete_symmetry_h(grid: Grid) -> Grid:
+    """Complete horizontal symmetry: for each row, mirror the non-zero half.
+
+    If the left half has more non-zero pixels, mirror it to the right;
+    otherwise mirror the right half to the left.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    mid = w // 2
+    for r in range(h):
+        left_count = sum(1 for c in range(mid) if result[r][c] != 0)
+        right_count = sum(1 for c in range(mid, w) if result[r][c] != 0)
+        if left_count >= right_count:
+            # Mirror left to right
+            for c in range(mid):
+                mc = w - 1 - c
+                if mc < w and result[r][c] != 0:
+                    result[r][mc] = result[r][c]
+        else:
+            # Mirror right to left
+            for c in range(mid, w):
+                mc = w - 1 - c
+                if mc >= 0 and result[r][c] != 0:
+                    result[r][mc] = result[r][c]
+    return result
+
+
+def complete_symmetry_v(grid: Grid) -> Grid:
+    """Complete vertical symmetry: for each column, mirror the non-zero half.
+
+    If the top half has more non-zero pixels, mirror it to the bottom;
+    otherwise mirror the bottom half to the top.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    mid = h // 2
+    for c in range(w):
+        top_count = sum(1 for r in range(mid) if result[r][c] != 0)
+        bot_count = sum(1 for r in range(mid, h) if result[r][c] != 0)
+        if top_count >= bot_count:
+            # Mirror top to bottom
+            for r in range(mid):
+                mr = h - 1 - r
+                if mr < h and result[r][c] != 0:
+                    result[mr][c] = result[r][c]
+        else:
+            # Mirror bottom to top
+            for r in range(mid, h):
+                mr = h - 1 - r
+                if mr >= 0 and result[r][c] != 0:
+                    result[mr][c] = result[r][c]
+    return result
+
+
+# =============================================================================
+# Split-by-separator operations
+# =============================================================================
+
+def overlay_split_halves_h(grid: Grid) -> Grid:
+    """Split grid horizontally at separator line, overlay top onto bottom.
+
+    Finds the first full horizontal separator line (all same non-zero color),
+    splits at it, and overlays the top half onto the bottom half.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    # Find horizontal separator line
+    sep_row = -1
+    for r in range(h):
+        if grid[r][0] != 0 and all(grid[r][c] == grid[r][0] for c in range(w)):
+            sep_row = r
+            break
+    if sep_row <= 0:
+        return [row[:] for row in grid]
+    top = [grid[r][:] for r in range(sep_row)]
+    bottom = [grid[r][:] for r in range(sep_row + 1, h)]
+    if not bottom:
+        return [row[:] for row in grid]
+    return overlay(bottom, top)
+
+
+def overlay_split_halves_v(grid: Grid) -> Grid:
+    """Split grid vertically at separator line, overlay left onto right.
+
+    Finds the first full vertical separator line (all same non-zero color),
+    splits at it, and overlays the left half onto the right half.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    # Find vertical separator line
+    sep_col = -1
+    for c in range(w):
+        if grid[0][c] != 0 and all(grid[r][c] == grid[0][c] for r in range(h)):
+            sep_col = c
+            break
+    if sep_col <= 0:
+        return [row[:] for row in grid]
+    left = [grid[r][:sep_col] for r in range(h)]
+    right = [grid[r][sep_col + 1:] for r in range(h)]
+    if not right or not right[0]:
+        return [row[:] for row in grid]
+    return overlay(right, left)
+
+
+# =============================================================================
+# Morphological operations
+# =============================================================================
+
+def erode(grid: Grid) -> Grid:
+    """Erode: remove pixels that don't have all 4 neighbors of the same color."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0:
+                continue
+            color = grid[r][c]
+            # Keep only if all 4 neighbors are the same color (or edge)
+            keep = True
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w:
+                    if grid[nr][nc] != color:
+                        keep = False
+                        break
+            if keep:
+                result[r][c] = color
+    return result
+
+
+def spread_colors(grid: Grid) -> Grid:
+    """Spread/dilate: each non-zero pixel spreads to its 4-connected bg neighbors."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] == 0:
+                        result[nr][nc] = grid[r][c]
+    return result
+
+
+# =============================================================================
+# Color cycling primitives
+# =============================================================================
+
+def rotate_colors_up(grid: Grid) -> Grid:
+    """Rotate non-zero colors up by 1: 1->2->3->...->9->1."""
+    if not grid or not grid[0]:
+        return grid
+    result = []
+    for row in grid:
+        new_row = []
+        for v in row:
+            if v == 0:
+                new_row.append(0)
+            else:
+                new_row.append((v % 9) + 1)  # 1->2, 2->3, ..., 9->1
+        result.append(new_row)
+    return result
+
+
+def rotate_colors_down(grid: Grid) -> Grid:
+    """Rotate non-zero colors down by 1: 1->9, 2->1, 3->2, ..., 9->8."""
+    if not grid or not grid[0]:
+        return grid
+    result = []
+    for row in grid:
+        new_row = []
+        for v in row:
+            if v == 0:
+                new_row.append(0)
+            else:
+                new_row.append(((v - 2) % 9) + 1)  # 1->9, 2->1, 3->2, ..., 9->8
+        result.append(new_row)
+    return result
+
+
 # --- Composable binary operations (for composing two grids) ---
 
 def overlay(base: Grid, top: Grid) -> Grid:
@@ -1366,6 +1592,23 @@ def _build_arc_primitives() -> list[Primitive]:
         ("extract_majority_c",  extract_majority_color),
         ("replace_noise_objs",  replace_noise_in_objects),
         ("hollow_objects",      hollow_objects),
+        # --- Cyclic shifts ---
+        ("shift_down_1",        shift_down_1),
+        ("shift_up_1",          shift_up_1),
+        ("shift_left_1",        shift_left_1),
+        ("shift_right_1",       shift_right_1),
+        # --- Symmetry completion ---
+        ("complete_sym_h",      complete_symmetry_h),
+        ("complete_sym_v",      complete_symmetry_v),
+        # --- Split-by-separator ---
+        ("overlay_split_h",     overlay_split_halves_h),
+        ("overlay_split_v",     overlay_split_halves_v),
+        # --- Morphological ops ---
+        ("erode",               erode),
+        ("spread_colors",       spread_colors),
+        # --- Color cycling ---
+        ("rotate_colors_up",    rotate_colors_up),
+        ("rotate_colors_down",  rotate_colors_down),
     ]
 
     for name, fn in unary_ops:

@@ -175,8 +175,8 @@ class TestNewPrimitives(unittest.TestCase):
                 self.assertIsInstance(result[0], list, f"{prim.name} not list of lists")
 
     def test_primitive_count_increased(self):
-        """Should have 89 primitives (64 session-3 + 25 session-4 new)."""
-        self.assertEqual(len(ARC_PRIMITIVES), 89)
+        """Should have 101 primitives (89 session-4 + 12 batch-2 new)."""
+        self.assertEqual(len(ARC_PRIMITIVES), 101)
 
 
 # =============================================================================

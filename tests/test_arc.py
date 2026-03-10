@@ -43,6 +43,12 @@ from grammars.arc import (
     denoise_majority, fill_rectangles,
     extract_minority_color, extract_majority_color,
     replace_noise_in_objects, hollow_objects,
+    # Batch 2 primitives
+    shift_down_1, shift_up_1, shift_left_1, shift_right_1,
+    complete_symmetry_h, complete_symmetry_v,
+    overlay_split_halves_h, overlay_split_halves_v,
+    erode, spread_colors,
+    rotate_colors_up, rotate_colors_down,
 )
 
 
@@ -806,6 +812,163 @@ class TestNearMissPrimitives(unittest.TestCase):
         self.assertEqual(result[1][1], 0)
         self.assertEqual(result[0][0], 1)
         self.assertEqual(result[0][1], 1)
+
+
+class TestCyclicShifts(unittest.TestCase):
+    """Test cyclic shift primitives."""
+
+    def test_shift_down_1(self):
+        grid = [[1, 2], [3, 4], [5, 6]]
+        result = shift_down_1(grid)
+        self.assertEqual(result, [[5, 6], [1, 2], [3, 4]])
+
+    def test_shift_up_1(self):
+        grid = [[1, 2], [3, 4], [5, 6]]
+        result = shift_up_1(grid)
+        self.assertEqual(result, [[3, 4], [5, 6], [1, 2]])
+
+    def test_shift_left_1(self):
+        grid = [[1, 2, 3], [4, 5, 6]]
+        result = shift_left_1(grid)
+        self.assertEqual(result, [[2, 3, 1], [5, 6, 4]])
+
+    def test_shift_right_1(self):
+        grid = [[1, 2, 3], [4, 5, 6]]
+        result = shift_right_1(grid)
+        self.assertEqual(result, [[3, 1, 2], [6, 4, 5]])
+
+    def test_shift_roundtrip(self):
+        """Shifting down then up should give identity."""
+        grid = [[1, 2], [3, 4], [5, 6]]
+        self.assertEqual(shift_up_1(shift_down_1(grid)), grid)
+        self.assertEqual(shift_right_1(shift_left_1(grid)), grid)
+
+
+class TestSymmetryCompletion(unittest.TestCase):
+    """Test symmetry completion primitives."""
+
+    def test_complete_symmetry_h_left_dominant(self):
+        """Left side has content, right is empty -> mirror left to right."""
+        grid = [[1, 2, 0, 0], [3, 4, 0, 0]]
+        result = complete_symmetry_h(grid)
+        self.assertEqual(result, [[1, 2, 2, 1], [3, 4, 4, 3]])
+
+    def test_complete_symmetry_h_right_dominant(self):
+        """Right side has content, left is empty -> mirror right to left."""
+        grid = [[0, 0, 2, 1], [0, 0, 4, 3]]
+        result = complete_symmetry_h(grid)
+        self.assertEqual(result, [[1, 2, 2, 1], [3, 4, 4, 3]])
+
+    def test_complete_symmetry_v_top_dominant(self):
+        """Top has content, bottom is empty -> mirror top to bottom."""
+        grid = [[1, 2], [3, 4], [0, 0], [0, 0]]
+        result = complete_symmetry_v(grid)
+        self.assertEqual(result, [[1, 2], [3, 4], [3, 4], [1, 2]])
+
+    def test_complete_symmetry_v_bottom_dominant(self):
+        """Bottom has content, top is empty -> mirror bottom to top."""
+        grid = [[0, 0], [0, 0], [3, 4], [1, 2]]
+        result = complete_symmetry_v(grid)
+        self.assertEqual(result, [[1, 2], [3, 4], [3, 4], [1, 2]])
+
+
+class TestSplitBySeparator(unittest.TestCase):
+    """Test split-by-separator operations."""
+
+    def test_overlay_split_h(self):
+        """Split at horizontal separator, overlay top onto bottom."""
+        grid = [
+            [1, 0, 0],
+            [5, 5, 5],  # separator
+            [0, 0, 2],
+        ]
+        result = overlay_split_halves_h(grid)
+        # overlay top [[1,0,0]] onto bottom [[0,0,2]] -> [[1,0,2]]
+        self.assertEqual(result, [[1, 0, 2]])
+
+    def test_overlay_split_v(self):
+        """Split at vertical separator, overlay left onto right."""
+        grid = [
+            [1, 5, 0],
+            [0, 5, 2],
+        ]
+        result = overlay_split_halves_v(grid)
+        # overlay left [[1],[0]] onto right [[0],[2]] -> [[1],[2]]
+        self.assertEqual(result, [[1], [2]])
+
+    def test_overlay_split_h_no_separator(self):
+        """No separator -> return copy of grid."""
+        grid = [[1, 2], [3, 4]]
+        result = overlay_split_halves_h(grid)
+        self.assertEqual(result, grid)
+
+
+class TestMorphologicalOps(unittest.TestCase):
+    """Test morphological operations."""
+
+    def test_erode_single_pixel(self):
+        """Single pixel should be removed by erosion."""
+        grid = [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
+        result = erode(grid)
+        self.assertEqual(result, [[0, 0, 0], [0, 0, 0], [0, 0, 0]])
+
+    def test_erode_preserves_interior(self):
+        """Interior of a 5x5 block: edge pixels adjacent to bg are removed."""
+        grid = [
+            [0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 0],
+            [0, 1, 1, 1, 0],
+            [0, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0],
+        ]
+        result = erode(grid)
+        # Center pixel survives
+        self.assertEqual(result[2][2], 1)
+        # Edge of the block is removed (neighbor is bg=0)
+        self.assertEqual(result[1][2], 0)
+
+    def test_spread_colors(self):
+        """Single pixel should spread to 4-connected neighbors."""
+        grid = [[0, 0, 0], [0, 3, 0], [0, 0, 0]]
+        result = spread_colors(grid)
+        self.assertEqual(result[0][1], 3)  # up
+        self.assertEqual(result[2][1], 3)  # down
+        self.assertEqual(result[1][0], 3)  # left
+        self.assertEqual(result[1][2], 3)  # right
+        self.assertEqual(result[0][0], 0)  # diagonal stays 0
+
+    def test_spread_doesnt_overwrite(self):
+        """Spread should not overwrite existing non-zero pixels."""
+        grid = [[0, 2, 0], [0, 3, 0], [0, 0, 0]]
+        result = spread_colors(grid)
+        self.assertEqual(result[0][1], 2)  # preserved
+
+
+class TestColorCycling(unittest.TestCase):
+    """Test color cycling primitives."""
+
+    def test_rotate_colors_up(self):
+        grid = [[0, 1, 9], [5, 0, 3]]
+        result = rotate_colors_up(grid)
+        self.assertEqual(result, [[0, 2, 1], [6, 0, 4]])
+
+    def test_rotate_colors_down(self):
+        grid = [[0, 1, 9], [5, 0, 3]]
+        result = rotate_colors_down(grid)
+        self.assertEqual(result, [[0, 9, 8], [4, 0, 2]])
+
+    def test_color_cycle_roundtrip(self):
+        """Up then down should give identity."""
+        grid = [[0, 1, 5, 9], [3, 7, 0, 2]]
+        self.assertEqual(rotate_colors_down(rotate_colors_up(grid)), grid)
+
+    def test_color_cycle_9_times_is_identity(self):
+        """Cycling up 9 times should return to original."""
+        grid = [[1, 2, 3], [7, 8, 9]]
+        result = grid
+        for _ in range(9):
+            result = rotate_colors_up(result)
+        self.assertEqual(result, grid)
 
 
 class TestARCFullLoop(unittest.TestCase):
