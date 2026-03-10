@@ -17,171 +17,27 @@ import multiprocessing
 import os
 import random
 import time
-from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
 from typing import Optional
 
-from .interfaces import (
-    Environment,
-    Grammar,
-    DriveSignal,
-    Memory,
+from .types import (
     Program,
     Task,
     ScoredProgram,
     LibraryEntry,
     Primitive,
 )
+from .interfaces import (
+    Environment,
+    Grammar,
+    DriveSignal,
+    Memory,
+)
+from .config import SearchConfig, SleepConfig, CurriculumConfig
+from .results import ParetoEntry, WakeResult, SleepResult, RoundResult
+from .transition_matrix import TransitionMatrix
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# Transition Matrix — DreamCoder-style generative prior
-# =============================================================================
-
-class TransitionMatrix:
-    """
-    Learns P(child_op | parent_op) from successful programs.
-
-    This biases random program generation toward compositions
-    that have been observed in solutions. The key DreamCoder insight:
-    not all compositions are equally likely to be useful.
-    """
-
-    def __init__(self, smoothing: float = 0.1):
-        self._counts: dict[str, Counter] = defaultdict(Counter)
-        self._totals: dict[str, int] = defaultdict(int)
-        self._smoothing = smoothing
-
-    def observe_program(self, program: Program) -> None:
-        """Record parent->child transitions from a program tree."""
-        for child in program.children:
-            self._counts[program.root][child.root] += 1
-            self._totals[program.root] += 1
-            self.observe_program(child)
-
-    def probability(self, parent_op: str, child_op: str, n_primitives: int) -> float:
-        """P(child_op | parent_op) with Laplace smoothing."""
-        count = self._counts[parent_op][child_op]
-        total = self._totals[parent_op]
-        smooth = self._smoothing
-        return (count + smooth) / (total + smooth * n_primitives)
-
-    def weighted_choice(self, parent_op: str, primitives: list[Primitive],
-                        rng: random.Random) -> Primitive:
-        """Choose a child primitive biased by the transition matrix."""
-        n = len(primitives)
-        if not self._totals.get(parent_op):
-            return rng.choice(primitives)
-
-        weights = [
-            self.probability(parent_op, p.name, n) for p in primitives
-        ]
-        total_w = sum(weights)
-        if total_w <= 0:
-            return rng.choice(primitives)
-
-        r = rng.random() * total_w
-        cumulative = 0.0
-        for i, w in enumerate(weights):
-            cumulative += w
-            if r <= cumulative:
-                return primitives[i]
-        return primitives[-1]
-
-    @property
-    def size(self) -> int:
-        """Number of observed transitions."""
-        return sum(self._totals.values())
-
-    def __repr__(self):
-        return f"TransitionMatrix({self.size} transitions, {len(self._counts)} parents)"
-
-
-# =============================================================================
-# Configuration
-# =============================================================================
-
-@dataclass
-class SearchConfig:
-    """Knobs for the beam search. Domain-agnostic."""
-    beam_width: int = 200         # candidates kept per generation
-    mutations_per_candidate: int = 3
-    crossover_fraction: float = 0.3
-    max_generations: int = 100    # compute budget = beam_width × max_generations
-    energy_alpha: float = 1.0     # weight on prediction error
-    energy_beta: float = 0.001    # weight on complexity cost
-    early_stop_energy: float = 0.0  # stop if energy <= this (perfect solve)
-    solve_threshold: float = 1e-4   # prediction_error <= this counts as solved
-    seed: Optional[int] = None
-    semantic_dedup: bool = True     # deduplicate beam by output vector
-    dedup_precision: int = 6        # decimal places for output hashing
-
-
-@dataclass
-class SleepConfig:
-    """Knobs for the sleep/consolidation phase."""
-    min_occurrences: int = 2      # sub-tree must appear in >= N solutions
-    min_size: int = 2             # sub-tree must have >= N nodes
-    max_library_size: int = 500   # cap on total library entries
-    usefulness_decay: float = 0.95  # decay old entries each sleep cycle
-
-
-@dataclass
-class CurriculumConfig:
-    """Knobs for curriculum-ordered learning."""
-    sort_by_difficulty: bool = True
-    wake_sleep_rounds: int = 3
-    workers: int = 0  # 0 = auto-detect (performance cores), 1 = sequential
-
-
-@dataclass
-class ParetoEntry:
-    """One point on the Pareto front: best program at a given complexity."""
-    complexity: int           # node count
-    prediction_error: float
-    energy: float
-    program: Program
-
-    def __repr__(self):
-        return (f"ParetoEntry(complexity={self.complexity}, "
-                f"error={self.prediction_error:.6g}, program={self.program})")
-
-
-@dataclass
-class WakeResult:
-    """What comes out of one wake phase."""
-    task_id: str
-    solved: bool
-    best: Optional[ScoredProgram]
-    generations_used: int
-    evaluations: int = 0    # total program evaluations (deterministic compute measure)
-    wall_time: float = 0.0
-    pareto_front: list[ParetoEntry] = field(default_factory=list)
-    dedup_count: int = 0    # how many duplicates were removed
-
-
-@dataclass
-class SleepResult:
-    """What comes out of one sleep phase."""
-    new_entries: list[LibraryEntry]
-    library_size_before: int
-    library_size_after: int
-    wall_time: float
-
-
-@dataclass
-class RoundResult:
-    """What comes out of one full wake-sleep round."""
-    round_number: int
-    wake_results: list[WakeResult]
-    sleep_result: SleepResult
-    tasks_solved: int
-    tasks_total: int
-    solve_rate: float
-    cumulative_library_size: int
 
 
 # =============================================================================
@@ -198,7 +54,7 @@ def _worker_init():
     _signal.signal(_signal.SIGINT, _signal.SIG_IGN)
 
 
-def _wake_worker(args: tuple) -> "WakeResult":
+def _wake_worker(args: tuple) -> WakeResult:
     """
     Solve a single task in a child process.
 
@@ -228,6 +84,8 @@ def _wake_worker(args: tuple) -> "WakeResult":
         early_stop_energy=search_cfg.early_stop_energy,
         solve_threshold=search_cfg.solve_threshold,
         seed=task_seed,
+        semantic_dedup=search_cfg.semantic_dedup,
+        dedup_precision=search_cfg.dedup_precision,
     )
 
     learner = Learner(
@@ -289,8 +147,9 @@ class Learner:
         2. Generate initial random candidates
         3. For each generation:
            a. Evaluate all candidates (execute + score)
-           b. Keep the beam_width best
-           c. Mutate and crossover to produce next generation
+           b. Semantic dedup (remove programs with identical outputs)
+           c. Keep the beam_width best
+           d. Mutate and crossover to produce next generation
         4. Store the best solution if it's good enough
         """
         t0 = time.time()

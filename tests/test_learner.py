@@ -11,15 +11,13 @@ import random
 import unittest
 from typing import Any, Optional
 
-from core.interfaces import (
-    Environment, Grammar, DriveSignal, Primitive, Program, Task,
-    Observation, LibraryEntry, ScoredProgram,
-)
+from core.types import Primitive, Program, Task, Observation, LibraryEntry, ScoredProgram
+from core.interfaces import Environment, Grammar, DriveSignal
+from core.config import SearchConfig, SleepConfig, CurriculumConfig
+from core.results import ParetoEntry, WakeResult, SleepResult, RoundResult
+from core.transition_matrix import TransitionMatrix
+from core.learner import Learner
 from core.memory import InMemoryStore
-from core.learner import (
-    TransitionMatrix, Learner, SearchConfig, SleepConfig, CurriculumConfig,
-    WakeResult, SleepResult, RoundResult,
-)
 
 
 # =============================================================================
@@ -644,7 +642,7 @@ class TestParetoFront(unittest.TestCase):
 
     def test_pareto_front_returned(self):
         """Wake result should contain a non-empty Pareto front."""
-        from core.learner import ParetoEntry
+
         learner = _make_learner()
         task = _make_identity_task()
         result = learner.wake_on_task(task)
@@ -673,7 +671,7 @@ class TestParetoFront(unittest.TestCase):
 
     def test_update_pareto_front(self):
         """_update_pareto_front should keep the best error per complexity."""
-        from core.learner import ParetoEntry
+
         learner = _make_learner()
         pareto: dict[int, ParetoEntry] = {}
 
@@ -702,7 +700,7 @@ class TestParetoFront(unittest.TestCase):
 
     def test_extract_pareto_front_filters_dominated(self):
         """_extract_pareto_front should remove dominated entries."""
-        from core.learner import ParetoEntry
+
         learner = _make_learner()
         pareto = {
             1: ParetoEntry(1, 0.5, 1.0, Program(root="a")),
@@ -716,7 +714,7 @@ class TestParetoFront(unittest.TestCase):
         self.assertEqual(front[1].complexity, 3)
 
     def test_pareto_entry_repr(self):
-        from core.learner import ParetoEntry
+
         entry = ParetoEntry(3, 0.001, 0.5, Program(root="x"))
         r = repr(entry)
         self.assertIn("complexity=3", r)

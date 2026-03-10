@@ -15,8 +15,8 @@ import tempfile
 import unittest
 from io import StringIO
 
-from core.interfaces import Program, ScoredProgram, LibraryEntry
-from core.learner import WakeResult, SleepResult, RoundResult
+from core.types import Program, ScoredProgram, LibraryEntry
+from core.results import WakeResult, SleepResult, RoundResult
 from core.metrics import (
     CompoundingMetrics,
     extract_metrics,

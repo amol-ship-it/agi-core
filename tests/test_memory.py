@@ -13,7 +13,7 @@ import os
 import tempfile
 import unittest
 
-from core.interfaces import Program, ScoredProgram, LibraryEntry
+from core.types import Program, ScoredProgram, LibraryEntry
 from core.memory import InMemoryStore
 
 

@@ -8,10 +8,8 @@ Verifies:
 """
 
 import unittest
-from core.interfaces import (
-    Primitive, Program, Observation, Task, ScoredProgram, LibraryEntry,
-    Environment, Grammar, DriveSignal, Memory,
-)
+from core.types import Primitive, Program, Observation, Task, ScoredProgram, LibraryEntry
+from core.interfaces import Environment, Grammar, DriveSignal, Memory
 
 
 class TestPrimitive(unittest.TestCase):

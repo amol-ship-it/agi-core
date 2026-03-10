@@ -12,7 +12,7 @@ Verifies:
 import math
 import unittest
 
-from core.interfaces import Program, Task, LibraryEntry
+from core.types import Program, Task, LibraryEntry
 from grammars.symbolic_math import (
     MATH_PRIMITIVES,
     SymbolicMathEnv,

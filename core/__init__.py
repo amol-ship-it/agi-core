@@ -4,29 +4,33 @@ agi-core: The Universal Learning Loop.
 Public API — import everything from here.
 """
 
-from .interfaces import (
+from .types import (
     Primitive,
     Program,
     Observation,
     Task,
     ScoredProgram,
     LibraryEntry,
+)
+from .interfaces import (
     Environment,
     Grammar,
     DriveSignal,
     Memory,
 )
-from .learner import (
-    TransitionMatrix,
-    Learner,
+from .config import (
     SearchConfig,
     SleepConfig,
     CurriculumConfig,
+)
+from .results import (
     ParetoEntry,
     WakeResult,
     SleepResult,
     RoundResult,
 )
+from .transition_matrix import TransitionMatrix
+from .learner import Learner
 from .memory import InMemoryStore
 from .metrics import (
     CompoundingMetrics,
@@ -52,9 +56,14 @@ __all__ = [
     "Primitive", "Program", "Observation", "Task", "ScoredProgram", "LibraryEntry",
     # Interfaces
     "Environment", "Grammar", "DriveSignal", "Memory",
-    # Learner
-    "Learner", "SearchConfig", "SleepConfig", "CurriculumConfig",
+    # Config
+    "SearchConfig", "SleepConfig", "CurriculumConfig",
+    # Results
     "ParetoEntry", "WakeResult", "SleepResult", "RoundResult",
+    # Transition matrix
+    "TransitionMatrix",
+    # Learner
+    "Learner",
     # Memory
     "InMemoryStore",
     # Metrics

@@ -26,8 +26,11 @@ from datetime import datetime, timezone
 from io import TextIOBase
 from typing import Optional
 
-from .interfaces import Environment, Grammar, DriveSignal, Task
-from .learner import Learner, SearchConfig, SleepConfig, CurriculumConfig, WakeResult
+from .types import Task
+from .interfaces import Environment, Grammar, DriveSignal
+from .config import SearchConfig, SleepConfig, CurriculumConfig
+from .results import WakeResult
+from .learner import Learner
 from .memory import InMemoryStore
 from .metrics import extract_metrics, print_compounding_table, save_metrics_json, save_metrics_csv
 
