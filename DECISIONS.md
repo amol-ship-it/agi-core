@@ -109,6 +109,45 @@ Based on analysis of the existing repos:
 - The key metric is not the absolute number but whether it **increases across rounds** as the library grows
 - Even a modest improvement (e.g., 8% round 1 -> 12% round 3) without new hand-coded primitives would validate the compounding claim
 
+### Decision: Numpy-Optimized Grid Primitives
+
+**Context:** `outline()`, `denoise_3x3()`, and `fill_enclosed()` had nested Python loops — O(rows × cols × neighbors).
+**Decision:** Rewrite all three as vectorized numpy operations.
+**Rationale:** These are in the hot path (called for every candidate evaluation). Pure Python nested loops on grids are 10-100x slower than numpy vectorized equivalents.
+- `outline`: replaced with `np.pad` + boolean array operations
+- `denoise_3x3`: replaced with shifted-window counting over 10 colors + `np.argmax`
+- `fill_enclosed`: kept flood fill (inherently sequential) but vectorized the neighbor-color fill step
+
+### Decision: Parallel Wake Phase with ProcessPoolExecutor
+
+**Context:** Tasks are independent during wake phase — natural parallelism opportunity.
+**Decision:** Use `ProcessPoolExecutor` with automatic fallback to sequential if pickling fails.
+**Rationale:** Each worker gets a snapshot of the learner state, solves independently, and results merge back. Falls back gracefully to sequential on any error. Auto-detects CPU core count.
+
+### Decision: Simplified Compute Budget
+
+**Context:** User found the `eval_budget` concept in agi-mvp-general confusing (cell-normalized budgeting with proportional ceilings).
+**Decision:** Remove `eval_budget` as a separate knob. The compute budget is simply `beam_width × max_generations`. Presets define it. Early stopping saves unused compute.
+**Rationale:** The simplest correct thing. beam × gens IS the compute. Presets map to use cases:
+- `quick` = 3,200 evals/task — fast iteration
+- `default` = 12,000 evals/task — balanced
+- `contest` = 100,000 evals/task — max accuracy
+
+If we ever need finer control (e.g., spending more on hard tasks, less on easy ones), we can add adaptive allocation later as a separate improvement.
+
+### Benchmark Results: Phase 1 Baseline
+
+**Run config:** default mode, 50 real ARC-AGI-1 tasks, 3 rounds, beam 150, 80 gens, 4 cores.
+**Results:**
+- Round 1: 2/50 solved (4.0%)
+- Round 2: 2/50 solved (4.0%)
+- Round 3: 2/50 solved (4.0%)
+- Total wall time: ~10 min
+
+**Sample tasks (built-in, no dataset):** 8/8 solved (100%) in ~50s.
+
+**Interpretation:** The 4% baseline on real tasks is expected — these are hard puzzles and our search is pure beam search without heuristic guidance. The fact that it's plateauing at 4% across rounds tells us the library isn't growing yet — we need to solve more tasks before sleep can extract useful abstractions. Next steps: improve search quality (not just quantity), possibly add heuristic-guided mutation.
+
 ---
 
 *This document will be updated with each new session and major decision.*

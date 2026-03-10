@@ -88,6 +88,46 @@
 > Use multiple files for documentation as needed, in a docs folder if it makes sense, but tie them together in README.md so that the user can find them easily.
 > Always keep documentation files listing the entire prompt I have given you, as well as your thoughts each time and the results we got along the way, as well as the plan and next steps.
 
+### Prompt 11: Share Instructions on GitHub
+
+> Share these instructions on the github repository as well? I would like people to be able to follow exactly how I generated the code/repository/prompts etc.
+
+### Prompt 12: Reproducible Quickstart + Merge to Main
+
+> Any reason you are not using the main branch? Maybe because the code is not fully ready?
+> Can you give full reproducible deterministic instructions in the README? For example, the quickstart instructions in this branch don't give instructions on cloning this repository and also the ARC AGI repository. Also, what if someone already has this repository, but need to sync to the latest version?
+
+### Prompt 13: Performance Optimization + Good Defaults
+
+> Similar to my other code, can you make the benchmark run use all performance cores on the user's machine? And also give instructions without flags as much as possible and use good defaults for iteration speed as well as good accuracy. Make things as simple as possible for the user to reproduce my results, and to iterate on improvements for me as well (and same applies to any other user who might want to contribute). You can provide documentation and examples of how to tweak flags for contest mode or something.
+> For examples, in quickstart why does the user need to specify --rounds=5? Should there be a default? Also, why was that magic number picked in the first place? It does not belong in quickstart, do you agree?
+
+### Prompt 14: Numpy/Numba Optimization + Merge to Main
+
+> Similar to my other code, consider whether using numpy, numba etc is a good idea to optimize the python code which can be very slow otherwise.
+> Also, are we in good shape to promote everything to the main branch? What are the benchmark numbers that the user will get with the quickstart instructions, and also the best numbers with any flag tweaking? Let's document them to set user expectations correctly, along with expected time to finish the runs on typical laptops.
+
+### Prompt 15: Machine Specs + Auto-Detection
+
+> Note that my laptop is an M1 Max Macbook Pro with 64GB RAM and 8TB SSD. Feel free to utilize it to its full potential effectively and intelligently, but don't thrash it. But the code should also run deterministically, reproducibly and fast on any users machine and be able to replicate my results, and whatever is given on the README. Auto detect the users machine architecture and run the job by default to utilize their machine effectively as well.
+
+### Prompt 16: Leverage Existing Repos for Patterns
+
+> My existing code in agi-mvp-arc-agi-1 and agi-mvp-general will show you how I used these principles there. Also, note how I have tried to cleanly log everything, and give live progress on the console as well as in log files and results and culture files in live json files.
+
+### Prompt 17: Compute Budget + Layered Abstractions
+
+> Note the compute cap concept in agi-mvp-general as well. Note how I am trying to utilize a given compute budget effectively to get the highest ROI on the eval set accuracy.
+
+### Prompt 18: Simplified Compute Budget
+
+> I would like to keep the compute budget concept simple and effective if possible, I was not happy with the way it was confusing in agi-mvp-general. The idea is simple, given a compute budget, I want to get the highest ROI using it, i.e. the highest accuracy on the evaluation. For iteration, I might give a lower compute budget and want to run fast in 5-10 minutes, but accuracy pretty close to the best possible numbers. But once in a while, or in contest mode, I want to provide a lot of compute and squeeze the highest possible accuracy.
+> So I felt that in agi-mvp-general, the eval budget concept was confusing to me. But maybe it is needed to balance things out. I will let you figure it out by experimentation.
+
+### Prompt 19: Use Layered Abstractions
+
+> I hope you are using layered abstractions effectively here, not just copying blindly from the other code. i.e. Use the core domain agnostic layer effectively in this codebase. Because we want to extend this to more difficult tasks in the future like ARC-AGI-2, Zork, robotics and general intelligence!
+
 ---
 
 *This document will be updated with each new session.*

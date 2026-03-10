@@ -315,19 +315,16 @@ def gravity_right(grid: Grid) -> Grid:
 def outline(grid: Grid) -> Grid:
     """Draw outline around non-zero regions (mark boundary pixels)."""
     arr = to_np(grid)
-    rows, cols = arr.shape
-    result = np.zeros_like(arr)
-    for r in range(rows):
-        for c in range(cols):
-            if arr[r, c] != 0:
-                is_boundary = False
-                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    nr, nc = r + dr, c + dc
-                    if nr < 0 or nr >= rows or nc < 0 or nc >= cols or arr[nr, nc] == 0:
-                        is_boundary = True
-                        break
-                if is_boundary:
-                    result[r, c] = arr[r, c]
+    nonzero = arr != 0
+    # A pixel is boundary if it's non-zero AND at least one 4-neighbor is zero or OOB
+    padded = np.pad(arr, 1, mode='constant', constant_values=0)
+    neighbor_zero = (
+        (padded[:-2, 1:-1] == 0) |  # top
+        (padded[2:, 1:-1] == 0) |    # bottom
+        (padded[1:-1, :-2] == 0) |   # left
+        (padded[1:-1, 2:] == 0)      # right
+    )
+    result = np.where(nonzero & neighbor_zero, arr, 0)
     return from_np(result)
 
 
@@ -357,19 +354,23 @@ def fill_enclosed(grid: Grid) -> Grid:
                 visited[nr, nc] = True
                 queue.append((nr, nc))
 
-    # Fill enclosed zeros with the most common adjacent non-zero color
-    for r in range(rows):
-        for c in range(cols):
-            if arr[r, c] == 0 and not visited[r, c]:
-                neighbors = []
-                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    nr, nc = r + dr, c + dc
-                    if 0 <= nr < rows and 0 <= nc < cols and arr[nr, nc] != 0:
-                        neighbors.append(arr[nr, nc])
-                if neighbors:
-                    arr[r, c] = Counter(neighbors).most_common(1)[0][0]
-                else:
-                    arr[r, c] = most_common_color(grid)
+    # Fill enclosed zeros: use most common non-zero neighbor color
+    enclosed = (arr == 0) & ~visited
+    if not np.any(enclosed):
+        return from_np(arr)
+
+    # For enclosed cells, find the most common adjacent non-zero color
+    mc = most_common_color(grid)
+    padded = np.pad(arr, 1, mode='constant', constant_values=0)
+    enc_rows, enc_cols = np.where(enclosed)
+    for r, c in zip(enc_rows, enc_cols):
+        # Check 4-neighbors in padded array (offset by 1)
+        neighbors = []
+        for nr, nc in [(r, c+1), (r+2, c+1), (r+1, c), (r+1, c+2)]:
+            v = padded[nr, nc]
+            if v != 0:
+                neighbors.append(v)
+        arr[r, c] = Counter(neighbors).most_common(1)[0][0] if neighbors else mc
     return from_np(arr)
 
 
@@ -378,15 +379,16 @@ def denoise_3x3(grid: Grid) -> Grid:
     arr = to_np(grid)
     rows, cols = arr.shape
     result = arr.copy()
-    for r in range(rows):
-        for c in range(cols):
-            neighbors = []
-            for dr in range(-1, 2):
-                for dc in range(-1, 2):
-                    nr, nc = r + dr, c + dc
-                    if 0 <= nr < rows and 0 <= nc < cols:
-                        neighbors.append(arr[nr, nc])
-            result[r, c] = Counter(neighbors).most_common(1)[0][0]
+    # For each color 0-9, count occurrences in each cell's 3x3 neighborhood
+    # using convolution-like approach with numpy
+    padded = np.pad(arr, 1, mode='edge')
+    counts = np.zeros((rows, cols, 10), dtype=np.int32)
+    for dr in range(-1, 2):
+        for dc in range(-1, 2):
+            shifted = padded[1 + dr:rows + 1 + dr, 1 + dc:cols + 1 + dc]
+            for color in range(10):
+                counts[:, :, color] += (shifted == color).astype(np.int32)
+    result = np.argmax(counts, axis=2).astype(np.int32)
     return from_np(result)
 
 

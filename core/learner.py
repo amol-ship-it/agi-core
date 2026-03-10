@@ -13,9 +13,12 @@ The loop:
 from __future__ import annotations
 import logging
 import math
+import multiprocessing
+import os
 import random
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -107,7 +110,7 @@ class SearchConfig:
     beam_width: int = 200         # candidates kept per generation
     mutations_per_candidate: int = 3
     crossover_fraction: float = 0.3
-    max_generations: int = 100
+    max_generations: int = 100    # compute budget = beam_width × max_generations
     energy_alpha: float = 1.0     # weight on prediction error
     energy_beta: float = 0.001    # weight on complexity cost
     early_stop_energy: float = 0.0  # stop if energy <= this (perfect solve)
@@ -128,7 +131,8 @@ class SleepConfig:
 class CurriculumConfig:
     """Knobs for curriculum-ordered learning."""
     sort_by_difficulty: bool = True
-    wake_sleep_rounds: int = 5
+    wake_sleep_rounds: int = 3
+    workers: int = 0  # 0 = auto-detect (all cores), 1 = sequential
 
 
 @dataclass
@@ -138,7 +142,8 @@ class WakeResult:
     solved: bool
     best: Optional[ScoredProgram]
     generations_used: int
-    wall_time: float
+    evaluations: int = 0    # total program evaluations (deterministic compute measure)
+    wall_time: float = 0.0
 
 
 @dataclass
@@ -160,6 +165,39 @@ class RoundResult:
     tasks_total: int
     solve_rate: float
     cumulative_library_size: int
+
+
+# =============================================================================
+# Module-level worker for multiprocessing (must be picklable)
+# =============================================================================
+
+def _wake_worker(args: tuple) -> "WakeResult":
+    """
+    Solve a single task in a child process.
+
+    Receives a snapshot of the learner state, reconstructs a mini-Learner,
+    and returns the WakeResult. This function is at module level so it can
+    be pickled by ProcessPoolExecutor.
+    """
+    task, env, grammar, drive, library, search_cfg, transition_matrix = args
+
+    # Reconstruct a lightweight learner with the snapshot
+    from .memory import InMemoryStore
+    memory = InMemoryStore()
+    for entry in library:
+        memory.add_to_library(entry)
+
+    learner = Learner(
+        environment=env,
+        grammar=grammar,
+        drive=drive,
+        memory=memory,
+        search_config=search_cfg,
+    )
+    learner._transition_matrix = transition_matrix
+
+    # Solve — but skip memory recording (main process handles that)
+    return learner._wake_on_task_no_record(task)
 
 
 # =============================================================================
@@ -222,6 +260,7 @@ class Learner:
 
         best_so_far: Optional[ScoredProgram] = None
         gens_used = 0
+        n_evals = 0
 
         for gen in range(cfg.max_generations):
             gens_used = gen + 1
@@ -230,6 +269,7 @@ class Learner:
             scored = []
             for prog in beam:
                 sp = self._evaluate_program(prog, task)
+                n_evals += 1
                 scored.append(sp)
 
                 # Track global best
@@ -282,13 +322,83 @@ class Learner:
         wall = time.time() - t0
         logger.info(
             f"  [wake] Task {task.task_id}: solved={solved}, "
-            f"energy={best_so_far.energy:.6f}, gens={gens_used}, time={wall:.1f}s"
+            f"energy={best_so_far.energy:.6f}, gens={gens_used}, "
+            f"evals={n_evals}, time={wall:.1f}s"
         )
         return WakeResult(
             task_id=task.task_id,
             solved=solved,
             best=best_so_far,
             generations_used=gens_used,
+            evaluations=n_evals,
+            wall_time=wall,
+        )
+
+    def _wake_on_task_no_record(self, task: Task) -> WakeResult:
+        """
+        Same as wake_on_task but does NOT write to memory.
+
+        Used by parallel workers — the main process merges results.
+        """
+        t0 = time.time()
+        cfg = self.search_cfg
+
+        base_prims = self.grammar.base_primitives()
+        library_prims = self.grammar.inject_library(self.memory.get_library())
+        all_prims = base_prims + library_prims
+
+        beam = self._init_beam(all_prims, cfg.beam_width)
+        best_so_far: Optional[ScoredProgram] = None
+        gens_used = 0
+        n_evals = 0
+
+        for gen in range(cfg.max_generations):
+            gens_used = gen + 1
+
+            scored = []
+            for prog in beam:
+                sp = self._evaluate_program(prog, task)
+                n_evals += 1
+                scored.append(sp)
+                if best_so_far is None or sp.energy < best_so_far.energy:
+                    best_so_far = sp
+
+            if best_so_far and best_so_far.energy <= cfg.early_stop_energy:
+                break
+
+            scored.sort(key=lambda s: s.energy)
+            survivors = [s.program for s in scored[: cfg.beam_width]]
+
+            next_gen = list(survivors)
+            for prog in survivors:
+                for _ in range(cfg.mutations_per_candidate):
+                    next_gen.append(self.grammar.mutate(prog, all_prims))
+
+            n_cross = int(len(survivors) * cfg.crossover_fraction)
+            for _ in range(n_cross):
+                a = self._rng.choice(survivors)
+                b = self._rng.choice(survivors)
+                next_gen.append(self.grammar.crossover(a, b))
+
+            beam = next_gen
+
+        solved = (best_so_far is not None and
+                  best_so_far.prediction_error <= self.search_cfg.solve_threshold)
+        if best_so_far:
+            best_so_far.task_id = task.task_id
+
+        wall = time.time() - t0
+        logger.info(
+            f"  [wake] Task {task.task_id}: solved={solved}, "
+            f"energy={best_so_far.energy:.6f}, gens={gens_used}, "
+            f"evals={n_evals}, time={wall:.1f}s"
+        )
+        return WakeResult(
+            task_id=task.task_id,
+            solved=solved,
+            best=best_so_far,
+            generations_used=gens_used,
+            evaluations=n_evals,
             wall_time=wall,
         )
 
@@ -407,24 +517,33 @@ class Learner:
         This is the top-level entry point. The compounding property
         should be visible in the RoundResults: solve rate should
         increase across rounds as the library grows.
+
+        Uses all available CPU cores for the wake phase (tasks are independent).
+        Set workers=1 in CurriculumConfig to disable parallelism.
         """
         cfg = config or CurriculumConfig()
 
         if cfg.sort_by_difficulty:
             tasks = sorted(tasks, key=lambda t: t.difficulty)
 
+        # Resolve worker count: 0 = all performance cores
+        if cfg.workers <= 0:
+            cfg = CurriculumConfig(
+                sort_by_difficulty=cfg.sort_by_difficulty,
+                wake_sleep_rounds=cfg.wake_sleep_rounds,
+                workers=os.cpu_count() or 1,
+            )
+
         results = []
         for round_num in range(cfg.wake_sleep_rounds):
             logger.info(f"=== Round {round_num + 1}/{cfg.wake_sleep_rounds} ===")
             logger.info(f"    Library size: {len(self.memory.get_library())}")
+            logger.info(f"    Workers: {cfg.workers}")
 
-            # WAKE: attempt all tasks
-            wake_results = []
-            for task in tasks:
-                wr = self.wake_on_task(task)
-                wake_results.append(wr)
+            # WAKE: attempt all tasks (parallel across CPU cores)
+            wake_results = self._wake_parallel(tasks, cfg.workers)
 
-            # SLEEP: consolidate
+            # SLEEP: consolidate (sequential — mutates shared state)
             sleep_result = self.sleep()
 
             # Metrics
@@ -450,6 +569,70 @@ class Learner:
             )
 
         return results
+
+    def _wake_parallel(self, tasks: list[Task], workers: int) -> list[WakeResult]:
+        """
+        Run wake_on_task across tasks using a process pool.
+
+        Each worker gets a snapshot of the current state (library, config,
+        transition matrix) and solves tasks independently. Results are merged
+        back into the main process's memory.
+
+        Falls back to sequential if workers=1 or if the task count is small.
+        """
+        if workers <= 1 or len(tasks) <= 2:
+            # Sequential — simple path
+            wake_results = []
+            for task in tasks:
+                wr = self.wake_on_task(task)
+                wake_results.append(wr)
+            return wake_results
+
+        # Snapshot state for workers (picklable data only)
+        library_snapshot = self.memory.get_library()
+        search_cfg = self.search_cfg
+        sleep_cfg = self.sleep_cfg
+        transition_matrix = self._transition_matrix
+
+        # Build worker args: (task, env, grammar, drive, library, search_cfg, tm)
+        # Each worker reconstructs a mini-Learner with the snapshot.
+        worker_args = [
+            (task, self.env, self.grammar, self.drive,
+             library_snapshot, search_cfg, transition_matrix)
+            for task in tasks
+        ]
+
+        wake_results: list[WakeResult] = [None] * len(tasks)  # type: ignore
+        try:
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(_wake_worker, args): i
+                    for i, args in enumerate(worker_args)
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    wr = future.result()
+                    wake_results[idx] = wr
+        except (OSError, RuntimeError) as e:
+            # Fallback to sequential if multiprocessing fails
+            # (e.g., pickling issues, resource limits)
+            logger.warning(f"Parallel wake failed ({e}), falling back to sequential")
+            wake_results = []
+            for task in tasks:
+                wr = self.wake_on_task(task)
+                wake_results.append(wr)
+            return wake_results
+
+        # Merge results back into main memory
+        for wr in wake_results:
+            if wr.best:
+                self.memory.record_episode(
+                    wr.task_id, [], wr.best.program, wr.best.energy)
+                if wr.solved:
+                    self.memory.store_solution(wr.task_id, wr.best)
+                    self._credit_library_usage(wr.best.program)
+
+        return wake_results
 
     # -------------------------------------------------------------------------
     # Private helpers
