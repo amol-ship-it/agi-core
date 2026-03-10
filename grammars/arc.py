@@ -921,13 +921,38 @@ def make_sample_tasks() -> list[Task]:
 
 if __name__ == "__main__":
     import logging
+    import time
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     from core import Learner, InMemoryStore, SearchConfig, CurriculumConfig
-    from core import extract_metrics, print_compounding_table
+    from core import WakeResult, extract_metrics, print_compounding_table
+
+    print("=" * 70)
+    print("  ARC-AGI SAMPLE TASKS DEMO")
+    print("  The core algorithm searches for grid transformation programs")
+    print("=" * 70)
 
     tasks = make_sample_tasks()
-    print(f"Created {len(tasks)} sample ARC tasks")
+
+    # Describe the tasks for the user
+    task_descriptions = {
+        "rotate_90": "Rotate grid 90° clockwise",
+        "rotate_180": "Rotate grid 180°",
+        "mirror_h": "Mirror grid horizontally",
+        "mirror_v": "Mirror grid vertically",
+        "double": "Scale grid 2x (each cell becomes 2×2)",
+        "crop_nonzero": "Crop to bounding box of non-zero cells",
+        "gravity_down": "Drop non-zero cells to bottom (gravity)",
+        "fill_enclosed": "Fill enclosed zero regions with color",
+    }
+
+    print(f"\n  Tasks ({len(tasks)} sample grid puzzles, no dataset needed):")
+    for t in tasks:
+        desc = task_descriptions.get(t.task_id, "")
+        grid_in = t.train_examples[0][0] if t.train_examples else []
+        h, w = len(grid_in), len(grid_in[0]) if grid_in else 0
+        print(f"    {t.task_id:<16s} {h}x{w}  {desc:<45s} (difficulty={t.difficulty})")
+    print()
 
     # Wire up the 4 plugins
     env = ARCEnv()
@@ -935,7 +960,6 @@ if __name__ == "__main__":
     drive = ARCDrive()
     memory = InMemoryStore()
 
-    # Create the learner
     learner = Learner(
         environment=env,
         grammar=grammar,
@@ -952,6 +976,29 @@ if __name__ == "__main__":
         ),
     )
 
+    print(f"  Primitives:  {len(grammar.base_primitives())} "
+          f"(rotate, flip, crop, fill, recolor, scale, ...)")
+    print(f"  Beam width:  150")
+    print(f"  Generations: 60 per task")
+    print(f"  Workers:     {Learner.performance_core_count()}")
+    print()
+
+    # Live progress callback
+    t0 = time.time()
+
+    def on_task_done(round_num, task_index, total_tasks, wr: WakeResult):
+        elapsed = time.time() - t0
+        icon = "✓" if wr.solved else "✗"
+        energy_str = f"{wr.best.energy:.4f}" if wr.best else "N/A"
+        prog_str = repr(wr.best.program) if wr.best else ""
+        desc = task_descriptions.get(wr.task_id, "")
+        print(f"  {icon} R{round_num} [{task_index:>2}/{total_tasks}] "
+              f"{wr.task_id:<16s} E={energy_str:<8s} "
+              f"gens={wr.generations_used:<4d} "
+              f"{wr.wall_time:.1f}s  [{elapsed:.0f}s elapsed]")
+        if wr.solved:
+            print(f"       program: {prog_str}")
+
     # Run the curriculum
     results = learner.run_curriculum(
         tasks,
@@ -959,17 +1006,30 @@ if __name__ == "__main__":
             sort_by_difficulty=True,
             wake_sleep_rounds=3,
         ),
+        on_task_done=on_task_done,
     )
 
     # Print the compounding curve
     print("\n" + "=" * 70)
-    print("ARC-AGI COMPOUNDING CURVE")
+    print("  COMPOUNDING CURVE — does solve rate increase across rounds?")
     print("=" * 70)
     metrics = extract_metrics(results)
     print_compounding_table(metrics)
 
+    total_time = time.time() - t0
+    total_solved = sum(1 for rr in results for wr in rr.wake_results if wr.solved)
+    total_tasks = sum(len(rr.wake_results) for rr in results)
+    print(f"\n  Total time: {total_time:.1f}s  "
+          f"Solved: {total_solved}/{total_tasks}")
+
     # Save library
+    os.makedirs("library", exist_ok=True)
     memory.save("library/arc_library.json")
-    print(f"\nLibrary entries: {len(memory.get_library())}")
+    print(f"\n  Library: {len(memory.get_library())} learned abstractions")
     for entry in memory.get_library():
-        print(f"  {entry.name}: {entry.program} (useful={entry.usefulness:.1f}, reused={entry.reuse_count}x)")
+        print(f"    {entry.name}: {entry.program} "
+              f"(useful={entry.usefulness:.1f}, reused={entry.reuse_count}x)")
+    print()
+    print("  For the full ARC benchmark, run:")
+    print("    python -m experiments.phase1_arc")
+    print()

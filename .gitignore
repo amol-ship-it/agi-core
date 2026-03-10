@@ -5,6 +5,7 @@ __pycache__/
 experiments/results/
 runs/
 library.json
+library/
 *.egg-info/
 dist/
 build/

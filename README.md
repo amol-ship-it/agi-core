@@ -49,19 +49,28 @@ cd data/ARC-AGI && git pull && cd ../..
 
 ```bash
 # Just run it. No flags needed.
-# Auto-detects ARC data, uses all CPU cores, sensible defaults.
+# Auto-detects ARC data, uses performance cores, sensible defaults.
 python -m experiments.phase1_arc
 ```
 
 If the ARC dataset is cloned (step 4 above), it runs on all 400 training tasks.
 If not, it falls back to built-in sample tasks.
 
-Other demos (no dataset needed):
+### Other demos (no dataset needed)
+
+These demonstrate the **same invariant core algorithm** on different domains:
 
 ```bash
-python -m grammars.symbolic_math   # symbolic regression demo
-python -m grammars.arc             # ARC sample tasks directly
+# Symbolic regression — discover mathematical formulas (y=2x+1, y=x², y=sin(x)+x, ...)
+# Shows per-task progress: which formulas were found, which weren't
+python -m grammars.symbolic_math
+
+# ARC grid puzzles — 8 sample tasks (rotate, mirror, crop, gravity, fill, ...)
+# Shows per-task progress: which grid transforms were synthesized
+python -m grammars.arc
 ```
+
+Both demos print live per-task progress, a compounding curve, and a library summary.
 
 ## Presets
 
@@ -116,18 +125,40 @@ python -m experiments.phase1_arc --workers 1             # sequential
 | `--rounds` | from preset | Wake-sleep rounds |
 | `--beam-width` | from preset | Candidates per generation |
 | `--max-generations` | from preset | Generations per task |
-| `--workers` | 0 (all cores) | Parallel workers |
-| `--seed` | 42 | Random seed |
-| `--output-dir` | `experiments/results` | Output directory |
+| `--workers` | 0 (perf cores) | Parallel workers (0 = performance cores only) |
+| `--seed` | 42 | Random seed (deterministic) |
+| `--runs-dir` | `runs` | Directory for all run artifacts |
+| `--no-log` | off | Disable log file (console only) |
 | `--verbose` | off | Debug logging |
+
+### Output files
+
+All files are written flat into `runs/` with a shared timestamp prefix.
+The output paths are printed at the start of each run so you can `tail -f` immediately:
+
+```
+runs/
+├── 20260310_164939_phase1.log          # exact copy of console output
+├── 20260310_164939_phase1.jsonl        # live per-task results (one JSON per line)
+├── 20260310_164939_phase1.json         # final results: meta + summary + per-task + library
+├── 20260310_164939_phase1_library.json # learned abstractions
+├── 20260310_164939_phase1_metrics.json # compounding curve per round
+└── 20260310_164939_phase1_metrics.csv  # same, for spreadsheets
+```
 
 ### Live monitoring
 
 While a run is in progress:
 
 ```bash
-# Watch per-task results as they complete
-tail -f experiments/results/phase1_progress.jsonl | python -m json.tool
+# Watch live per-task results
+tail -f runs/*_phase1.jsonl
+
+# Or view the full console output from another terminal
+tail -f runs/*_phase1.log
+
+# List runs by most recent
+ls -t runs/
 ```
 
 ## Running tests
@@ -173,18 +204,6 @@ Round  Solved     Rate  Library  New  Avg Energy   Wake(s)  Sleep(s)
 
 If solve rate increases across rounds without new hand-coded primitives, the framework is working.
 
-## Output files
-
-Each run produces:
-
-| File | Contents |
-|------|----------|
-| `phase1_metrics.json` | Compounding curve data (solve rate, library size per round) |
-| `phase1_metrics.csv` | Same, as CSV for plotting |
-| `phase1_progress.jsonl` | Per-task results — one JSON object per line, live-tail friendly |
-| `phase1_config.json` | Full run configuration for reproducibility |
-| `phase1_library.json` | Learned abstractions (the "culture" — carries across runs) |
-
 ## Structure
 
 ```
@@ -201,7 +220,9 @@ agi-core/
 │   ├── arc.py               # ARC-AGI grid transformations (48 primitives)
 │   └── zork.py              # TODO: text adventure actions
 │
-├── experiments/             # Experiment scripts and results
+├── runs/                    # Run artifacts — timestamped, git-ignored
+│
+├── experiments/             # Experiment scripts
 │   └── phase1_arc.py        # Phase 1 curriculum training runner
 │
 ├── tests/                   # Test suite (16 tests)
