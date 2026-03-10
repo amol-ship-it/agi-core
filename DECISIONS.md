@@ -248,7 +248,20 @@ If we ever need finer control (e.g., spending more on hard tasks, less on easy o
 | + exhaustive depth=2 + 64 prims | 33/400 (8.2%) | 155s |
 | + sequential compounding (2 rounds) | 32/400 (8.0%) | 304s |
 
-**Evaluation set performance pending** — will be measured via `--pipeline` but not used for development.
+### Evaluation Set Results (Scoring Only — Not for Development)
+
+Pipeline run: `python -m experiments.phase1_arc --pipeline --mode quick`
+
+| Split | Solved | Rate | Time | Library |
+|-------|--------|------|------|---------|
+| Training (2 rounds) | 32/400 | 8.0% | 3m00s | 2 abstractions |
+| Evaluation (2 rounds, with culture) | 3/400 | 0.75% | 3m50s | 3 abstractions |
+
+**Comparison with agi-mvp-general:** 35/400 (8.8%) on evaluation set.
+
+**Analysis:** The eval-to-train ratio (0.75% vs 8.0%) shows significant overfitting to training distribution. The evaluation set tasks require more complex transformations than our depth-2 exhaustive search can produce. Key bottleneck: our 64 primitives + depth-2 compositions express ~4,160 unique programs. Most eval tasks need object-level reasoning, conditional logic, or deeper compositions that cannot be expressed in 2 operations.
+
+**Bug fix:** `NameError: name 'runs_dir' is not defined` in `core/runner.py` line 724. Fixed by deriving culture path from library_path instead of using undefined variable.
 
 ---
 

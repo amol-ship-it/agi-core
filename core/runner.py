@@ -721,7 +721,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     save_metrics_csv(metrics, metrics_csv_path)
 
     # Save culture file (proper serialization with program reconstruction)
-    culture_path = os.path.join(runs_dir, f"{prefix}_culture.json")
+    culture_path = library_path.replace("_library.json", "_culture.json")
     memory.save_culture(culture_path)
     # Also save legacy format
     memory.save(library_path)
