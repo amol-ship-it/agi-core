@@ -171,6 +171,16 @@ class RoundResult:
 # Module-level worker for multiprocessing (must be picklable)
 # =============================================================================
 
+def _worker_init():
+    """Initializer for worker processes: ignore SIGINT.
+
+    The parent process handles Ctrl-C and terminates the pool.
+    Without this, workers trap SIGINT and the pool hangs.
+    """
+    import signal as _signal
+    _signal.signal(_signal.SIGINT, _signal.SIG_IGN)
+
+
 def _wake_worker(args: tuple) -> "WakeResult":
     """
     Solve a single task in a child process.
@@ -635,7 +645,13 @@ class Learner:
         wake_results: list[WakeResult] = [None] * len(tasks)  # type: ignore
         completed_count = 0
         try:
-            with ProcessPoolExecutor(max_workers=workers) as pool:
+            # Use initializer to make workers ignore SIGINT — the parent
+            # process handles it and terminates the pool. Without this,
+            # Ctrl-C gets stuck waiting for in-flight workers to finish.
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_worker_init,
+            ) as pool:
                 futures = {
                     pool.submit(_wake_worker, args): i
                     for i, args in enumerate(worker_args)

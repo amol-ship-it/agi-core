@@ -7,6 +7,12 @@ Implements the Phase 1 experiment from the manifesto:
 3. Track the compounding curve: solve rate should increase across rounds
    as the library grows, without new hand-coded primitives
 
+All runs automatically produce (in runs/):
+  - <timestamp>_phase1.log       — full console output (tee'd)
+  - <timestamp>_phase1.jsonl     — live per-task results (streamable)
+  - <timestamp>_phase1.json      — final results with metadata + summary
+  - <timestamp>_phase1_library.json — learned library snapshot
+
 Usage:
     python -m experiments.phase1_arc                  # just run it
     python -m experiments.phase1_arc --mode quick     # fast dev loop (~2 min)
@@ -17,13 +23,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import platform
 import signal
+import statistics
 import sys
 import time
 from datetime import datetime, timezone
+from io import TextIOBase
 
 from core import (
     Learner,
@@ -32,6 +39,7 @@ from core import (
     SleepConfig,
     CurriculumConfig,
     WakeResult,
+    RoundResult,
     extract_metrics,
     print_compounding_table,
     save_metrics_json,
@@ -49,9 +57,6 @@ from grammars.arc import (
 # =============================================================================
 # Presets — the ONLY knob most users need
 # =============================================================================
-# Each preset is tuned for a specific use case. The compute budget is
-# implicitly defined by beam_width × max_generations × rounds.
-# Early stopping on solve means easy tasks don't waste compute.
 
 PRESETS = {
     # Quick: fast feedback for development. ~2 min on 400 tasks / 4 cores.
@@ -78,6 +83,56 @@ PRESETS = {
 }
 
 DEFAULT_SEED = 42
+RUNS_DIR = "runs"
+
+
+# =============================================================================
+# Tee writer — duplicates stdout to both console and a log file
+# (Adapted from agi-mvp-general/benchmark.py)
+# =============================================================================
+
+class _TeeWriter(TextIOBase):
+    """Write to both the original stdout and a log file simultaneously."""
+
+    def __init__(self, log_path: str, original_stdout):
+        super().__init__()
+        self._original = original_stdout
+        os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+        self._log = open(log_path, "w", buffering=1)  # line-buffered
+
+    def write(self, s):
+        self._original.write(s)
+        self._log.write(s)
+        return len(s)
+
+    def flush(self):
+        self._original.flush()
+        self._log.flush()
+
+    def close(self):
+        self._log.close()
+
+    @property
+    def encoding(self):
+        return self._original.encoding
+
+
+# =============================================================================
+# Formatting helpers (from agi-mvp-general)
+# =============================================================================
+
+def _hline(char="─", width=72):
+    print(char * width)
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format seconds as '1h23m', '4m32s', or '12.3s'."""
+    s = seconds
+    if s >= 3600:
+        return f"{int(s) // 3600}h{(int(s) % 3600) // 60:02d}m"
+    if s >= 60:
+        return f"{int(s) // 60}m{int(s) % 60:02d}s"
+    return f"{s:.1f}s"
 
 
 # =============================================================================
@@ -110,6 +165,7 @@ def detect_machine() -> dict:
         "platform": platform.system(),
         "arch": platform.machine(),
         "cpu_count": os.cpu_count() or 1,
+        "performance_cores": Learner.performance_core_count(),
         "python": platform.python_version(),
     }
     if info["platform"] == "Darwin" and info["arch"] == "arm64":
@@ -118,21 +174,23 @@ def detect_machine() -> dict:
 
 
 # =============================================================================
-# Signal handling — Ctrl-C kills immediately
+# Signal handling — Ctrl-C kills the whole process tree immediately
 # =============================================================================
+# Workers ignore SIGINT (handled in core/learner.py _worker_init), so
+# KeyboardInterrupt only fires in the main process. We catch it in main()
+# and print partial results before exiting. Second Ctrl-C force-kills.
 
 _interrupted = False
 
 
 def _handle_sigint(signum, frame):
-    """Handle Ctrl-C: first press prints message and exits, immediate."""
+    """Second Ctrl-C: hard-kill immediately (no waiting for cleanup)."""
     global _interrupted
     if _interrupted:
-        # Second Ctrl-C: hard exit
-        os._exit(1)
+        # Already interrupted once — force kill everything
+        os.kill(os.getpid(), signal.SIGKILL)
     _interrupted = True
-    print("\n\nInterrupted by Ctrl-C. Shutting down...", flush=True)
-    sys.exit(130)
+    raise KeyboardInterrupt
 
 
 # =============================================================================
@@ -152,7 +210,6 @@ Presets (the only knob most users need):
   contest   Max accuracy      (~1 hr on 400 tasks, 4 cores)
 
 Times scale linearly with task count and inversely with core count.
-On M1 Max (10 cores): quick ~1 min, default ~4 min, contest ~25 min.
 
 Examples:
   python -m experiments.phase1_arc                    # sensible defaults
@@ -178,53 +235,41 @@ Examples:
                         help=f"Parallel workers (0 = performance cores = {perf_cores})")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED,
                         help="Random seed for reproducibility")
-    parser.add_argument("--output-dir", type=str, default=None,
-                        help="Output directory (default: runs/<timestamp>)")
+    parser.add_argument("--runs-dir", type=str, default=RUNS_DIR,
+                        help="Directory for all run artifacts")
+    parser.add_argument("--no-log", action="store_true",
+                        help="Disable log file (console only)")
     parser.add_argument("--verbose", action="store_true",
                         help="Debug logging")
     return parser.parse_args()
 
 
 # =============================================================================
-# Logging setup — dual output (console + file)
-# =============================================================================
-
-def setup_logging(output_dir: str, verbose: bool) -> logging.Logger:
-    """Configure logging to stream to both console and a log file."""
-    os.makedirs(output_dir, exist_ok=True)
-    log_path = os.path.join(output_dir, "console.log")
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
-
-    # Console handler — INFO level (or DEBUG if verbose)
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.DEBUG if verbose else logging.INFO)
-    console.setFormatter(logging.Formatter("%(message)s"))
-    root_logger.addHandler(console)
-
-    # File handler — always DEBUG level for full record
-    file_handler = logging.FileHandler(log_path, mode="w")
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)-5s %(message)s", datefmt="%H:%M:%S"))
-    root_logger.addHandler(file_handler)
-
-    return logging.getLogger(__name__)
-
-
-# =============================================================================
-# Live progress callback
+# Live progress tracker with scoreboard
+# (Adapted from agi-mvp-general _BenchmarkTracker)
 # =============================================================================
 
 class ProgressTracker:
-    """Streams per-task progress to console and JSONL file."""
+    """Thread-safe live progress tracker with rolling scoreboard.
 
-    def __init__(self, progress_path: str, t0: float):
-        self._file = open(progress_path, "w")
+    Streams per-task results to console + JSONL file. Prints a rolling
+    scoreboard summary every N tasks (like agi-mvp-general).
+    """
+
+    SCOREBOARD_INTERVAL = 10  # print scoreboard every N tasks
+
+    def __init__(self, jsonl_path: str, t0: float):
+        self._file = open(jsonl_path, "w")
         self._t0 = t0
-        self._solved_total = 0
-        self._tasks_total = 0
+
+        # Running stats
+        self.done = 0
+        self.solved = 0
+        self.total_evals = 0
+        self.total_gens = 0
+        self.scores: list[float] = []   # best energy per task (lower = better)
+        self.times: list[float] = []
+        self.all_records: list[dict] = []
 
     def on_task_done(
         self,
@@ -234,27 +279,48 @@ class ProgressTracker:
         wr: WakeResult,
     ) -> None:
         """Called after each task completes. Streams live output."""
-        self._tasks_total += 1
+        self.done += 1
         if wr.solved:
-            self._solved_total += 1
+            self.solved += 1
+        self.total_evals += wr.evaluations
+        self.total_gens += wr.generations_used
+        if wr.best:
+            self.scores.append(wr.best.energy)
+        self.times.append(wr.wall_time)
 
         elapsed = time.time() - self._t0
-        status = "SOLVED" if wr.solved else "      "
+        icon = "✓" if wr.solved else "✗"
         energy_str = f"{wr.best.energy:.4f}" if wr.best else "    N/A"
+        program_str = repr(wr.best.program) if wr.best else ""
 
-        # Live console line
+        # Per-task line
+        slow_tag = ""
+        if len(self.times) >= 5:
+            med = statistics.median(self.times)
+            if wr.wall_time > med * 3:
+                slow_tag = "  *** SLOW ***"
+
         print(
-            f"  R{round_num} [{task_index:>3}/{total_tasks}] "
-            f"{status} {wr.task_id:<20s} "
+            f"  {icon} R{round_num} [{task_index:>3}/{total_tasks}] "
+            f"{wr.task_id:<20s} "
             f"E={energy_str}  gens={wr.generations_used:<4d} "
-            f"evals={wr.evaluations:<6d} {wr.wall_time:.1f}s  "
-            f"[{elapsed:.0f}s elapsed]",
+            f"evals={wr.evaluations:<6d} {wr.wall_time:.1f}s"
+            f"{slow_tag}",
             flush=True,
         )
+        if wr.solved and program_str:
+            print(f"       program: {program_str}")
+        print(
+            f"       done={self.done}  "
+            f"solved={self.solved}/{self.done}  "
+            f"evals={self.total_evals:,}  "
+            f"[{_fmt_duration(elapsed)} elapsed]",
+        )
 
-        # Live JSONL record
+        # Build record for JSONL + final JSON
         record = {
             "round": round_num,
+            "task_index": task_index,
             "task_id": wr.task_id,
             "solved": wr.solved,
             "energy": wr.best.energy if wr.best else None,
@@ -265,8 +331,55 @@ class ProgressTracker:
             "program": repr(wr.best.program) if wr.best else None,
             "elapsed": round(elapsed, 1),
         }
+        self.all_records.append(record)
+
+        # Stream to JSONL (live, flushable, tail -f friendly)
         self._file.write(json.dumps(record) + "\n")
         self._file.flush()
+
+        # Rolling scoreboard
+        if self.done % self.SCOREBOARD_INTERVAL == 0:
+            self._print_scoreboard(round_num, total_tasks, elapsed)
+
+    def _print_scoreboard(
+        self, round_num: int, total_tasks: int, elapsed: float,
+    ) -> None:
+        """Print a rolling scoreboard summary (like agi-mvp-general)."""
+        rate = self.done / max(elapsed, 0.001)
+        pending = total_tasks - (self.done % total_tasks or total_tasks)
+        eta = pending / rate if rate > 0 else 0
+        mean_energy = statistics.mean(self.scores) if self.scores else float("inf")
+        med_time = statistics.median(self.times) if self.times else 0
+
+        print()
+        print(
+            f"  ┌── Progress: {self.done} tasks  "
+            f"{_fmt_duration(elapsed)} elapsed  "
+            f"ETA {_fmt_duration(eta)}  "
+            f"{rate:.1f} tasks/s ──"
+        )
+        print(
+            f"  │  ✓ solved={self.solved}/{self.done}  "
+            f"✗ unsolved={self.done - self.solved}/{self.done}"
+        )
+        print(
+            f"  │  Energy: mean={mean_energy:.4f}  "
+            f"Time: median={med_time:.1f}s  "
+            f"Evals: {self.total_evals:,}"
+        )
+
+        # Slowest tasks so far
+        if len(self.all_records) >= 5:
+            by_time = sorted(self.all_records, key=lambda r: -r["wall_time"])
+            top3 = by_time[:3]
+            slowest_str = "  ".join(
+                f"{r['task_id'][:8]}({r['wall_time']:.1f}s)"
+                for r in top3
+            )
+            print(f"  │  Slowest: {slowest_str}")
+
+        print(f"  └{'─' * 60}")
+        print()
 
     def close(self):
         self._file.close()
@@ -286,13 +399,43 @@ def main():
     # Timestamp — shared across ALL output files for this run
     # -------------------------------------------------------------------------
     run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    prefix = f"{run_timestamp}_phase1"
 
-    if args.output_dir:
-        output_dir = args.output_dir
-    else:
-        output_dir = os.path.join("runs", run_timestamp)
+    # All files go flat into runs/ with the timestamp prefix
+    runs_dir = args.runs_dir
+    os.makedirs(runs_dir, exist_ok=True)
 
-    logger = setup_logging(output_dir, args.verbose)
+    log_path = os.path.join(runs_dir, f"{prefix}.log")
+    jsonl_path = os.path.join(runs_dir, f"{prefix}.jsonl")
+    results_path = os.path.join(runs_dir, f"{prefix}.json")
+    library_path = os.path.join(runs_dir, f"{prefix}_library.json")
+    metrics_json_path = os.path.join(runs_dir, f"{prefix}_metrics.json")
+    metrics_csv_path = os.path.join(runs_dir, f"{prefix}_metrics.csv")
+
+    # -------------------------------------------------------------------------
+    # Tee stdout → console + log file (like agi-mvp-general)
+    # -------------------------------------------------------------------------
+    tee = None
+    if not args.no_log:
+        tee = _TeeWriter(log_path, sys.stdout)
+        sys.stdout = tee
+
+    try:
+        _run(args, run_timestamp, runs_dir, prefix,
+             jsonl_path, results_path, library_path,
+             metrics_json_path, metrics_csv_path, log_path)
+    except KeyboardInterrupt:
+        print("\n\nAborted by user — partial results above.\n")
+    finally:
+        if tee:
+            sys.stdout = tee._original
+            tee.close()
+
+
+def _run(args, run_timestamp, runs_dir, prefix,
+         jsonl_path, results_path, library_path,
+         metrics_json_path, metrics_csv_path, log_path):
+    """Core run logic, separated so tee cleanup always happens."""
 
     # -------------------------------------------------------------------------
     # Machine + preset resolution
@@ -307,22 +450,51 @@ def main():
     workers = args.workers if args.workers > 0 else Learner.performance_core_count()
 
     # -------------------------------------------------------------------------
+    # Print header + output paths (so user can tail -f immediately)
+    # -------------------------------------------------------------------------
+    _hline("═")
+    print("  PHASE 1: ARC-AGI-1 CURRICULUM TRAINING")
+    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    _hline("═")
+
+    print(f"\n  Mode:       {args.mode}")
+    print(f"  Rounds:     {rounds}")
+    print(f"  Beam:       {beam_width}")
+    print(f"  Gens:       {max_gens}")
+    print(f"  Workers:    {workers} / {machine['cpu_count']} cores "
+          f"({machine.get('chip', machine['arch'])})")
+    print(f"  Seed:       {args.seed}")
+    print(f"  Verbose:    {args.verbose}")
+
+    print()
+    _hline("─")
+    print("  Output files (available now for tail -f):")
+    _hline("─")
+    print(f"  Results (live):   {jsonl_path}")
+    print(f"  Results (final):  {results_path}")
+    print(f"  Metrics:          {metrics_json_path}")
+    print(f"  Library:          {library_path}")
+    if not args.no_log:
+        print(f"  Console log:      {log_path}")
+    print()
+
+    # -------------------------------------------------------------------------
     # Load tasks
     # -------------------------------------------------------------------------
     data_dir = args.data_dir or find_arc_data()
 
     if data_dir:
-        logger.info(f"Loading ARC-AGI tasks from {data_dir}...")
+        print(f"  Loading ARC-AGI tasks from {data_dir}...")
         tasks = load_arc_dataset(data_dir, max_tasks=max_tasks)
-        logger.info(f"Loaded {len(tasks)} tasks")
+        print(f"  Loaded {len(tasks)} tasks")
     else:
-        logger.info("ARC dataset not found. Using built-in sample tasks.")
-        logger.info("  (git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI)")
+        print("  ARC dataset not found. Using built-in sample tasks.")
+        print("    (git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI)")
         tasks = make_sample_tasks()
-        logger.info(f"Created {len(tasks)} sample ARC tasks")
+        print(f"  Created {len(tasks)} sample ARC tasks")
 
     if not tasks:
-        logger.error("No tasks loaded.")
+        print("  ERROR: No tasks loaded.")
         sys.exit(1)
 
     # -------------------------------------------------------------------------
@@ -333,7 +505,6 @@ def main():
     drive = ARCDrive()
     memory = InMemoryStore()
 
-    # Compute budget per task = beam_width × max_generations
     evals_per_task = beam_width * max_gens
     total_budget = evals_per_task * len(tasks) * rounds
 
@@ -360,33 +531,23 @@ def main():
         ),
     )
 
-    # -------------------------------------------------------------------------
-    # Print run config
-    # -------------------------------------------------------------------------
-    logger.info(f"\n{'='*70}")
-    logger.info("PHASE 1: ARC-AGI-1 CURRICULUM TRAINING")
-    logger.info(f"  Mode:       {args.mode}")
-    logger.info(f"  Tasks:      {len(tasks)}")
-    logger.info(f"  Rounds:     {rounds}")
-    logger.info(f"  Beam:       {beam_width}")
-    logger.info(f"  Gens:       {max_gens}")
-    logger.info(f"  Budget:     ~{evals_per_task:,} evals/task, ~{total_budget:,} total")
-    logger.info(f"  Workers:    {workers} / {machine['cpu_count']} cores ({machine.get('chip', machine['arch'])})")
-    logger.info(f"  Primitives: {len(grammar.base_primitives())}")
-    logger.info(f"  Seed:       {args.seed}")
-    logger.info(f"  Output:     {output_dir}/")
-    logger.info(f"  Timestamp:  {run_timestamp}")
-    logger.info(f"{'='*70}\n")
+    print(f"\n  Tasks:      {len(tasks)}")
+    print(f"  Primitives: {len(grammar.base_primitives())}")
+    print(f"  Budget:     ~{evals_per_task:,} evals/task, ~{total_budget:,} total")
 
     # -------------------------------------------------------------------------
     # Set up live progress tracker
     # -------------------------------------------------------------------------
-    progress_path = os.path.join(output_dir, f"{run_timestamp}_progress.jsonl")
-    tracker = ProgressTracker(progress_path, time.time())
+    tracker = ProgressTracker(jsonl_path, time.time())
 
     # -------------------------------------------------------------------------
     # Run
     # -------------------------------------------------------------------------
+    _hline("─")
+    print(f"  Running {len(tasks)} tasks × {rounds} rounds on {workers} workers")
+    _hline("─")
+    print()
+
     t0 = time.time()
     results = learner.run_curriculum(
         tasks,
@@ -401,65 +562,165 @@ def main():
     tracker.close()
 
     # -------------------------------------------------------------------------
-    # Report
+    # Final scoreboard
     # -------------------------------------------------------------------------
     metrics = extract_metrics(results)
     total_evals = sum(wr.evaluations for rr in results for wr in rr.wake_results)
 
-    print(f"\n{'='*70}")
-    print("COMPOUNDING CURVE — THE KEY METRIC")
-    print(f"{'='*70}")
+    print()
+    _hline("═")
+    print("  COMPOUNDING CURVE — THE KEY METRIC")
+    _hline("═")
     print_compounding_table(metrics)
-    print(f"\nTotal wall time: {total_time:.1f}s")
-    print(f"Total evaluations: {total_evals:,}")
+    print()
+
+    _hline("═")
+    print("  FINAL RESULTS")
+    _hline("═")
+
+    print(f"  Tasks:             {tracker.done}")
+    print(f"  ✓ Solved:          {tracker.solved}/{tracker.done}")
+    if tracker.scores:
+        print(f"  Mean energy:       {statistics.mean(tracker.scores):.4f}")
+    print(f"  Total evaluations: {total_evals:,}")
+    print(f"  Total generations: {tracker.total_gens:,}")
+    if tracker.times:
+        print(f"  Median task time:  {statistics.median(tracker.times):.2f}s")
+        print(f"  Mean task time:    {statistics.mean(tracker.times):.2f}s")
+    print(f"  Wall-clock time:   {_fmt_duration(total_time)}")
+    throughput = tracker.done / max(total_time, 0.001)
+    print(f"  Throughput:        {throughput:.1f} tasks/s ({workers} workers)")
 
     if len(metrics) >= 2:
         first_rate = metrics[0].solve_rate
         last_rate = metrics[-1].solve_rate
         if last_rate > first_rate:
-            print(f"\n>>> COMPOUNDING DETECTED: {first_rate:.1%} -> {last_rate:.1%}")
+            print(f"\n  >>> COMPOUNDING DETECTED: {first_rate:.1%} → {last_rate:.1%}")
         elif last_rate == first_rate:
-            print(f"\n>>> PLATEAU: solve rate stayed at {first_rate:.1%}")
+            print(f"\n  >>> PLATEAU: solve rate stayed at {first_rate:.1%}")
         else:
-            print(f"\n>>> REGRESSION: {first_rate:.1%} -> {last_rate:.1%}")
-
-    # -------------------------------------------------------------------------
-    # Save results — all files share the same timestamp prefix
-    # -------------------------------------------------------------------------
-    save_metrics_json(metrics, os.path.join(output_dir, f"{run_timestamp}_metrics.json"))
-    save_metrics_csv(metrics, os.path.join(output_dir, f"{run_timestamp}_metrics.csv"))
-    memory.save(os.path.join(output_dir, f"{run_timestamp}_library.json"))
-
-    # Save run config for reproducibility
-    run_config = {
-        "timestamp": run_timestamp,
-        "mode": args.mode,
-        "rounds": rounds,
-        "beam_width": beam_width,
-        "max_generations": max_gens,
-        "evals_per_task": evals_per_task,
-        "workers": workers,
-        "seed": args.seed,
-        "n_tasks": len(tasks),
-        "n_primitives": len(grammar.base_primitives()),
-        "total_time_s": round(total_time, 1),
-        "total_evaluations": total_evals,
-        "machine": machine,
-    }
-    with open(os.path.join(output_dir, f"{run_timestamp}_config.json"), "w") as f:
-        json.dump(run_config, f, indent=2)
+            print(f"\n  >>> REGRESSION: {first_rate:.1%} → {last_rate:.1%}")
 
     # Library summary
     library = memory.get_library()
-    print(f"\nLibrary: {len(library)} learned abstractions")
+    print(f"\n  Library: {len(library)} learned abstractions")
     for entry in library[:20]:
-        print(f"  {entry.name}: {entry.program} "
+        print(f"    {entry.name}: {entry.program} "
               f"(useful={entry.usefulness:.1f}, reused={entry.reuse_count}x, "
               f"from {len(entry.source_tasks)} tasks)")
     if len(library) > 20:
-        print(f"  ... and {len(library) - 20} more")
+        print(f"    ... and {len(library) - 20} more")
 
-    print(f"\nResults saved to {output_dir}/")
+    # Slowest tasks post-mortem
+    if len(tracker.all_records) >= 5:
+        by_time = sorted(tracker.all_records, key=lambda r: -r["wall_time"])
+        print(f"\n  Slowest tasks:")
+        for r in by_time[:5]:
+            icon = "✓" if r["solved"] else "✗"
+            print(f"    {icon} {r['task_id']}  {r['wall_time']:.1f}s  "
+                  f"evals={r['evaluations']:,}  E={r['energy']}")
+
+    # -------------------------------------------------------------------------
+    # Save results — final JSON with metadata + summary + per-task
+    # (Like agi-mvp-general: one comprehensive JSON file)
+    # -------------------------------------------------------------------------
+    results_data = {
+        "meta": {
+            "timestamp": run_timestamp,
+            "datetime": datetime.now(timezone.utc).isoformat(),
+            "mode": args.mode,
+            "data_dir": data_dir,
+            "rounds": rounds,
+            "beam_width": beam_width,
+            "max_generations": max_gens,
+            "evals_per_task": evals_per_task,
+            "workers": workers,
+            "seed": args.seed,
+            "n_tasks": len(tasks),
+            "n_primitives": len(grammar.base_primitives()),
+            "machine": machine,
+            "verbose": args.verbose,
+        },
+        "summary": {
+            "tasks_completed": tracker.done,
+            "tasks_solved": tracker.solved,
+            "solve_rate": tracker.solved / max(tracker.done, 1),
+            "mean_energy": round(statistics.mean(tracker.scores), 4) if tracker.scores else None,
+            "total_evaluations": total_evals,
+            "total_generations": tracker.total_gens,
+            "median_task_time": round(statistics.median(tracker.times), 3) if tracker.times else None,
+            "mean_task_time": round(statistics.mean(tracker.times), 3) if tracker.times else None,
+            "wall_clock_seconds": round(total_time, 1),
+            "throughput_tasks_per_sec": round(throughput, 2),
+            "library_size": len(library),
+            "compounding": [
+                {
+                    "round": m.round_number,
+                    "solve_rate": round(m.solve_rate, 4),
+                    "tasks_solved": m.tasks_solved,
+                    "tasks_total": m.tasks_total,
+                    "library_size": m.library_size,
+                    "new_abstractions": m.new_abstractions,
+                    "avg_reuse": round(m.avg_reuse_per_entry, 2),
+                    "avg_energy": round(m.avg_energy_of_solutions, 4) if m.avg_energy_of_solutions != float("inf") else None,
+                    "wake_time": round(m.wall_time_wake, 1),
+                    "sleep_time": round(m.wall_time_sleep, 1),
+                }
+                for m in metrics
+            ],
+        },
+        "tasks": {
+            r["task_id"]: {
+                "round": r["round"],
+                "solved": r["solved"],
+                "energy": r["energy"],
+                "prediction_error": r["prediction_error"],
+                "generations": r["generations"],
+                "evaluations": r["evaluations"],
+                "wall_time": r["wall_time"],
+                "program": r["program"],
+            }
+            for r in tracker.all_records
+        },
+        "library": [
+            {
+                "name": entry.name,
+                "program": repr(entry.program),
+                "usefulness": round(entry.usefulness, 2),
+                "reuse_count": entry.reuse_count,
+                "source_tasks": list(entry.source_tasks),
+            }
+            for entry in library
+        ],
+    }
+
+    with open(results_path, "w") as f:
+        json.dump(results_data, f, indent=2)
+
+    # Also save structured metrics (for downstream tooling)
+    save_metrics_json(metrics, metrics_json_path)
+    save_metrics_csv(metrics, metrics_csv_path)
+    memory.save(library_path)
+
+    # -------------------------------------------------------------------------
+    # Print artifacts
+    # -------------------------------------------------------------------------
+    print()
+    _hline("─")
+    print("  Artifacts:")
+    _hline("─")
+    print(f"  Results (live):   {jsonl_path}")
+    print(f"  Results (final):  {results_path}")
+    print(f"  Metrics JSON:     {metrics_json_path}")
+    print(f"  Metrics CSV:      {metrics_csv_path}")
+    print(f"  Library:          {library_path}")
+    if not args.no_log:
+        print(f"  Console log:      {log_path}")
+
+    _hline("═")
+    print("  Done.")
+    _hline("═")
+    print()
 
 
 if __name__ == "__main__":
