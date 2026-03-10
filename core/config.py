@@ -26,9 +26,10 @@ class SearchConfig:
     # Exhaustive enumeration: try ALL programs up to this depth before beam search.
     # depth 1 = all single primitives, depth 2 = all pairs, depth 3 = all triples.
     # Set to 0 to disable. Enumeration is cheap for depth <= 2 (N + N² programs).
-    exhaustive_depth: int = 2
-    # For depth 2+, limit inner primitives to top-K ranked by depth-1 performance.
-    exhaustive_top_k: int = 15
+    exhaustive_depth: int = 3
+    # For depth 2+, limit inner primitives to top-K ranked by performance.
+    # Depth-3 cost is N×K (not K³) due to smart subtree reuse.
+    exhaustive_top_k: int = 20
 
 
 @dataclass

@@ -681,6 +681,468 @@ def find_bounding_box(grid: Grid) -> tuple[int, int, int, int]:
     return (int(r_min), int(c_min), int(r_max), int(c_max))
 
 
+# =============================================================================
+# Connected component detection (internal utility)
+# =============================================================================
+
+def _find_connected_components(grid: Grid) -> list[dict]:
+    """Find all connected components (objects) via 4-connectivity flood fill.
+
+    Returns list of dicts with keys: color, pixels (set of (r,c)), bbox, size.
+    Background (0) is excluded.
+    """
+    if not grid or not grid[0]:
+        return []
+    height, width = len(grid), len(grid[0])
+    visited: set[tuple[int, int]] = set()
+    components: list[dict] = []
+
+    for r in range(height):
+        for c in range(width):
+            if grid[r][c] != 0 and (r, c) not in visited:
+                color = grid[r][c]
+                pixels: set[tuple[int, int]] = set()
+                stack = [(r, c)]
+                while stack:
+                    cr, cc = stack.pop()
+                    if (cr, cc) in visited:
+                        continue
+                    if cr < 0 or cr >= height or cc < 0 or cc >= width:
+                        continue
+                    if grid[cr][cc] != color:
+                        continue
+                    visited.add((cr, cc))
+                    pixels.add((cr, cc))
+                    stack.extend([
+                        (cr - 1, cc), (cr + 1, cc),
+                        (cr, cc - 1), (cr, cc + 1),
+                    ])
+                rows = [p[0] for p in pixels]
+                cols = [p[1] for p in pixels]
+                components.append({
+                    "color": color,
+                    "pixels": pixels,
+                    "bbox": (min(rows), min(cols), max(rows), max(cols)),
+                    "size": len(pixels),
+                })
+    return components
+
+
+def _component_to_subgrid(comp: dict) -> Grid:
+    """Extract a component as a minimal cropped sub-grid."""
+    min_r, min_c, max_r, max_c = comp["bbox"]
+    h = max_r - min_r + 1
+    w = max_c - min_c + 1
+    result = [[0] * w for _ in range(h)]
+    for r, c in comp["pixels"]:
+        result[r - min_r][c - min_c] = comp["color"]
+    return result
+
+
+# =============================================================================
+# Object-level primitives (connected component based)
+# =============================================================================
+
+def keep_largest_object_only(grid: Grid) -> Grid:
+    """Keep only the largest connected component, zero everything else."""
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+    largest = max(comps, key=lambda o: o["size"])
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+    for r, c in largest["pixels"]:
+        result[r][c] = grid[r][c]
+    return result
+
+
+def keep_smallest_object_only(grid: Grid) -> Grid:
+    """Keep only the smallest connected component, zero everything else."""
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+    smallest = min(comps, key=lambda o: o["size"])
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+    for r, c in smallest["pixels"]:
+        result[r][c] = grid[r][c]
+    return result
+
+
+def remove_largest_object(grid: Grid) -> Grid:
+    """Remove the largest connected component (set its pixels to 0)."""
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+    largest = max(comps, key=lambda o: o["size"])
+    result = [row[:] for row in grid]
+    for r, c in largest["pixels"]:
+        result[r][c] = 0
+    return result
+
+
+def remove_smallest_object(grid: Grid) -> Grid:
+    """Remove the smallest connected component (set its pixels to 0)."""
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+    smallest = min(comps, key=lambda o: o["size"])
+    result = [row[:] for row in grid]
+    for r, c in smallest["pixels"]:
+        result[r][c] = 0
+    return result
+
+
+def count_objects_as_grid(grid: Grid) -> Grid:
+    """Return a 1x1 grid whose value is the number of connected components."""
+    n = len(_find_connected_components(grid))
+    return [[min(n, 9)]]
+
+
+def recolor_each_object(grid: Grid) -> Grid:
+    """Recolor each connected component with a unique color (1, 2, 3, ...)."""
+    comps = _find_connected_components(grid)
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+    for i, comp in enumerate(comps):
+        color = (i % 9) + 1
+        for r, c in comp["pixels"]:
+            result[r][c] = color
+    return result
+
+
+def mirror_objects_h(grid: Grid) -> Grid:
+    """Mirror each connected component horizontally within its bounding box."""
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+    h, w = len(grid), len(grid[0])
+    # Copy background
+    all_pixels: set[tuple[int, int]] = set()
+    for comp in comps:
+        all_pixels.update(comp["pixels"])
+    result = [[0] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            if (r, c) not in all_pixels:
+                result[r][c] = grid[r][c]
+    # Mirror each object within its bbox
+    for comp in comps:
+        min_r, min_c, max_r, max_c = comp["bbox"]
+        for r, c in comp["pixels"]:
+            mirrored_c = max_c - (c - min_c)
+            result[r][mirrored_c] = comp["color"]
+    return result
+
+
+def mirror_objects_v(grid: Grid) -> Grid:
+    """Mirror each connected component vertically within its bounding box."""
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+    h, w = len(grid), len(grid[0])
+    all_pixels: set[tuple[int, int]] = set()
+    for comp in comps:
+        all_pixels.update(comp["pixels"])
+    result = [[0] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            if (r, c) not in all_pixels:
+                result[r][c] = grid[r][c]
+    for comp in comps:
+        min_r, min_c, max_r, max_c = comp["bbox"]
+        for r, c in comp["pixels"]:
+            mirrored_r = max_r - (r - min_r)
+            result[mirrored_r][c] = comp["color"]
+    return result
+
+
+def sort_objects_by_size(grid: Grid) -> Grid:
+    """Sort objects by size: rearrange from left-to-right, smallest to largest."""
+    comps = _find_connected_components(grid)
+    if len(comps) < 2:
+        return [row[:] for row in grid]
+    # Sort by size
+    comps.sort(key=lambda o: o["size"])
+    # Extract subgrids
+    subgrids = [_component_to_subgrid(c) for c in comps]
+    # Pack horizontally
+    max_h = max(len(sg) for sg in subgrids)
+    total_w = sum(len(sg[0]) for sg in subgrids) + len(subgrids) - 1
+    result = [[0] * total_w for _ in range(max_h)]
+    col_offset = 0
+    for sg in subgrids:
+        sh, sw = len(sg), len(sg[0])
+        for r in range(sh):
+            for c in range(sw):
+                if sg[r][c] != 0:
+                    result[r][col_offset + c] = sg[r][c]
+        col_offset += sw + 1
+    return result
+
+
+def flood_fill_bg(grid: Grid) -> Grid:
+    """Flood-fill background (0) regions enclosed by non-zero cells.
+
+    Uses the most common non-zero color adjacent to each enclosed region.
+    """
+    arr = to_np(grid)
+    h, w = arr.shape
+    # Find background regions connected to the border (not enclosed)
+    border_connected = np.zeros((h, w), dtype=bool)
+    stack = []
+    for r in range(h):
+        for c in [0, w - 1]:
+            if arr[r, c] == 0 and not border_connected[r, c]:
+                stack.append((r, c))
+    for c in range(w):
+        for r in [0, h - 1]:
+            if arr[r, c] == 0 and not border_connected[r, c]:
+                stack.append((r, c))
+    while stack:
+        cr, cc = stack.pop()
+        if cr < 0 or cr >= h or cc < 0 or cc >= w:
+            continue
+        if border_connected[cr, cc] or arr[cr, cc] != 0:
+            continue
+        border_connected[cr, cc] = True
+        stack.extend([(cr-1, cc), (cr+1, cc), (cr, cc-1), (cr, cc+1)])
+
+    result = arr.copy()
+    # Fill enclosed background cells with the most common adjacent non-zero color
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] == 0 and not border_connected[r, c]:
+                # Find most common neighboring non-zero color
+                neighbors = []
+                for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and arr[nr, nc] != 0:
+                        neighbors.append(int(arr[nr, nc]))
+                if neighbors:
+                    result[r, c] = Counter(neighbors).most_common(1)[0][0]
+                else:
+                    result[r, c] = 1  # fallback
+    return from_np(result)
+
+
+# =============================================================================
+# Grid partitioning primitives
+# =============================================================================
+
+def detect_grid_lines(grid: Grid) -> tuple[list[int], list[int]]:
+    """Detect horizontal and vertical separator lines in the grid.
+
+    A separator line is a full row or column of a single non-zero color.
+    Returns (horizontal_line_rows, vertical_line_cols).
+    """
+    arr = to_np(grid)
+    h, w = arr.shape
+    h_lines = []
+    v_lines = []
+
+    for r in range(h):
+        row = arr[r]
+        vals = set(row.tolist())
+        if len(vals) == 1 and 0 not in vals:
+            h_lines.append(r)
+
+    for c in range(w):
+        col = arr[:, c]
+        vals = set(col.tolist())
+        if len(vals) == 1 and 0 not in vals:
+            v_lines.append(c)
+
+    return h_lines, v_lines
+
+
+def extract_top_left_cell(grid: Grid) -> Grid:
+    """If grid has separator lines, extract the top-left cell."""
+    h_lines, v_lines = detect_grid_lines(grid)
+    top = 0
+    bottom = h_lines[0] if h_lines else len(grid)
+    left = 0
+    right = v_lines[0] if v_lines else len(grid[0])
+    if bottom <= top or right <= left:
+        return [row[:] for row in grid]
+    return [row[left:right] for row in grid[top:bottom]]
+
+
+def extract_bottom_right_cell(grid: Grid) -> Grid:
+    """If grid has separator lines, extract the bottom-right cell."""
+    h_lines, v_lines = detect_grid_lines(grid)
+    top = (h_lines[-1] + 1) if h_lines else 0
+    bottom = len(grid)
+    left = (v_lines[-1] + 1) if v_lines else 0
+    right = len(grid[0])
+    if bottom <= top or right <= left:
+        return [row[:] for row in grid]
+    return [row[left:right] for row in grid[top:bottom]]
+
+
+def remove_grid_lines(grid: Grid) -> Grid:
+    """Remove separator lines (full rows/cols of one color), keeping cells."""
+    h_lines, v_lines = detect_grid_lines(grid)
+    if not h_lines and not v_lines:
+        return [row[:] for row in grid]
+    h_set = set(h_lines)
+    v_set = set(v_lines)
+    result = []
+    for r in range(len(grid)):
+        if r in h_set:
+            continue
+        new_row = [grid[r][c] for c in range(len(grid[0])) if c not in v_set]
+        if new_row:
+            result.append(new_row)
+    return result if result else [[0]]
+
+
+# =============================================================================
+# Diagonal and line extension primitives
+# =============================================================================
+
+def shift_rows_right(grid: Grid) -> Grid:
+    """Shift each row right by its row index (creating a diagonal staircase)."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    new_w = w + h - 1
+    result = np.zeros((h, new_w), dtype=np.int32)
+    for r in range(h):
+        result[r, r:r+w] = arr[r]
+    return from_np(result)
+
+
+def shift_rows_left(grid: Grid) -> Grid:
+    """Shift each row left by its row index (reverse diagonal staircase)."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    new_w = w + h - 1
+    result = np.zeros((h, new_w), dtype=np.int32)
+    for r in range(h):
+        offset = h - 1 - r
+        result[r, offset:offset+w] = arr[r]
+    return from_np(result)
+
+
+def extend_lines(grid: Grid) -> Grid:
+    """Extend partial lines (>=2 consecutive cells) to grid boundaries.
+
+    Detects horizontal and vertical runs of the same non-zero color
+    and extends them in both directions until hitting another color or edge.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0:
+        return grid
+    result = [row[:] for row in grid]
+
+    # Extend horizontal lines
+    for r in range(h):
+        c = 0
+        while c < w:
+            if result[r][c] != 0:
+                color = result[r][c]
+                start = c
+                while c < w and result[r][c] == color:
+                    c += 1
+                end = c - 1
+                if end - start + 1 >= 2:
+                    for lc in range(start - 1, -1, -1):
+                        if result[r][lc] != 0:
+                            break
+                        result[r][lc] = color
+                    for rc in range(end + 1, w):
+                        if result[r][rc] != 0:
+                            break
+                        result[r][rc] = color
+            else:
+                c += 1
+
+    # Extend vertical lines
+    for c in range(w):
+        r = 0
+        while r < h:
+            if result[r][c] != 0:
+                color = result[r][c]
+                start = r
+                while r < h and result[r][c] == color:
+                    r += 1
+                end = r - 1
+                if end - start + 1 >= 2:
+                    for lr in range(start - 1, -1, -1):
+                        if result[lr][c] != 0:
+                            break
+                        result[lr][c] = color
+                    for rr in range(end + 1, h):
+                        if result[rr][c] != 0:
+                            break
+                        result[rr][c] = color
+            else:
+                r += 1
+
+    return result
+
+
+def extend_diagonal_lines(grid: Grid) -> Grid:
+    """Extend isolated non-zero cells diagonally (both main and anti-diag)."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                color = int(arr[r, c])
+                # Check if isolated (no same-color orthogonal neighbors)
+                has_neighbor = False
+                for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and arr[nr, nc] == color:
+                        has_neighbor = True
+                        break
+                if not has_neighbor:
+                    # Extend along all 4 diagonals until hitting non-zero or edge
+                    for dr, dc in [(-1,-1),(-1,1),(1,-1),(1,1)]:
+                        nr, nc = r + dr, c + dc
+                        while 0 <= nr < h and 0 <= nc < w and result[nr, nc] == 0:
+                            result[nr, nc] = color
+                            nr += dr
+                            nc += dc
+
+    return from_np(result)
+
+
+def binarize(grid: Grid) -> Grid:
+    """Convert grid to binary: non-zero → 1, zero → 0."""
+    return [[1 if c != 0 else 0 for c in row] for row in grid]
+
+
+def color_to_most_common(grid: Grid) -> Grid:
+    """Replace all non-zero colors with the most common non-zero color."""
+    flat = [c for row in grid for c in row if c != 0]
+    if not flat:
+        return [row[:] for row in grid]
+    mc = Counter(flat).most_common(1)[0][0]
+    return [[mc if c != 0 else 0 for c in row] for row in grid]
+
+
+def upscale_pattern(grid: Grid) -> Grid:
+    """If grid is small (<=5x5), upscale by treating each cell as the grid itself."""
+    h, w = len(grid), len(grid[0])
+    if h > 5 or w > 5 or h == 0 or w == 0:
+        return [row[:] for row in grid]
+    # Each non-zero cell becomes a copy of the entire grid
+    new_h = h * h
+    new_w = w * w
+    result = [[0] * new_w for _ in range(new_h)]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                for ir in range(h):
+                    for ic in range(w):
+                        result[r * h + ir][c * w + ic] = grid[ir][ic]
+    return result
+
+
 # --- Composable binary operations (for composing two grids) ---
 
 def overlay(base: Grid, top: Grid) -> Grid:
@@ -754,6 +1216,29 @@ def _build_arc_primitives() -> list[Primitive]:
         ("recolor_by_rank",     recolor_by_size_rank),
         ("extend_lines_h",      extend_lines_h),
         ("extend_lines_v",      extend_lines_v),
+        # --- Connected component / object-level primitives ---
+        ("keep_largest_only",   keep_largest_object_only),
+        ("keep_smallest_only",  keep_smallest_object_only),
+        ("remove_largest_obj",  remove_largest_object),
+        ("remove_smallest_obj", remove_smallest_object),
+        ("count_objects",       count_objects_as_grid),
+        ("recolor_each_obj",    recolor_each_object),
+        ("mirror_objects_h",    mirror_objects_h),
+        ("mirror_objects_v",    mirror_objects_v),
+        ("flood_fill_bg",       flood_fill_bg),
+        # --- Grid partitioning ---
+        ("extract_tl_cell",     extract_top_left_cell),
+        ("extract_br_cell",     extract_bottom_right_cell),
+        ("remove_grid_lines",   remove_grid_lines),
+        # --- Diagonal / line extension ---
+        ("shift_rows_right",    shift_rows_right),
+        ("shift_rows_left",     shift_rows_left),
+        ("extend_lines",        extend_lines),
+        ("extend_diagonals",    extend_diagonal_lines),
+        # --- Color/pattern ops ---
+        ("binarize",            binarize),
+        ("color_to_mc",         color_to_most_common),
+        ("upscale_pattern",     upscale_pattern),
     ]
 
     for name, fn in unary_ops:

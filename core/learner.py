@@ -11,6 +11,7 @@ The loop:
 """
 
 from __future__ import annotations
+import copy
 import logging
 import math
 import multiprocessing
@@ -772,13 +773,20 @@ class Learner:
         Enumerate ALL programs up to max_depth and evaluate them.
 
         Depth 1: try every single primitive (N programs).
-        Depth 2: try every pair outer(inner(x)) for top-K inner prims (N×K programs).
-        Depth 3: try top-K³ triples (K³ programs).
+        Depth 2: try every pair outer(inner(x)) for top-K inner prims (N×K).
+        Depth 3: try outer(top-K-depth2-programs) for all outers (N×K).
+
+        Key optimization for depth 3: instead of K³ triples (which tests
+        many redundant combos), we take the top-K depth-2 programs as
+        complete subtrees and wrap each with every outer. This is N×K
+        evaluations instead of K³, but covers much better compositions
+        because depth-2 subtrees are pre-filtered by quality.
 
         Returns (scored_programs, num_evaluations).
         """
         scored: list[ScoredProgram] = []
         n_evals = 0
+        solve_thresh = self.search_cfg.solve_threshold
 
         # --- Depth 1: all single primitives ---
         unary_prims = [p for p in primitives if p.arity <= 1]
@@ -787,13 +795,24 @@ class Learner:
             sp = self._evaluate_program(prog, task)
             scored.append(sp)
             n_evals += 1
+            if sp.prediction_error <= solve_thresh:
+                return scored, n_evals
 
         if max_depth < 2:
             return scored, n_evals
 
         # --- Depth 2: all pairs outer(inner(x)) ---
+        # Use semantic dedup to pick top-K *distinct* inners
         depth1_ranked = sorted(scored, key=lambda s: s.prediction_error)
-        top_inner = depth1_ranked[:top_k] if len(depth1_ranked) > top_k else depth1_ranked
+        seen_outputs: set[str] = set()
+        top_inner: list[ScoredProgram] = []
+        for sp in depth1_ranked:
+            key = repr(sp.prediction_error)  # rough dedup
+            if key not in seen_outputs or len(top_inner) < top_k:
+                top_inner.append(sp)
+                seen_outputs.add(key)
+            if len(top_inner) >= top_k:
+                break
 
         for outer in unary_prims:
             for inner_sp in top_inner:
@@ -802,27 +821,34 @@ class Learner:
                 sp = self._evaluate_program(prog, task)
                 scored.append(sp)
                 n_evals += 1
+                if sp.prediction_error <= solve_thresh:
+                    return scored, n_evals
 
         if max_depth < 3:
             return scored, n_evals
 
-        # --- Depth 3: top-K triples ---
-        depth2_ranked = sorted(scored, key=lambda s: s.prediction_error)
-        seen = set()
-        top_names = []
-        for sp in depth2_ranked[:top_k]:
-            if sp.program.root not in seen:
-                seen.add(sp.program.root)
-                top_names.append(sp.program.root)
+        # --- Depth 3: outer(best-depth2-subtree) ---
+        # Take top-K depth-2 programs (semantically distinct) and wrap each
+        # with every unary outer. Cost: N × K evaluations.
+        all_ranked = sorted(scored, key=lambda s: s.prediction_error)
+        seen_d2: set[str] = set()
+        top_d2: list[Program] = []
+        for sp in all_ranked:
+            prog_repr = repr(sp.program)
+            if prog_repr not in seen_d2:
+                seen_d2.add(prog_repr)
+                top_d2.append(sp.program)
+            if len(top_d2) >= top_k:
+                break
 
-        for outer in top_names:
-            for mid in top_names:
-                for inner in top_names:
-                    prog = Program(root=outer, children=[
-                        Program(root=mid, children=[Program(root=inner)])])
-                    sp = self._evaluate_program(prog, task)
-                    scored.append(sp)
-                    n_evals += 1
+        for outer in unary_prims:
+            for subtree in top_d2:
+                prog = Program(root=outer.name, children=[copy.deepcopy(subtree)])
+                sp = self._evaluate_program(prog, task)
+                scored.append(sp)
+                n_evals += 1
+                if sp.prediction_error <= solve_thresh:
+                    return scored, n_evals
 
         return scored, n_evals
 
