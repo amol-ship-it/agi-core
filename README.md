@@ -213,9 +213,13 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 ```
 agi-core/
 ├── core/                    # THE INVARIANT CORE — never imports domain code
-│   ├── __init__.py          # Public API
+│   ├── __init__.py          # Public API (re-exports everything)
+│   ├── types.py             # Data types: Primitive, Program, Task, ScoredProgram, LibraryEntry
 │   ├── interfaces.py        # 4 abstract interfaces (Environment, Grammar, DriveSignal, Memory)
-│   ├── learner.py           # Wake-sleep loop + beam search + transition matrix
+│   ├── config.py            # SearchConfig, SleepConfig, CurriculumConfig
+│   ├── results.py           # ParetoEntry, WakeResult, SleepResult, RoundResult
+│   ├── transition_matrix.py # DreamCoder-style generative prior P(child|parent)
+│   ├── learner.py           # Wake-sleep loop + beam search (the algorithm)
 │   ├── runner.py            # Generic experiment runner (TeeWriter, ProgressTracker, presets)
 │   ├── memory.py            # Default in-memory store
 │   └── metrics.py           # Compounding curve measurement

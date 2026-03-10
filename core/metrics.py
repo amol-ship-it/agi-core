@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass, asdict
 from typing import TextIO
 
-from .learner import RoundResult
+from .results import RoundResult
 
 logger = logging.getLogger(__name__)
 

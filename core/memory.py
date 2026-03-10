@@ -10,7 +10,8 @@ import json
 import logging
 from typing import Optional
 
-from .interfaces import Memory, LibraryEntry, Program, ScoredProgram
+from .types import LibraryEntry, Program, ScoredProgram
+from .interfaces import Memory
 
 logger = logging.getLogger(__name__)
 
