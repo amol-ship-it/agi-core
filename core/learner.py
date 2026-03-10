@@ -736,9 +736,9 @@ class Learner:
         use_prior = self._transition_matrix.size > 0
 
         for i in range(n):
-            # Vary depth: 40% depth-1, 40% depth-2, 20% depth-3
+            # Vary depth: 20% depth-1, 35% depth-2, 30% depth-3, 15% depth-4
             r = self._rng.random()
-            max_depth = 1 if r < 0.4 else (2 if r < 0.8 else 3)
+            max_depth = 1 if r < 0.2 else (2 if r < 0.55 else (3 if r < 0.85 else 4))
             prog = self._random_program(primitives, max_depth, use_prior)
             beam.append(prog)
         return beam

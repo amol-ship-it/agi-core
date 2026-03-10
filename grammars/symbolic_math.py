@@ -121,27 +121,67 @@ class SymbolicMathGrammar(Grammar):
         return Program(root=outer.name, children=inner_programs)
 
     def mutate(self, program: Program, primitives: list[Primitive]) -> Program:
-        """Randomly modify one node in the tree."""
+        """Mutate a program: point (swap label), grow (leaf→subtree), or shrink (subtree→leaf).
+
+        Point-only mutations can never change tree structure, so grow/shrink
+        are essential for discovering programs that require different depths
+        than the initial random beam provides.
+        """
         prog = copy.deepcopy(program)
         nodes = self._collect_nodes(prog)
         if not nodes:
             return prog
 
-        target = self._rng.choice(nodes)
-        prim = _PRIM_MAP.get(target.root)
-        current_arity = prim.arity if prim else 0
+        r = self._rng.random()
+        if r < 0.25:
+            # GROW: replace a leaf with a small subtree (adds depth)
+            leaves = [n for n in nodes if not n.children]
+            if leaves:
+                target = self._rng.choice(leaves)
+                # Pick a unary or binary primitive as new parent
+                higher = [p for p in primitives if p.arity >= 1]
+                if higher:
+                    new_op = self._rng.choice(higher)
+                    # Generate random leaf children
+                    leaf_prims = [p for p in primitives if p.arity == 0]
+                    if not leaf_prims:
+                        leaf_prims = primitives
+                    children = [
+                        Program(root=self._rng.choice(leaf_prims).name)
+                        for _ in range(new_op.arity)
+                    ]
+                    target.root = new_op.name
+                    target.children = children
+                    target.params = {}
+            return prog
+        elif r < 0.35:
+            # SHRINK: replace a non-leaf subtree with a leaf (removes depth)
+            internals = [n for n in nodes if n.children]
+            if internals:
+                target = self._rng.choice(internals)
+                leaf_prims = [p for p in primitives if p.arity == 0]
+                if leaf_prims:
+                    new_leaf = self._rng.choice(leaf_prims)
+                    target.root = new_leaf.name
+                    target.children = []
+                    target.params = {}
+            return prog
+        else:
+            # POINT: swap label with same-arity primitive (preserves structure)
+            target = self._rng.choice(nodes)
+            prim = _PRIM_MAP.get(target.root)
+            current_arity = prim.arity if prim else 0
 
-        # Pick a replacement with the same arity (to preserve tree structure)
-        same_arity = [p for p in primitives if p.arity == current_arity]
-        if same_arity:
-            new_prim = self._rng.choice(same_arity)
-            target.root = new_prim.name
+            same_arity = [p for p in primitives if p.arity == current_arity]
+            if same_arity:
+                new_prim = self._rng.choice(same_arity)
+                target.root = new_prim.name
 
-        # Occasionally mutate a constant
-        if target.root == "const":
-            target.params["c"] = target.params.get("c", 1.0) + self._rng.gauss(0, 0.5)
+            # Occasionally mutate a constant
+            if target.root == "const":
+                target.params["c"] = target.params.get("c", 1.0) + self._rng.gauss(0, 0.5)
 
-        return prog
+            return prog
 
     def crossover(self, a: Program, b: Program) -> Program:
         """Replace a random subtree in a with a random subtree from b."""
