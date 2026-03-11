@@ -911,18 +911,19 @@ class TestRunnerHelpers(unittest.TestCase):
         import argparse
         args = argparse.Namespace(
             rounds=None, beam_width=None, max_generations=None,
-            max_tasks=None, workers=0,
+            max_tasks=None, workers=0, compute_cap=0,
         )
         resolved = resolve_from_preset(args, PRESETS["quick"])
         self.assertEqual(resolved["rounds"], 1)
         self.assertEqual(resolved["beam_width"], 30)
+        self.assertEqual(resolved["compute_cap"], 5_000_000)
 
     def test_resolve_from_preset_overrides(self):
         from core.runner import resolve_from_preset, PRESETS
         import argparse
         args = argparse.Namespace(
             rounds=5, beam_width=200, max_generations=None,
-            max_tasks=10, workers=4,
+            max_tasks=10, workers=4, compute_cap=0,
         )
         resolved = resolve_from_preset(args, PRESETS["quick"])
         self.assertEqual(resolved["rounds"], 5)
