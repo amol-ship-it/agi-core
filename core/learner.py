@@ -1240,32 +1240,52 @@ class Learner:
             return scored, n_evals
 
         # --- Build pair pool: top-K singles + essential concepts ---
-        # Always include essentials (structural building blocks that score
-        # poorly alone but are critical in compositions). Fill remaining
-        # slots with top-scoring singles. Total pool = pair_top_k, with
-        # essentials guaranteed inclusion (up to half the slots).
+        # Strategy: include top-scoring singles first, then add essentials
+        # that aren't already included (sorted by their depth-1 score so
+        # the most task-relevant essentials get priority).
         depth1_ranked = sorted(scored, key=lambda s: s.prediction_error)
         essential_names = self.grammar.essential_pair_concepts()
 
-        # Phase 1: add essential concepts first (guaranteed inclusion)
+        # Build a lookup: name → depth-1 score
+        depth1_scores: dict[str, float] = {}
+        for sp in depth1_ranked:
+            if sp.program.root not in depth1_scores:
+                depth1_scores[sp.program.root] = sp.prediction_error
+
+        # Phase 1: top-scoring singles (up to 60% of pool)
         seen_names: set[str] = set()
         pair_pool: list[str] = []
-        essential_cap = pair_top_k // 2  # max half the pool for essentials
-        for name in essential_names:
-            if len(pair_pool) >= essential_cap:
-                break
-            if name in prim_by_name:
-                pair_pool.append(name)
-                seen_names.add(name)
-
-        # Phase 2: fill remaining slots with top-scoring singles
+        top_scorer_cap = pair_top_k * 3 // 5
         for sp in depth1_ranked:
             name = sp.program.root
             if name not in seen_names:
                 pair_pool.append(name)
                 seen_names.add(name)
+            if len(pair_pool) >= top_scorer_cap:
+                break
+
+        # Phase 2: essentials not already included, sorted by depth-1
+        # score (most task-relevant first)
+        remaining_essentials = [
+            n for n in essential_names
+            if n not in seen_names and n in prim_by_name
+        ]
+        remaining_essentials.sort(
+            key=lambda n: depth1_scores.get(n, 1.0))
+        for name in remaining_essentials:
             if len(pair_pool) >= pair_top_k:
                 break
+            pair_pool.append(name)
+            seen_names.add(name)
+
+        # Phase 3: fill any remaining slots with more top-scorers
+        for sp in depth1_ranked:
+            if len(pair_pool) >= pair_top_k:
+                break
+            name = sp.program.root
+            if name not in seen_names:
+                pair_pool.append(name)
+                seen_names.add(name)
 
         # --- Depth 2: exhaustive K² pairs ---
         for outer_name in pair_pool:

@@ -60,6 +60,7 @@ _ARC_ESSENTIAL_PAIR_CONCEPTS: frozenset = frozenset([
     "fill_convex_hull",
     # Batch 5 additions
     "draw_diag_nearest",
+    "draw_cross",
     "flood_fill_accent",
     "fill_enclosed_neighbor",
 ])
