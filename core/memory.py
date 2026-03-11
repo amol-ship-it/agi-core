@@ -54,7 +54,7 @@ class InMemoryStore(Memory):
 
     # --- Episodic ---
 
-    def record_episode(self, task_id, observation, program, score):
+    def record_episode(self, task_id: str, observation: any, program: Optional[Program], score: float) -> None:
         self._episodes.append({
             "task_id": task_id,
             "observation": observation,
@@ -62,19 +62,19 @@ class InMemoryStore(Memory):
             "score": score,
         })
 
-    def replay_episodes(self, n=10):
+    def replay_episodes(self, n: int = 10) -> list[dict]:
         return self._episodes[-n:]
 
     # --- Library ---
 
-    def get_library(self):
+    def get_library(self) -> list[LibraryEntry]:
         return list(self._library)
 
-    def add_to_library(self, entry):
+    def add_to_library(self, entry: LibraryEntry) -> None:
         self._library.append(entry)
         logger.debug(f"Library += {entry.name} (size={entry.program.size}, useful={entry.usefulness:.1f})")
 
-    def update_usefulness(self, name, delta):
+    def update_usefulness(self, name: str, delta: float) -> None:
         for entry in self._library:
             if entry.name == name:
                 entry.usefulness += delta
@@ -83,10 +83,10 @@ class InMemoryStore(Memory):
 
     # --- Solutions ---
 
-    def store_solution(self, task_id, scored):
+    def store_solution(self, task_id: str, scored: ScoredProgram) -> None:
         self._solutions[task_id] = scored
 
-    def get_solutions(self):
+    def get_solutions(self) -> dict[str, ScoredProgram]:
         return dict(self._solutions)
 
     # --- Persistence (culture file) ---
