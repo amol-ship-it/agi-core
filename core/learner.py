@@ -252,13 +252,24 @@ class Learner:
                     test_error=test_error, test_solved=test_solved)
 
         # --- Phase 2: Beam search (seeded with top enumeration results) ---
+        # Adaptive: reduce beam effort when enumeration found nothing promising.
+        # If best error > 0.3, beam search rarely recovers — cap at 25% gens.
+        # If best error > 0.15, moderate reduction — cap at 50% gens.
+        best_enum_error = best_so_far.prediction_error if best_so_far else 1.0
+        if best_enum_error > 0.3:
+            effective_gens = max(5, cfg.max_generations // 4)
+        elif best_enum_error > 0.15:
+            effective_gens = max(10, cfg.max_generations // 2)
+        else:
+            effective_gens = cfg.max_generations
+
         seed_progs = [sp.program for sp in sorted(
             enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
         n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
         beam = seed_progs + self._init_beam(all_prims, n_random)
         gens_used = 0
 
-        for gen in range(cfg.max_generations):
+        for gen in range(effective_gens):
             gens_used = gen + 1
 
             # Evaluate every candidate on all training examples

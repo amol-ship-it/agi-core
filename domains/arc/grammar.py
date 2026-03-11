@@ -42,6 +42,13 @@ _ARC_ESSENTIAL_PAIR_CONCEPTS: frozenset = frozenset([
     "propagate_color_v",
     "complete_tile_from_modal_row",
     "fill_enclosed_wall_color",
+    # Batch 2 additions
+    "connect_to_rect",
+    "gravity_toward_color",
+    "extend_to_contact",
+    "keep_unique_rows",
+    "keep_unique_cols",
+    "fill_enclosed_dominant",
 ])
 
 
