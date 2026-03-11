@@ -157,6 +157,18 @@ def _make_replace_color(from_c: int, to_c: int):
     return fn
 
 
+def _make_color_remap(mapping: dict[int, int]):
+    """Create a primitive that applies a multi-color remapping."""
+    def fn(grid: Grid) -> Grid:
+        a = to_np(grid)
+        result = a.copy()
+        for old_c, new_c in mapping.items():
+            result[a == old_c] = new_c
+        return result.tolist()
+    fn.__name__ = f"color_remap_{'_'.join(f'{k}to{v}' for k, v in sorted(mapping.items()))}"
+    return fn
+
+
 def _make_keep_color(color: int):
     """Create a primitive that keeps only the given color."""
     def fn(grid: Grid) -> Grid:
@@ -3725,3 +3737,145 @@ def register_prim(p: Primitive) -> None:
 def lookup_prim(name: str) -> Optional[Primitive]:
     """Look up a primitive by name."""
     return _PRIM_MAP.get(name)
+
+
+# =============================================================================
+# Predicates: Grid → bool functions for conditional branching
+# =============================================================================
+
+def _pred_is_symmetric_h(grid: Grid) -> bool:
+    """Check if grid has horizontal (left-right) symmetry."""
+    return all(row == row[::-1] for row in grid)
+
+
+def _pred_is_symmetric_v(grid: Grid) -> bool:
+    """Check if grid has vertical (top-bottom) symmetry."""
+    h = len(grid)
+    return all(grid[i] == grid[h - 1 - i] for i in range(h // 2))
+
+
+def _pred_is_square(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    return h == w and h > 0
+
+
+def _pred_has_single_color(grid: Grid) -> bool:
+    colors = {c for row in grid for c in row if c != 0}
+    return len(colors) <= 1
+
+
+def _pred_is_tall(grid: Grid) -> bool:
+    return len(grid) > (len(grid[0]) if grid else 0)
+
+
+def _pred_is_wide(grid: Grid) -> bool:
+    return (len(grid[0]) if grid else 0) > len(grid)
+
+
+def _pred_has_many_colors(grid: Grid) -> bool:
+    colors = {c for row in grid for c in row if c != 0}
+    return len(colors) > 3
+
+
+def _pred_is_small(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    return h * w < 50
+
+
+def _pred_is_large(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    return h * w > 200
+
+
+def _pred_has_bg_majority(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0:
+        return True
+    zero_count = sum(1 for row in grid for c in row if c == 0)
+    return zero_count > h * w / 2
+
+
+def _pred_is_mostly_empty(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0:
+        return True
+    zero_count = sum(1 for row in grid for c in row if c == 0)
+    return zero_count > h * w * 0.8
+
+
+def _pred_has_frame(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h < 3 or w < 3:
+        return False
+    border = set()
+    interior = set()
+    for r in range(h):
+        for c in range(w):
+            v = grid[r][c]
+            if v == 0:
+                continue
+            if r == 0 or r == h - 1 or c == 0 or c == w - 1:
+                border.add(v)
+            else:
+                interior.add(v)
+    return bool(border) and bool(interior) and not (border & interior)
+
+
+def _pred_has_diag_sym(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h != w or h == 0:
+        return False
+    return all(grid[r][c] == grid[c][r] for r in range(h) for c in range(r + 1, w))
+
+
+def _pred_is_odd_dims(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    return h % 2 == 1 and w % 2 == 1 and h > 0
+
+
+def _pred_has_two_colors(grid: Grid) -> bool:
+    colors = {c for row in grid for c in row if c != 0}
+    return len(colors) == 2
+
+
+def _pred_has_h_stripe(grid: Grid) -> bool:
+    for row in grid:
+        non_zero = [c for c in row if c != 0]
+        if len(non_zero) == len(row) and len(set(non_zero)) == 1:
+            return True
+    return False
+
+
+def _pred_has_v_stripe(grid: Grid) -> bool:
+    h = len(grid)
+    w = len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return False
+    for c in range(w):
+        col = [grid[r][c] for r in range(h)]
+        non_zero = [v for v in col if v != 0]
+        if len(non_zero) == h and len(set(non_zero)) == 1:
+            return True
+    return False
+
+
+# All predicates as (name, function) pairs
+ARC_PREDICATES: list[tuple[str, callable]] = [
+    ("is_symmetric_h", _pred_is_symmetric_h),
+    ("is_symmetric_v", _pred_is_symmetric_v),
+    ("is_square", _pred_is_square),
+    ("has_single_color", _pred_has_single_color),
+    ("is_tall", _pred_is_tall),
+    ("is_wide", _pred_is_wide),
+    ("has_many_colors", _pred_has_many_colors),
+    ("is_small", _pred_is_small),
+    ("is_large", _pred_is_large),
+    ("has_bg_majority", _pred_has_bg_majority),
+    ("is_mostly_empty", _pred_is_mostly_empty),
+    ("has_frame", _pred_has_frame),
+    ("has_diag_sym", _pred_has_diag_sym),
+    ("is_odd_dims", _pred_is_odd_dims),
+    ("has_two_colors", _pred_has_two_colors),
+    ("has_h_stripe", _pred_has_h_stripe),
+    ("has_v_stripe", _pred_has_v_stripe),
+]
