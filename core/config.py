@@ -52,7 +52,7 @@ class SleepConfig:
 @dataclass
 class CurriculumConfig:
     """Knobs for curriculum-ordered learning."""
-    sort_by_difficulty: bool = True
+    sort_by_difficulty: bool = False
     wake_sleep_rounds: int = 3
     workers: int = 0  # 0 = auto-detect (performance cores), 1 = sequential
     # Within-run sequential compounding: process tasks one at a time,

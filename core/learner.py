@@ -654,6 +654,10 @@ class Learner:
 
         if cfg.sort_by_difficulty:
             tasks = sorted(tasks, key=lambda t: t.difficulty)
+        else:
+            # Seeded shuffle for unbiased progress metrics
+            tasks = list(tasks)
+            random.Random(self.search_cfg.seed or 42).shuffle(tasks)
 
         # Resolve worker count: 0 = performance cores (not all cores)
         if cfg.workers <= 0:
