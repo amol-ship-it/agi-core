@@ -22,7 +22,7 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from io import TextIOBase
 from typing import Optional
 
@@ -445,6 +445,9 @@ class ExperimentConfig:
     verbose: bool = False
     mode: str = "default"
 
+    # Shared timestamp (for pipeline mode — reuse across train+eval)
+    timestamp: str = ""
+
 
 def resolve_from_preset(args, preset: dict) -> dict:
     """Resolve argument values: explicit args override preset defaults."""
@@ -471,7 +474,7 @@ def run_experiment(cfg: ExperimentConfig) -> str:
     """
     install_signal_handler()
 
-    run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_timestamp = cfg.timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
     prefix = f"{run_timestamp}_{cfg.domain_tag}"
 
     runs_dir = cfg.runs_dir
@@ -498,6 +501,7 @@ def run_experiment(cfg: ExperimentConfig) -> str:
                         culture_path)
     except KeyboardInterrupt:
         print("\n\nAborted by user — partial results above.\n")
+        raise  # propagate so pipeline mode stops too
     finally:
         if tee:
             sys.stdout = tee._original
@@ -643,8 +647,16 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print_compounding_table(metrics)
     print()
 
+    # Use a phase label if the title contains TRAINING or EVALUATION
+    phase_label = ""
+    title_upper = cfg.title.upper()
+    if "TRAINING" in title_upper:
+        phase_label = " — TRAINING"
+    elif "EVALUATION" in title_upper:
+        phase_label = " — EVALUATION"
+
     hline("═")
-    print("  FINAL RESULTS")
+    print(f"  FINAL RESULTS{phase_label}")
     hline("═")
 
     # Use last round's metrics for the headline numbers (not cumulative)
@@ -745,7 +757,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     results_data = {
         "meta": {
             "timestamp": run_timestamp,
-            "datetime": datetime.now(timezone.utc).isoformat(),
+            "datetime": datetime.now().isoformat(),
             "title": cfg.title,
             "domain": cfg.domain_tag,
             "mode": cfg.mode,

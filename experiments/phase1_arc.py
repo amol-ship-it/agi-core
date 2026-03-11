@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
 
 from core import (
     ExperimentConfig,
@@ -89,7 +90,8 @@ def _load_tasks(split: str, data_dir: str | None, max_tasks: int):
 
 def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
                  tasks, culture_path: str = "",
-                 save_culture: str = "") -> ExperimentConfig:
+                 save_culture: str = "",
+                 timestamp: str = "") -> ExperimentConfig:
     """Build an ExperimentConfig with ARC-specific defaults."""
     return ExperimentConfig(
         title=title,
@@ -119,6 +121,7 @@ def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
         no_log=args.no_log,
         verbose=args.verbose,
         mode=args.mode,
+        timestamp=timestamp,
     )
 
 
@@ -149,16 +152,20 @@ def main():
     resolved = resolve_from_preset(args, preset)
     max_tasks = resolved["max_tasks"]
 
-    if args.eval_only:
-        if not args.culture:
-            print("  ERROR: --eval-only requires --culture <path>")
-            sys.exit(1)
-        _run_eval(args, resolved, max_tasks)
-    elif args.train_only:
-        _run_train(args, resolved, max_tasks)
-    else:
-        # Default: full pipeline (train → eval)
-        _run_pipeline(args, resolved, max_tasks)
+    try:
+        if args.eval_only:
+            if not args.culture:
+                print("  ERROR: --eval-only requires --culture <path>")
+                sys.exit(1)
+            _run_eval(args, resolved, max_tasks)
+        elif args.train_only:
+            _run_train(args, resolved, max_tasks)
+        else:
+            # Default: full pipeline (train → eval)
+            _run_pipeline(args, resolved, max_tasks)
+    except KeyboardInterrupt:
+        print("\n\nAborted by user.\n")
+        sys.exit(1)
 
 
 def _run_train(args, resolved, max_tasks):
@@ -186,32 +193,37 @@ def _run_eval(args, resolved, max_tasks):
 
 def _run_pipeline(args, resolved, max_tasks):
     """Full pipeline: train → save culture → eval with culture."""
+    # Shared timestamp so train+eval artifacts are grouped together
+    shared_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     print("=" * 72)
     print("  PIPELINE MODE: Train → Save Culture → Evaluate")
     print("=" * 72)
     print()
 
     # Step 1: Train
-    print("  STEP 1: Training...")
+    print("  STEP 1/2: Training...")
     print()
     train_tasks = _load_tasks("training", args.data_dir, max_tasks)
     train_cfg = _make_config(args, resolved, max_tasks,
-                             title="PHASE 1: ARC-AGI-1 TRAINING (pipeline)",
+                             title="PHASE 1: ARC-AGI-1 TRAINING",
                              domain_tag="phase1_train",
-                             tasks=train_tasks)
+                             tasks=train_tasks,
+                             timestamp=shared_ts)
     culture_path = run_experiment(train_cfg)
     print(f"\n  Culture file: {culture_path}")
 
     # Step 2: Evaluate using the culture file produced by training
     print()
-    print("  STEP 2: Evaluating...")
+    print("  STEP 2/2: Evaluating with learned culture...")
     print()
     eval_tasks = _load_tasks("evaluation", args.data_dir, max_tasks)
     eval_cfg = _make_config(args, resolved, max_tasks,
-                            title="PHASE 1: ARC-AGI-1 EVALUATION (pipeline)",
+                            title="PHASE 1: ARC-AGI-1 EVALUATION",
                             domain_tag="phase1_eval",
                             tasks=eval_tasks,
-                            culture_path=culture_path)
+                            culture_path=culture_path,
+                            timestamp=shared_ts)
     run_experiment(eval_cfg)
 
     print()
