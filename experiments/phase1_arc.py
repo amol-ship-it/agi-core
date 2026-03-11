@@ -29,7 +29,7 @@ from core import (
     resolve_from_preset,
     PRESETS,
 )
-from grammars.arc import (
+from domains.arc import (
     ARCEnv,
     ARCGrammar,
     ARCDrive,

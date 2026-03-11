@@ -175,8 +175,8 @@ class TestNewPrimitives(unittest.TestCase):
                 self.assertIsInstance(result[0], list, f"{prim.name} not list of lists")
 
     def test_primitive_count_increased(self):
-        """Should have 64 primitives (48 original + 16 new)."""
-        self.assertEqual(len(ARC_PRIMITIVES), 64)
+        """Should have 101 primitives (89 session-4 + 12 batch-2 new)."""
+        self.assertEqual(len(ARC_PRIMITIVES), 101)
 
 
 # =============================================================================
@@ -203,25 +203,37 @@ class TestExhaustiveEnumeration(unittest.TestCase):
 
     def test_exhaustive_enumerate_depth1(self):
         learner = self._make_arc_learner()
-        task = make_sample_tasks()[0]  # rot90 task
+        # Use invert_crop task — NOT solvable at depth 1
+        task = make_sample_tasks()[7]
         prims = learner.grammar.base_primitives()
 
         scored, n_evals = learner._exhaustive_enumerate(prims, task, max_depth=1)
-        # Should have evaluated all unary prims
+        # Should have evaluated all unary prims (no early exit since unsolvable at depth 1)
         unary_count = sum(1 for p in prims if p.arity <= 1)
         self.assertEqual(n_evals, unary_count)
         self.assertEqual(len(scored), unary_count)
 
+    def test_exhaustive_enumerate_depth1_early_exit(self):
+        learner = self._make_arc_learner()
+        task = make_sample_tasks()[0]  # rot90 task — solvable at depth 1
+        prims = learner.grammar.base_primitives()
+
+        scored, n_evals = learner._exhaustive_enumerate(prims, task, max_depth=1)
+        # Should early exit after finding the solution
+        self.assertLessEqual(n_evals, len([p for p in prims if p.arity <= 1]))
+        # At least one should be solved
+        best = min(scored, key=lambda s: s.prediction_error)
+        self.assertLessEqual(best.prediction_error, 0.001)
+
     def test_exhaustive_enumerate_depth2(self):
         learner = self._make_arc_learner()
-        task = make_sample_tasks()[0]
+        task = make_sample_tasks()[6]  # rot_mirror — needs depth 2
         prims = learner.grammar.base_primitives()
 
         scored, n_evals = learner._exhaustive_enumerate(prims, task, max_depth=2, top_k=5)
-        unary_count = sum(1 for p in prims if p.arity <= 1)
-        # Depth 1: unary_count, Depth 2: unary_count × min(5, unary_count)
-        expected_depth2 = unary_count * min(5, unary_count)
-        self.assertEqual(n_evals, unary_count + expected_depth2)
+        # Should have found a solution (early exit possible)
+        best = min(scored, key=lambda s: s.prediction_error)
+        self.assertLessEqual(best.prediction_error, 0.001)
 
     def test_exhaustive_solves_rot90(self):
         """Exhaustive should find rot90cw as a depth-1 program."""
@@ -525,8 +537,8 @@ class TestNewConfigFields(unittest.TestCase):
 
     def test_search_config_exhaustive_defaults(self):
         cfg = SearchConfig()
-        self.assertEqual(cfg.exhaustive_depth, 2)
-        self.assertEqual(cfg.exhaustive_top_k, 15)
+        self.assertEqual(cfg.exhaustive_depth, 3)
+        self.assertEqual(cfg.exhaustive_top_k, 20)
 
     def test_curriculum_sequential_default(self):
         cfg = CurriculumConfig()

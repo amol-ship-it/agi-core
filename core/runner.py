@@ -404,7 +404,7 @@ class ExperimentConfig:
     max_library_size: int = 500
 
     # Exhaustive enumeration
-    exhaustive_depth: int = 2
+    exhaustive_depth: int = 3
     exhaustive_top_k: int = 20
 
     # Sequential compounding

@@ -11,6 +11,7 @@ The loop:
 """
 
 from __future__ import annotations
+import copy
 import logging
 import math
 import multiprocessing
@@ -200,6 +201,37 @@ class Learner:
                     generations_used=0, evaluations=n_evals, wall_time=wall,
                     pareto_front=front, dedup_count=0)
 
+        # --- Phase 1.5: Near-miss refinement ---
+        # Try appending/prepending primitives to near-miss programs.
+        # High-ROI: catches "almost right" programs that need one more step.
+        if cfg.near_miss_threshold > 0 and enum_candidates:
+            refine_candidates, n_refine_evals = self._near_miss_refine(
+                enum_candidates, all_prims, task, cfg.near_miss_threshold)
+            n_evals += n_refine_evals
+            for sp in refine_candidates:
+                self._update_pareto_front(pareto, sp)
+                if best_so_far is None or sp.energy < best_so_far.energy:
+                    best_so_far = sp
+            enum_candidates.extend(refine_candidates)
+
+            # Check if refinement found a perfect solve
+            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                best_so_far.task_id = task.task_id
+                self.memory.record_episode(
+                    task.task_id, task.train_examples,
+                    best_so_far.program, best_so_far.energy)
+                self.memory.store_solution(task.task_id, best_so_far)
+                self._credit_library_usage(best_so_far.program)
+                front = self._extract_pareto_front(pareto)
+                wall = time.time() - t0
+                logger.info(
+                    f"  [wake] Task {task.task_id}: SOLVED by near-miss refinement, "
+                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                return WakeResult(
+                    task_id=task.task_id, solved=True, best=best_so_far,
+                    generations_used=0, evaluations=n_evals, wall_time=wall,
+                    pareto_front=front, dedup_count=0)
+
         # --- Phase 2: Beam search (seeded with top enumeration results) ---
         seed_progs = [sp.program for sp in sorted(
             enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
@@ -325,6 +357,29 @@ class Learner:
                 wall = time.time() - t0
                 logger.info(
                     f"  [wake] Task {task.task_id}: SOLVED by enumeration, "
+                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                return WakeResult(
+                    task_id=task.task_id, solved=True, best=best_so_far,
+                    generations_used=0, evaluations=n_evals, wall_time=wall,
+                    pareto_front=front, dedup_count=0)
+
+        # --- Phase 1.5: Near-miss refinement ---
+        if cfg.near_miss_threshold > 0 and enum_candidates:
+            refine_candidates, n_refine_evals = self._near_miss_refine(
+                enum_candidates, all_prims, task, cfg.near_miss_threshold)
+            n_evals += n_refine_evals
+            for sp in refine_candidates:
+                self._update_pareto_front(pareto, sp)
+                if best_so_far is None or sp.energy < best_so_far.energy:
+                    best_so_far = sp
+            enum_candidates.extend(refine_candidates)
+
+            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                best_so_far.task_id = task.task_id
+                front = self._extract_pareto_front(pareto)
+                wall = time.time() - t0
+                logger.info(
+                    f"  [wake] Task {task.task_id}: SOLVED by near-miss refinement, "
                     f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
                 return WakeResult(
                     task_id=task.task_id, solved=True, best=best_so_far,
@@ -761,6 +816,74 @@ class Learner:
     # Exhaustive enumeration — the bootstrap phase
     # -------------------------------------------------------------------------
 
+    def _near_miss_refine(
+        self,
+        candidates: list[ScoredProgram],
+        primitives: list[Primitive],
+        task: Task,
+        threshold: float = 0.20,
+    ) -> tuple[list[ScoredProgram], int]:
+        """
+        Near-miss refinement: for programs scoring close-but-not-perfect,
+        try appending or prepending each primitive to fix them.
+
+        Adapted from agi-mvp-general's high-ROI refinement phase.
+        Programs with prediction_error < threshold but > solve_threshold
+        are "almost right" — often they just need one more step
+        (e.g. a crop, color fix, or flip).
+
+        Cost: O(near_misses × N_primitives × 2) — cheap and high ROI.
+        """
+        solve_thresh = self.search_cfg.solve_threshold
+        near_misses = [
+            sp for sp in candidates
+            if solve_thresh < sp.prediction_error <= threshold
+        ]
+        if not near_misses:
+            return [], 0
+
+        # Sort by quality (best near-misses first)
+        near_misses.sort(key=lambda s: s.prediction_error)
+
+        # Limit to top-10 near-misses to control cost
+        near_misses = near_misses[:10]
+
+        unary_prims = [p for p in primitives if p.arity <= 1]
+        refined: list[ScoredProgram] = []
+        n_evals = 0
+
+        for nm in near_misses:
+            for prim in unary_prims:
+                # Try appending: prim(near_miss_program)
+                prog_append = Program(
+                    root=prim.name,
+                    children=[copy.deepcopy(nm.program)],
+                )
+                sp = self._evaluate_program(prog_append, task)
+                refined.append(sp)
+                n_evals += 1
+                if sp.prediction_error <= solve_thresh:
+                    return refined, n_evals
+
+                # Try prepending: insert prim as the innermost step.
+                # For f(g(x)), prepend h gives f(g(h(x))).
+                prog_prepend = copy.deepcopy(nm.program)
+                # Walk to the deepest leaf and wrap it
+                node = prog_prepend
+                while node.children:
+                    node = node.children[0]
+                # node is now the deepest leaf — wrap it with prim
+                old_root = node.root
+                node.root = old_root
+                node.children = [Program(root=prim.name)]
+                sp = self._evaluate_program(prog_prepend, task)
+                refined.append(sp)
+                n_evals += 1
+                if sp.prediction_error <= solve_thresh:
+                    return refined, n_evals
+
+        return refined, n_evals
+
     def _exhaustive_enumerate(
         self,
         primitives: list[Primitive],
@@ -772,13 +895,20 @@ class Learner:
         Enumerate ALL programs up to max_depth and evaluate them.
 
         Depth 1: try every single primitive (N programs).
-        Depth 2: try every pair outer(inner(x)) for top-K inner prims (N×K programs).
-        Depth 3: try top-K³ triples (K³ programs).
+        Depth 2: try every pair outer(inner(x)) for top-K inner prims (N×K).
+        Depth 3: try outer(top-K-depth2-programs) for all outers (N×K).
+
+        Key optimization for depth 3: instead of K³ triples (which tests
+        many redundant combos), we take the top-K depth-2 programs as
+        complete subtrees and wrap each with every outer. This is N×K
+        evaluations instead of K³, but covers much better compositions
+        because depth-2 subtrees are pre-filtered by quality.
 
         Returns (scored_programs, num_evaluations).
         """
         scored: list[ScoredProgram] = []
         n_evals = 0
+        solve_thresh = self.search_cfg.solve_threshold
 
         # --- Depth 1: all single primitives ---
         unary_prims = [p for p in primitives if p.arity <= 1]
@@ -787,13 +917,24 @@ class Learner:
             sp = self._evaluate_program(prog, task)
             scored.append(sp)
             n_evals += 1
+            if sp.prediction_error <= solve_thresh:
+                return scored, n_evals
 
         if max_depth < 2:
             return scored, n_evals
 
         # --- Depth 2: all pairs outer(inner(x)) ---
+        # Use semantic dedup to pick top-K *distinct* inners
         depth1_ranked = sorted(scored, key=lambda s: s.prediction_error)
-        top_inner = depth1_ranked[:top_k] if len(depth1_ranked) > top_k else depth1_ranked
+        seen_outputs: set[str] = set()
+        top_inner: list[ScoredProgram] = []
+        for sp in depth1_ranked:
+            key = repr(sp.prediction_error)  # rough dedup
+            if key not in seen_outputs or len(top_inner) < top_k:
+                top_inner.append(sp)
+                seen_outputs.add(key)
+            if len(top_inner) >= top_k:
+                break
 
         for outer in unary_prims:
             for inner_sp in top_inner:
@@ -802,27 +943,34 @@ class Learner:
                 sp = self._evaluate_program(prog, task)
                 scored.append(sp)
                 n_evals += 1
+                if sp.prediction_error <= solve_thresh:
+                    return scored, n_evals
 
         if max_depth < 3:
             return scored, n_evals
 
-        # --- Depth 3: top-K triples ---
-        depth2_ranked = sorted(scored, key=lambda s: s.prediction_error)
-        seen = set()
-        top_names = []
-        for sp in depth2_ranked[:top_k]:
-            if sp.program.root not in seen:
-                seen.add(sp.program.root)
-                top_names.append(sp.program.root)
+        # --- Depth 3: outer(best-depth2-subtree) ---
+        # Take top-K depth-2 programs (semantically distinct) and wrap each
+        # with every unary outer. Cost: N × K evaluations.
+        all_ranked = sorted(scored, key=lambda s: s.prediction_error)
+        seen_d2: set[str] = set()
+        top_d2: list[Program] = []
+        for sp in all_ranked:
+            prog_repr = repr(sp.program)
+            if prog_repr not in seen_d2:
+                seen_d2.add(prog_repr)
+                top_d2.append(sp.program)
+            if len(top_d2) >= top_k:
+                break
 
-        for outer in top_names:
-            for mid in top_names:
-                for inner in top_names:
-                    prog = Program(root=outer, children=[
-                        Program(root=mid, children=[Program(root=inner)])])
-                    sp = self._evaluate_program(prog, task)
-                    scored.append(sp)
-                    n_evals += 1
+        for outer in unary_prims:
+            for subtree in top_d2:
+                prog = Program(root=outer.name, children=[copy.deepcopy(subtree)])
+                sp = self._evaluate_program(prog, task)
+                scored.append(sp)
+                n_evals += 1
+                if sp.prediction_error <= solve_thresh:
+                    return scored, n_evals
 
         return scored, n_evals
 

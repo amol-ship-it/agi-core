@@ -265,4 +265,135 @@ Pipeline run: `python -m experiments.phase1_arc --pipeline --mode quick`
 
 ---
 
+## Session 4 — Claude Code Web (March 10, 2026)
+
+### Decision: 25 New Primitives — Object-Level, Grid Partitioning, Diagonal
+
+**Context:** Session 3 solved 33/400 (8.2%) training with 64 primitives and depth-2 exhaustive search. Analysis of near-miss tasks showed the system lacked object-level reasoning, grid partitioning, and anomaly removal capabilities.
+
+**Research methodology:** Studied agi-mvp-general's `objects.py` (connected components), `decompose.py` (grid partitioning), and `spatial/` (line extension). Analyzed 15 ARC tasks to identify missing operation categories. Examined 8 near-miss tasks (error < 0.03) to find targeted primitives.
+
+**Decision:** Add 25 new primitives (89 total) in three batches:
+
+**Batch 1: Connected components (9 primitives)**
+- `keep_largest_only`, `keep_smallest_only` — isolate objects by size
+- `remove_largest_obj`, `remove_smallest_obj` — remove objects by size
+- `count_objects`, `recolor_each_obj` — object analysis
+- `mirror_objects_h`, `mirror_objects_v` — per-object mirroring within bbox
+- `flood_fill_bg` — fill enclosed background regions
+
+**Batch 2: Grid partitioning & structural (7 primitives)**
+- `extract_tl_cell`, `extract_br_cell`, `remove_grid_lines` — grid structure ops
+- `shift_rows_right`, `shift_rows_left` — diagonal staircase patterns
+- `extend_lines`, `extend_diagonals` — line/ray completion
+
+**Batch 3: Color/pattern & anomaly removal (9 primitives)**
+- `binarize`, `color_to_mc`, `upscale_pattern` — color transforms
+- `denoise_majority`, `fill_rectangles` — noise removal
+- `extract_minority_c`, `extract_majority_c` — color isolation
+- `replace_noise_objs`, `hollow_objects` — object cleanup
+
+**Result:** 39/400 (9.8%) training — 6 new tasks solved using new primitives.
+
+### Decision: Depth-3 Exhaustive Enumeration with Smart Pruning
+
+**Context:** Previous depth-3 used K³ evaluations (brute-force triple combinations), which was expensive and explored many redundant combinations.
+
+**Decision:** New depth-3 approach: take top-K depth-2 programs as complete subtrees, wrap each with every unary outer. Cost: N×K evaluations instead of K³. Includes:
+- Early exit: stop enumeration immediately when a perfect solve is found
+- Semantic dedup: filter duplicate outputs between depth levels
+- Default depth increased from 2 to 3 (affordable with N×K cost)
+
+**Rationale:** An N×K depth-3 search evaluates ~1,780 additional programs per task (89 prims × 20 top-K). This is far cheaper than K³ = 8,000 and produces better results because the depth-2 subtrees are pre-filtered by quality.
+
+### Benchmark Results: After This Session
+
+| Config | Training (400) | Eval (400) | Time |
+|--------|---------------|------------|------|
+| Session 3 baseline (depth-2, 64 prims) | 33/400 (8.2%) | 3/400 (0.75%) | 5m |
+| Session 4 (depth-3, 89 prims) | 39/400 (9.8%) | 4/400 (1.0%) | 6m train + 10m eval |
+
+**New training tasks solved by new primitives (6 of 39):**
+- `007bbfb7: upscale_pattern` — self-similar tiling
+- `08ed6ac7: recolor_each_obj` — assign unique colors to objects
+- `0b148d64: crop_nonzero(extract_minority_c)` — isolate rare color
+- `a87f7484: crop_nonzero(extract_majority_c)` — isolate dominant color
+- `e26a3af2: fill_rectangles(denoise_3x3)` — rectangle completion + denoising
+- `623ea044: extend_diagonals` — diagonal ray tracing
+
+**Eval tasks solved (4):**
+- `5b6cbef5: upscale_pattern` — NEW (from new primitive)
+- `60c09cac: scale_2x` — existing
+- `e1baa8a4: unique_rows(unique_cols)` — NEW (from depth-3 composition)
+- `fc754716: outline(replace_bg_mc)` — existing
+
+**Comparison with agi-mvp-general:** 35/400 (8.8%) on evaluation set. Gap remains significant — agi-mvp-general uses 304 primitives, 13 specialized search phases, and object decomposition pipeline.
+
+**Analysis of remaining gap:** The eval-to-train ratio improved slightly (1.0% vs 9.8%) compared to session 3 (0.75% vs 8.0%). The bottleneck remains: most unsolved tasks require multi-step conditional reasoning (if object has property X, apply transform Y) or complex object interactions that can't be expressed as simple primitive compositions. Next steps would be: (a) object decomposition pipeline (perceive→transform-per-object→reassemble), (b) input-adaptive primitives that analyze training examples to infer task-specific operations.
+
+---
+
+## Session 5 — Modular Restructuring + Scoring Improvement (March 10-11, 2026)
+
+### Decision: Restructure `grammars/` → `domains/` package
+
+**Rationale:** The monolithic `grammars/arc.py` (2240 lines) mixed primitives, environment, grammar, drive signal, and dataset loading in one file. This violated the principle that each domain's primitives, composition grammar, and interfaces should be cleanly separated.
+
+**New layout:**
+```
+domains/arc/
+  primitives.py   - All Grid→Grid transforms (101 primitives)
+  objects.py      - Connected component detection
+  environment.py  - ARCEnv (program execution)
+  grammar.py      - ARCGrammar (composition, mutation, crossover)
+  drive.py        - ARCDrive (structural similarity scoring)
+  dataset.py      - Task loading + sample tasks
+domains/symbolic_math/
+  __init__.py     - Full symbolic regression domain
+```
+
+`grammars/` retained as backward-compatible shims. All 305 tests pass unchanged.
+
+### Decision: Port structural similarity scorer from agi-mvp-general
+
+**Problem:** Binary pixel-match scoring creates a flat fitness landscape — programs either match or don't. Beam search can't make incremental progress.
+
+**Solution:** Weighted composite scorer:
+- 0.60 × pixel_accuracy
+- 0.15 × dimension_match
+- 0.15 × color_overlap (Jaccard on non-bg palettes)
+- 0.10 × nonzero_density_similarity
+
+**Result:** Smoother landscape enables beam search evolution to find depth-3 programs.
+
+### Decision: Add near-miss refinement (Phase 1.5)
+
+**Problem:** Many programs are "almost right" (prediction_error < 0.20) but need one more step.
+
+**Solution:** After exhaustive enumeration, try appending/prepending each primitive to the top-10 near-miss programs. Cost: O(10 × N_prims × 2) = ~2000 extra evals per task.
+
+### Decision: Add 12 new primitives (batch 2)
+
+Cyclic shifts (4), symmetry completion (2), split-by-separator (2), morphological (2), color cycling (2).
+
+### Benchmark Results
+
+| Metric | Session 4 | Session 5 | Change |
+|--------|-----------|-----------|--------|
+| Training (quick, 1 round) | 39/400 (9.75%) | 52/400 (13.0%) | **+33%** |
+| Primitives | 89 | 101 | +12 |
+| Tests | 285 | 305 | +20 |
+| Depth-3 solves | 0 | 7 | **first ever** |
+
+**13 new tasks solved, 0 regressions.** Notable new solves:
+- `shift_down_1` — new cyclic shift primitive
+- `complete_sym_h(recolor_4_to_0)` — new symmetry completion + color op
+- `overlay_split_h` — new split-by-separator
+- `make_sym_v(make_sym_h(tile_2x2))` — depth-3 symmetry tiling (first depth-3 solve!)
+- `left_half(top_half(crop_nonzero))` — depth-3 spatial extraction
+
+**Key insight:** The structural similarity scorer unlocked depth-3 solutions by giving beam search enough signal to navigate toward them incrementally.
+
+---
+
 *This document will be updated with each new session and major decision.*
