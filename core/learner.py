@@ -403,12 +403,28 @@ class Learner:
 
             beam = next_gen
 
-        # --- Phase 3: Post-search color fix ---
-        # Try color fix on the best beam result if not already solved
+        # --- Phase 3: Post-beam near-miss refinement + color fix ---
+        # Collect all near-misses from both enumeration and beam search,
+        # then try appending/prepending primitives and color remapping.
         if best_so_far and best_so_far.prediction_error > cfg.solve_threshold:
-            all_scored = [sp for sp in scored] if 'scored' in dir() else []
-            all_scored.extend(enum_candidates)
-            color_fixed = self._try_color_fix(all_scored, task)
+            # Build pool of all near-misses from beam + enumeration
+            all_near_misses = list(enum_candidates)
+            if 'scored' in dir() and scored:
+                all_near_misses.extend(scored)
+
+            # Phase 3a: Near-miss refinement on beam results
+            if cfg.near_miss_threshold > 0:
+                beam_refine, n_refine = self._near_miss_refine(
+                    all_near_misses, all_prims, task, cfg.near_miss_threshold)
+                n_evals += n_refine
+                for sp in beam_refine:
+                    self._update_pareto_front(pareto, sp)
+                    if sp.energy < best_so_far.energy:
+                        best_so_far = sp
+                all_near_misses.extend(beam_refine)
+
+            # Phase 3b: Color fix on all near-misses
+            color_fixed = self._try_color_fix(all_near_misses, task)
             if color_fixed is not None:
                 n_evals += 1
                 self._update_pareto_front(pareto, color_fixed)
