@@ -63,6 +63,23 @@ class Environment(ABC):
         Default: no-op (environments that don't need dynamic registration).
         """
 
+    def try_object_decomposition(
+        self,
+        task: "Task",
+        primitives: list["Primitive"],
+    ) -> Optional[tuple[str, Any]]:
+        """Try solving a task by applying transforms per-object.
+
+        For domains with discrete objects (like ARC grids), this tries
+        applying each primitive to individual objects and reassembling.
+
+        Returns (name, transform_fn) if a pixel-perfect decomposition
+        is found, or None.
+
+        Default: no decomposition (returns None).
+        """
+        return None
+
     def infer_output_correction(
         self,
         program_outputs: list[Any],

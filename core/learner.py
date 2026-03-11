@@ -222,6 +222,35 @@ class Learner:
                     pareto_front=front, dedup_count=0,
                     test_error=test_error, test_solved=test_solved)
 
+        # --- Phase 1.1: Object decomposition ---
+        # Try applying the same transform to each object independently.
+        # High-ROI for tasks where objects are transformed in-place.
+        decomp_result = self.env.try_object_decomposition(task, all_prims)
+        if decomp_result is not None:
+            name, fn = decomp_result
+            prog = Program(root=name)
+            sp = self._evaluate_program(prog, task)
+            n_evals += 1
+            self._update_pareto_front(pareto, sp)
+            if best_so_far is None or sp.energy < best_so_far.energy:
+                best_so_far = sp
+            enum_candidates.append(sp)
+
+            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                best_so_far.task_id = task.task_id
+                _record_solve()
+                test_error, test_solved = self._evaluate_on_test(best_so_far, task)
+                front = self._extract_pareto_front(pareto)
+                wall = time.time() - t0
+                logger.info(
+                    f"  [wake] Task {task.task_id}: SOLVED by object decomposition, "
+                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                return WakeResult(
+                    task_id=task.task_id, solved=True, best=best_so_far,
+                    generations_used=0, evaluations=n_evals, wall_time=wall,
+                    pareto_front=front, dedup_count=0,
+                    test_error=test_error, test_solved=test_solved)
+
         # --- Phase 1.25: Conditional search ---
         # Try if(predicate, A, B) programs. For each predicate, partition
         # training inputs into true/false groups and find best primitives

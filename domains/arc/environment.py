@@ -12,6 +12,7 @@ import numpy as np
 
 from core import Environment, Primitive, Program, Task, Observation
 from .primitives import Grid, _PRIM_MAP, _make_color_remap
+from .objects import try_object_decomposition
 
 
 class ARCEnv(Environment):
@@ -42,6 +43,17 @@ class ARCEnv(Environment):
     def register_primitive(self, primitive) -> None:
         """Register a dynamically created primitive for ARC execution."""
         _PRIM_MAP[primitive.name] = primitive
+
+    def try_object_decomposition(self, task, primitives):
+        """Try per-object transform decomposition for ARC grids."""
+        result = try_object_decomposition(task.train_examples, primitives)
+        if result is None:
+            return None
+        name, fn = result
+        # Register as a primitive so it can be executed
+        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+        _PRIM_MAP[name] = prim
+        return (name, fn)
 
     def infer_output_correction(
         self,
