@@ -663,7 +663,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     last = metrics[-1] if metrics else None
     n_tasks = len(tasks)
 
-    # Test accuracy (generalization) — deduplicate by task_id, last round wins
+    # Test accuracy — deduplicate by task_id, last round wins
     all_wake = [wr for rr in results for wr in rr.wake_results]
     test_by_task: dict[str, bool] = {}
     for wr in all_wake:
@@ -671,15 +671,18 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             test_by_task[wr.task_id] = wr.test_solved
     unique_test_solved = sum(1 for v in test_by_task.values() if v) if test_by_task else 0
 
-    if last:
-        print(f"  Tasks:             {n_tasks}")
+    print(f"  Tasks:             {n_tasks}")
+    if last and test_by_task:
+        # Show test-verified solve rate as the headline number
+        print(f"  ✓ Solved:          {unique_test_solved}/{n_tasks}  "
+              f"({unique_test_solved / max(n_tasks, 1):.1%})")
+        if last.tasks_solved > unique_test_solved:
+            overfits = last.tasks_solved - unique_test_solved
+            print(f"    (+ {overfits} overfit: solved training examples "
+                  f"but failed held-out test)")
+    elif last:
         print(f"  ✓ Solved:          {last.tasks_solved}/{n_tasks}  "
               f"({last.solve_rate:.1%})")
-        if test_by_task:
-            print(f"    generalized:     {unique_test_solved}/{last.tasks_solved}  "
-                  f"({unique_test_solved / max(last.tasks_solved, 1):.1%})")
-    else:
-        print(f"  Tasks:             {n_tasks}")
 
     print(f"  Rounds:            {rounds}")
     print(f"  Total evaluations: {total_evals:,}")
