@@ -705,6 +705,42 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             print(f"    {icon} {r['task_id']}  {r['wall_time']:.1f}s  "
                   f"evals={r['evaluations']:,}  E={r['energy']}")
 
+    # --- Solved tasks summary (for verification) ---
+    solved_records = [r for r in tracker.all_records if r["solved"]]
+    if solved_records:
+        print()
+        hline("─")
+        print(f"  SOLVED TASKS ({len(solved_records)} total)")
+        hline("─")
+        for r in sorted(solved_records, key=lambda r: r["task_id"]):
+            test_tag = ""
+            if r.get("test_solved") is True:
+                test_tag = " [test:✓]"
+            elif r.get("test_solved") is False:
+                test_tag = f" [test:✗ err={r.get('test_error', '?')}]"
+            print(f"    ✓ {r['task_id']:<24s} program: {r['program']}{test_tag}")
+
+    # --- Near misses (for debugging unsolved tasks) ---
+    near_misses = [r for r in tracker.all_records
+                   if not r["solved"] and r.get("prediction_error") is not None
+                   and r["prediction_error"] < 0.1]
+    if near_misses:
+        near_misses.sort(key=lambda r: r["prediction_error"])
+        print()
+        hline("─")
+        print(f"  NEAR MISSES ({len(near_misses)} tasks with error < 0.1)")
+        hline("─")
+        for r in near_misses[:20]:
+            test_tag = ""
+            if r.get("test_solved") is True:
+                test_tag = " [test:✓]"
+            elif r.get("test_solved") is False:
+                test_tag = " [test:✗]"
+            print(f"    ✗ {r['task_id']:<24s} err={r['prediction_error']:.4f}  "
+                  f"program: {r['program']}{test_tag}")
+        if len(near_misses) > 20:
+            print(f"    ... and {len(near_misses) - 20} more")
+
     # --- Save artifacts ---
     results_data = {
         "meta": {
@@ -758,6 +794,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             r["task_id"]: {
                 "round": r["round"],
                 "solved": r["solved"],
+                "test_solved": r.get("test_solved"),
+                "test_error": r.get("test_error"),
                 "energy": r["energy"],
                 "prediction_error": r["prediction_error"],
                 "generations": r["generations"],

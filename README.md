@@ -24,7 +24,7 @@ git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI
 # Reproduce our results — one command does train + eval with culture transfer
 python -m experiments.phase1_arc
 
-# Run the test suite (323 tests)
+# Run the test suite (380 tests, ~1 second)
 python -m pytest tests/ -v
 ```
 
@@ -92,35 +92,59 @@ tail -f runs/*_phase1_train.jsonl    # watch task results as they complete
 tail -f runs/*_phase1_train.log      # watch full console output
 ```
 
+### Verifying individual solves
+
+The console output ends with a **SOLVED TASKS** section listing every solved task and its program. Each line shows the task ID, program, and test status:
+
+```
+  SOLVED TASKS (95 total)
+    ✓ 007bbfb7                 program: upscale_pattern [test:✓]
+    ✓ 00d62c1b                 program: fill_rect_interior_4 [test:✓]
+    ...
+```
+
+To verify a specific solve, look up the task in the ARC dataset and trace the program:
+
+```bash
+# View the original task
+cat data/ARC-AGI/data/training/007bbfb7.json | python -m json.tool
+
+# Search for a task in the JSONL results
+grep "007bbfb7" runs/*_phase1_train.jsonl | python -m json.tool
+
+# Search in the final JSON
+python -c "import json; d=json.load(open('runs/TIMESTAMP_phase1_train.json')); print(json.dumps(d['tasks']['007bbfb7'], indent=2))"
+```
+
+Each task record (JSONL and JSON) includes: `task_id`, `solved`, `test_solved`, `test_error`, `energy`, `prediction_error`, `program`, `evaluations`, `wall_time`.
+
 ### Presets
 
 Three modes. Pick one. That's the only knob most users need.
 
 | Mode | Rounds | Beam | Gens | ~Evals/task | Use case |
 |------|--------|------|------|-------------|----------|
-| `quick` | 2 | 80 | 40 | 3,200 | Fast iteration |
-| `default` | 3 | 150 | 80 | 12,000 | Balanced speed/accuracy |
-| `contest` | 10 | 500 | 200 | 100,000 | Maximum accuracy |
+| `quick` | 1 | 30 | 15 | ~450 | Fast iteration |
+| `default` | 1 | 80 | 40 | ~3,200 | Balanced speed/accuracy |
+| `contest` | 1 | 250 | 100 | ~25,000 | Maximum accuracy |
 
 Compute budget = beam × gens. Early stopping saves unused compute on easy tasks.
 
 ### Expected performance
 
-Benchmarked on 2 CPU cores (x86_64). Times scale linearly with tasks, inversely with cores.
+Benchmarked with 4 parallel workers (x86_64). Times scale inversely with workers.
 
-| Mode | Sample tasks (8) | 400 real tasks (full) |
-|------|-----------------|----------------------|
-| `quick` | 8/8, ~5s | ~39/400 (9.8%), ~6 min |
-| `default` | 8/8, ~50s | ~39/400 (9.8%), ~15 min |
-| `contest` | 8/8, ~3 min | ~10-12%, ~1 hr |
+| Mode | 400 training tasks | 400 eval tasks (culture transfer) |
+|------|-------------------|----------------------------------|
+| `quick` | **95/400 (23.8%)**, median 3.1s/task, ~32 min total | **33/400 (8.2%)** |
+| `default` | ~25-28%, ~1 hr | ~10% |
+| `contest` | higher, ~3-4 hr | TBD |
 
-**101 primitives** including connected components, grid partitioning, diagonal ops, and anomaly removal.
-**Depth-3 exhaustive enumeration** with smart subtree reuse finds 3-step programs efficiently.
+**317 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, and per-object conditional recoloring.
+**Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
+**Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
 
-**On M1 Max (10 cores):** roughly 5x faster than the times above.
-
-The ~10% solve rate is the Phase 1 baseline. The key metric is whether
-solve rate **increases across rounds** as the library grows — that validates compounding.
+The key metric is whether solve rate **increases across rounds** as the library grows — that validates compounding.
 
 ### Options
 
@@ -201,7 +225,7 @@ agi-core/
 │   └── phase1_arc.py        # ARC curriculum training (dataset loading + ARC wiring)
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
-│   ├── arc/                 # ARC-AGI grid transformations (101 primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (317 primitives)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
@@ -211,7 +235,7 @@ agi-core/
 │   └── symbolic_math/       # 1D symbolic regression (15 math primitives)
 │       └── __init__.py      # All 4 interfaces in one file
 │
-├── tests/                   # Test suite (323 tests)
+├── tests/                   # Test suite (380 tests)
 │   ├── test_arc.py
 │   ├── test_exhaustive_enum.py
 │   ├── test_interfaces.py
@@ -248,7 +272,7 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** 🔧 ARC-AGI-1 training, curriculum style (101 primitives, beam search, wake-sleep)
+- **Phase 1** 🔧 ARC-AGI-1 training, curriculum style (317 primitives, beam search, wake-sleep)
 - **Phase 2** ARC-AGI-1 eval, zero-shot transfer
 - **Phase 3** Second domain (Zork), same core, cold start
 - **Phase 4** Cross-domain library transfer
