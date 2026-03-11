@@ -41,19 +41,19 @@ from .metrics import extract_metrics, print_compounding_table, save_metrics_json
 
 PRESETS = {
     "quick": {
-        "rounds": 2,
+        "rounds": 1,
         "beam_width": 80,
         "max_generations": 40,
         "max_tasks": 0,
     },
     "default": {
-        "rounds": 3,
+        "rounds": 1,
         "beam_width": 150,
         "max_generations": 80,
         "max_tasks": 0,
     },
     "contest": {
-        "rounds": 10,
+        "rounds": 1,
         "beam_width": 500,
         "max_generations": 200,
         "max_tasks": 0,
@@ -213,7 +213,7 @@ Examples:
     parser.add_argument("--max-tasks", type=int, default=None,
                         help="Limit number of tasks (0 = all, default: from preset)")
     parser.add_argument("--rounds", type=int, default=None,
-                        help="Wake-sleep rounds (default: from preset)")
+                        help="Wake-sleep rounds (default: 1)")
     parser.add_argument("--beam-width", type=int, default=None,
                         help="Beam width (default: from preset)")
     parser.add_argument("--max-generations", type=int, default=None,
@@ -408,7 +408,7 @@ class ExperimentConfig:
     drive: DriveSignal
 
     # Search parameters (resolved from preset + overrides)
-    rounds: int = 3
+    rounds: int = 1
     beam_width: int = 150
     max_generations: int = 80
     workers: int = 0
