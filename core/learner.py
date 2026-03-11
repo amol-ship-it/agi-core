@@ -219,7 +219,8 @@ class Learner:
         t_phase = time.time()
         if cfg.exhaustive_depth >= 1:
             enum_candidates, n_enum_evals = self._exhaustive_enumerate(
-                all_prims, task, cfg.exhaustive_depth)
+                all_prims, task, cfg.exhaustive_depth,
+                eval_budget=eval_budget)
             n_evals += n_enum_evals
             for sp in enum_candidates:
                 self._update_pareto_front(pareto, sp)
@@ -248,7 +249,7 @@ class Learner:
         # Try applying the same transform to each object independently.
         # High-ROI for tasks where objects are transformed in-place.
         t_phase = time.time()
-        decomp_result = self.env.try_object_decomposition(task, all_prims)
+        decomp_result = self.env.try_object_decomposition(task, all_prims) if _budget_ok() else None
         if decomp_result is not None:
             name, fn = decomp_result
             prog = Program(root=name)
@@ -282,7 +283,7 @@ class Learner:
         # per group. Cost: O(P × top_k²) where P = #predicates (~17).
         t_phase = time.time()
         predicates = self.grammar.get_predicates()
-        if predicates and enum_candidates:
+        if predicates and enum_candidates and _budget_ok():
             cond_result, n_cond_evals = self._try_conditional_search(
                 predicates, enum_candidates, all_prims, task)
             n_evals += n_cond_evals
@@ -1204,6 +1205,7 @@ class Learner:
         task: Task,
         max_depth: int = 2,
         top_k: int = 15,
+        eval_budget: int = 0,
     ) -> tuple[list[ScoredProgram], int]:
         """
         Enumerate ALL programs up to max_depth and evaluate them.
@@ -1218,6 +1220,9 @@ class Learner:
         This catches solutions where the first step scores low individually
         but is critical as a structural setup (e.g. crop, fill, compress).
 
+        eval_budget: max evaluations (0 = unlimited). Budget is checked
+        between depth phases and within inner loops.
+
         Returns (scored_programs, num_evaluations).
         """
         scored: list[ScoredProgram] = []
@@ -1225,6 +1230,9 @@ class Learner:
         solve_thresh = self.search_cfg.solve_threshold
         pair_top_k = self.search_cfg.exhaustive_pair_top_k
         triple_top_k = self.search_cfg.exhaustive_triple_top_k
+
+        def _budget_ok() -> bool:
+            return eval_budget <= 0 or n_evals < eval_budget
 
         # --- Depth 1: all single primitives ---
         unary_prims = [p for p in primitives if p.arity <= 1]
@@ -1237,7 +1245,7 @@ class Learner:
             if sp.prediction_error <= solve_thresh:
                 return scored, n_evals
 
-        if max_depth < 2:
+        if max_depth < 2 or not _budget_ok():
             return scored, n_evals
 
         # --- Build pair pool: top-K singles + essential concepts ---
@@ -1290,7 +1298,11 @@ class Learner:
 
         # --- Depth 2: exhaustive K² pairs ---
         for outer_name in pair_pool:
+            if not _budget_ok():
+                break
             for inner_name in pair_pool:
+                if not _budget_ok():
+                    break
                 prog = Program(root=outer_name, children=[
                     Program(root=inner_name)])
                 sp = self._evaluate_program(prog, task)
@@ -1299,7 +1311,7 @@ class Learner:
                 if sp.prediction_error <= solve_thresh:
                     return scored, n_evals
 
-        if max_depth < 3:
+        if max_depth < 3 or not _budget_ok():
             return scored, n_evals
 
         # --- Build triple pool: use depth-2 results + essentials ---
@@ -1343,8 +1355,14 @@ class Learner:
 
         # --- Depth 3: exhaustive K³ triples ---
         for a in triple_pool:
+            if not _budget_ok():
+                break
             for b in triple_pool:
+                if not _budget_ok():
+                    break
                 for c in triple_pool:
+                    if not _budget_ok():
+                        break
                     # Skip degenerate a(a(a(x))) — already tested as single
                     if a == b == c:
                         continue

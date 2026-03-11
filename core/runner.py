@@ -45,21 +45,21 @@ PRESETS = {
         "beam_width": 30,
         "max_generations": 15,
         "max_tasks": 50,
-        "compute_cap": 5_000_000,   # 5M ops → ~6K evals/task, caps large grids (~2 min)
+        "compute_cap": 8_000_000,   # 8M ops → ~10K evals/task ceiling
     },
     "default": {
         "rounds": 1,
         "beam_width": 80,
         "max_generations": 40,
         "max_tasks": 0,
-        "compute_cap": 50_000_000,  # 50M ops → ~62K evals/task, prevents runaway tasks
+        "compute_cap": 50_000_000,  # 50M ops → ~62K evals/task ceiling
     },
     "contest": {
         "rounds": 1,
         "beam_width": 250,
         "max_generations": 100,
         "max_tasks": 0,
-        "compute_cap": 200_000_000, # 200M ops → ~250K evals/task, generous but bounded
+        "compute_cap": 200_000_000, # 200M ops → ~250K evals/task ceiling
     },
 }
 
@@ -196,14 +196,14 @@ def make_parser(description: str, domain_name: str = "experiment") -> argparse.A
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=f"""
 Presets (the only knob most users need):
-  quick     Fast dev loop (~2 min, 50 tasks, 5M compute cap)
+  quick     Fast dev loop (~2 min, 50 tasks, 8M compute cap)
   default   Balanced (all tasks, 50M compute cap)
-  contest   Maximum accuracy (all tasks, wide beam, 200M compute cap)
+  contest   Maximum accuracy (all tasks, 200M compute cap)
 
 Compute cap examples:
-  --compute-cap 50M          # 50 million total evaluations
+  --compute-cap 50M          # 50 million (cell-normalized per task)
   --compute-cap 500K         # 500 thousand
-  --compute-cap 0            # unlimited (default)
+  --compute-cap 0            # unlimited (no cap)
 
 Examples:
   python -m experiments.{domain_name}                    # sensible defaults
@@ -467,9 +467,7 @@ class ExperimentConfig:
 
 def resolve_from_preset(args, preset: dict) -> dict:
     """Resolve argument values: explicit args override preset defaults."""
-    # compute_cap: explicit --compute-cap overrides preset, but 0 (the argparse
-    # default) does NOT override a preset's non-zero cap. User must pass
-    # --compute-cap 0 explicitly to disable a preset's cap.
+    # CLI --compute-cap > 0 overrides preset; 0 means "use preset default"
     preset_cap = preset.get("compute_cap", 0)
     args_cap = getattr(args, "compute_cap", 0)
     explicit_cap = args_cap if args_cap > 0 else preset_cap
