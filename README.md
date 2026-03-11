@@ -35,9 +35,9 @@ The default command runs all 400 training tasks, saves the learned culture, then
 ### Syncing an existing clone
 
 ```bash
-cd agi-core && git pull origin main
+git pull origin main
 pip install -r requirements.txt
-cd data/ARC-AGI && git pull && cd ../..
+git -C data/ARC-AGI pull
 ```
 
 ## Usage
@@ -152,12 +152,12 @@ Compute budget = beam × gens. Early stopping saves unused compute on easy tasks
 
 ### Expected performance
 
-Benchmarked with 4 parallel workers (x86_64). Times scale inversely with workers.
+Times scale inversely with worker count and CPU speed.
 
-| Mode | Training | Eval (culture transfer) | Wall time |
-|------|----------|------------------------|-----------|
-| `quick` | ~12/50 (~24%), median 3.1s/task | ~4/50 (~8%) | **~2 min** |
-| `default` | **95/400 (23.8%)**, median 3.1s/task | **33/400 (8.2%)** | ~32 min |
+| Mode | Training | Eval (culture transfer) | Wall time (M1 Max, 8 workers) |
+|------|----------|------------------------|-------------------------------|
+| `quick` | ~12/50 (~24%) | ~4/50 (~8%) | **~2 min** |
+| `default` | **94/400 (23.5%)** | **31/400 (7.8%)** | **~11 min** |
 | `contest` | higher | TBD | ~3-4 hr |
 
 **317 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, and per-object conditional recoloring.
