@@ -46,7 +46,7 @@ git -C data/ARC-AGI pull
 # Full pipeline: train → save culture → eval (default, recommended)
 python -m experiments.phase1_arc
 
-# Quick subset for development (50 tasks, compute-capped, ~2 min)
+# Quick subset for development (50 tasks, 8M compute cap, ~2 min on M1 Max)
 python -m experiments.phase1_arc --mode quick
 
 # Train only, save culture for later
@@ -65,13 +65,13 @@ python -m experiments.phase1_arc --workers 1
 Tasks are **shuffled by default** using a deterministic seed (`--seed 42`), so any subset is a representative random sample. This means you can run fewer tasks and extrapolate to the full dataset:
 
 ```bash
-# Quick mode already uses 50 tasks — fastest way to iterate (~2 min)
+# Quick mode already uses 50 tasks — fastest way to iterate
 python -m experiments.phase1_arc --mode quick
 
 # Custom subset: 100 tasks with default search depth
 python -m experiments.phase1_arc --max-tasks 100
 
-# Tiny smoke test: 10 tasks (~20 sec)
+# Tiny smoke test: 10 tasks
 python -m experiments.phase1_arc --mode quick --max-tasks 10
 
 # Full 400-task benchmark with quick search settings
@@ -150,19 +150,33 @@ Three modes. Pick one. That's the only knob most users need.
 
 | Mode | Tasks | Beam | Gens | Compute Cap | Use case |
 |------|-------|------|------|-------------|----------|
-| `quick` | 50 | 30 | 15 | 8M | Fast dev loop (~2 min) |
+| `quick` | 50 | 30 | 15 | 8M | Fast dev loop |
 | `default` | all (400) | 80 | 40 | 50M | Balanced speed/accuracy |
 | `contest` | all (400) | 250 | 100 | 200M | Maximum accuracy |
 
-All presets run 1 round and use deterministic seed 42 by default.
+All presets run **1 round** with **seed 42** by default. Results are fully deterministic.
 
-**Compute cap** is cell-normalized: small grids (cheap to evaluate) get more search, large grids (expensive) get capped. This prevents runaway tasks from dominating wall time. Override with `--compute-cap`:
+**Compute cap** is cell-normalized: small grids (cheap to evaluate) get more search budget, large grids (expensive) get capped. The per-task ceiling is `compute_cap / 800` (800 = median ARC grid cells). For quick mode at 8M: ceiling = 10,000 evals/task. Override with `--compute-cap`:
 
 ```bash
 python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 ```
 
-**Reproducibility:** All runs are fully deterministic. Same seed + same preset = identical results regardless of machine. The seed controls task shuffling, search randomness, and per-task worker seeds.
+### Expected performance
+
+Times measured on M1 Max with 8 workers. Scale inversely with worker count and CPU speed.
+
+| Mode | Training | Eval (culture transfer) | Wall time (M1 Max, 8 workers) |
+|------|----------|------------------------|-------------------------------|
+| `quick` | ~13/50 (~26%) | ~4/50 (~8%) | **~2 min** |
+| `default` | **~108/400 (~27%)** | **~35/400 (~9%)** | **~11 min** |
+| `contest` | higher | TBD | ~3-4 hr |
+
+**330 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
+**Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
+**Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
+
+The key metric is whether solve rate **increases across rounds** as the library grows — that validates compounding.
 
 ## Options
 
@@ -174,14 +188,14 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 | `--eval-only` | off | Eval only (requires `--culture`) |
 | `--culture` | none | Culture file to load (cross-run knowledge transfer) |
 | `--save-culture` | auto | Override auto culture save path |
-| `--max-tasks` | from preset | Limit tasks (0 = all). Quick: 50, default/contest: all |
+| `--max-tasks` | from preset | Limit tasks (0 = all). Quick: `50`, default/contest: all |
 | `--rounds` | `1` | Wake-sleep rounds |
-| `--beam-width` | from preset | Candidates per generation. Quick: 30, default: 80, contest: 250 |
-| `--max-generations` | from preset | Generations per task. Quick: 15, default: 40, contest: 100 |
-| `--workers` | perf cores | Parallel workers (0 = auto-detect performance cores) |
+| `--beam-width` | from preset | Candidates per generation. Quick: `30`, default: `80`, contest: `250` |
+| `--max-generations` | from preset | Generations per task. Quick: `15`, default: `40`, contest: `100` |
+| `--workers` | `0` (perf cores) | Parallel workers. `0` = auto-detect performance cores |
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
-| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick: 8M, default: 50M, contest: 200M |
-| `--exhaustive-depth` | `3` | Exhaustive enumeration depth (0=off, 2=pairs, 3=triples) |
+| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick: `8M`, default: `50M`, contest: `200M`. `0` = unlimited |
+| `--exhaustive-depth` | `3` | Exhaustive enumeration depth (`0`=off, `2`=pairs, `3`=triples) |
 | `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
 | `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |
 | `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
@@ -194,6 +208,7 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 ### The wake-sleep loop
 
 1. **WAKE**: For each task, search for a program that transforms input to output.
+   All search phases respect the per-task compute budget — large grids get fewer evaluations.
    - **Exhaustive enumeration** (depth 1-3): systematically tries all single primitives, top-K pairs, and top-K triples. Solves ~97% of solvable tasks.
    - **Object decomposition**: detects per-object transform patterns via connected components, with conditional recoloring by size, shape, or position.
    - **Conditional branching**: partitions inputs by predicates (symmetric, tall, square, etc.) and finds per-group transforms.
@@ -267,7 +282,7 @@ agi-core/
 │   └── symbolic_math/       # 1D symbolic regression (15 math primitives)
 │       └── __init__.py      # All 4 interfaces in one file
 │
-├── tests/                   # Test suite (380 tests, 12 files)
+├── tests/                   # Test suite (380 tests, 10 files)
 │   ├── test_arc.py
 │   ├── test_color_fix.py
 │   ├── test_conditional_search.py

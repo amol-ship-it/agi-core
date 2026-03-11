@@ -1220,6 +1220,9 @@ class Learner:
         This catches solutions where the first step scores low individually
         but is critical as a structural setup (e.g. crop, fill, compress).
 
+        eval_budget: max evaluations (0 = unlimited). Budget is checked
+        between depth phases and within inner loops.
+
         Returns (scored_programs, num_evaluations).
         """
         scored: list[ScoredProgram] = []
