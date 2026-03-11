@@ -10,11 +10,10 @@ The actual experiment loop, progress tracking, output formatting,
 and results saving are all in core/runner.py — domain-agnostic.
 
 Usage:
-    python -m experiments.phase1_arc                      # train on training set
-    python -m experiments.phase1_arc --mode quick          # fast dev loop
-    python -m experiments.phase1_arc --mode contest         # max accuracy
-    python -m experiments.phase1_arc --pipeline             # train then eval
-    python -m experiments.phase1_arc --eval --culture runs/XXX_culture.json
+    python -m experiments.phase1_arc                      # full pipeline (train → eval)
+    python -m experiments.phase1_arc --mode quick          # fast dev loop (pipeline)
+    python -m experiments.phase1_arc --train-only          # train on training set only
+    python -m experiments.phase1_arc --eval-only --culture runs/XXX_culture.json
 """
 
 from __future__ import annotations
@@ -59,168 +58,41 @@ def find_arc_data(split: str = "training") -> str | None:
     return None
 
 
-# =============================================================================
-# Main
-# =============================================================================
-
-def main():
-    parser = make_parser(
-        description="Phase 1: ARC-AGI-1 Curriculum Training & Evaluation",
-        domain_name="phase1_arc",
-    )
-    parser.add_argument("--data-dir", type=str, default=None,
-                        help="Path to ARC-AGI data dir (auto-detected if not set)")
-    parser.add_argument("--eval", action="store_true",
-                        help="Run on evaluation set (requires --culture for cross-run transfer)")
-    parser.add_argument("--pipeline", action="store_true",
-                        help="Full pipeline: train on training set, then eval on evaluation set")
-    args = parser.parse_args()
-
-    # Resolve preset + overrides
-    preset = PRESETS[args.mode]
-    resolved = resolve_from_preset(args, preset)
-    max_tasks = resolved["max_tasks"]
-
-    if args.pipeline:
-        # Full pipeline: train then eval
-        _run_train_eval_pipeline(args, resolved, max_tasks)
-    elif args.eval:
-        # Eval only
-        _run_split(args, resolved, max_tasks, split="evaluation")
-    else:
-        # Train only (default)
-        _run_split(args, resolved, max_tasks, split="training")
-
-
-def _run_split(args, resolved, max_tasks, split="training"):
-    """Run experiment on a single data split."""
-    data_dir = args.data_dir or find_arc_data(split)
+def _load_tasks(split: str, data_dir: str | None, max_tasks: int):
+    """Load ARC tasks for a given split, with fallback to samples for training."""
+    data_dir = data_dir or find_arc_data(split)
 
     if data_dir:
         print(f"  Loading ARC-AGI {split} tasks from {data_dir}...")
         tasks = load_arc_dataset(data_dir, max_tasks=max_tasks)
         print(f"  Loaded {len(tasks)} tasks")
-    else:
-        if split == "evaluation":
-            print(f"  ERROR: Evaluation data not found. Searched:")
-            for p in ARC_DATA_SEARCH_PATHS:
-                print(f"    {p.format(split=split)}")
-            sys.exit(1)
+    elif split == "training":
         print("  ARC dataset not found. Using built-in sample tasks.")
         print("    (git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI)")
         tasks = make_sample_tasks()
         if max_tasks > 0:
             tasks = tasks[:max_tasks]
         print(f"  Created {len(tasks)} sample ARC tasks")
+    else:
+        print(f"  ERROR: {split.capitalize()} data not found. Searched:")
+        for p in ARC_DATA_SEARCH_PATHS:
+            print(f"    {p.format(split=split)}")
+        sys.exit(1)
 
     if not tasks:
         print("  ERROR: No tasks loaded.")
         sys.exit(1)
 
-    title = f"PHASE 1: ARC-AGI-1 {split.upper()}"
-    domain_tag = f"phase1_{split[:5]}"
+    return tasks
 
-    run_experiment(ExperimentConfig(
+
+def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
+                 tasks, culture_path: str = "") -> ExperimentConfig:
+    """Build an ExperimentConfig with ARC-specific defaults."""
+    return ExperimentConfig(
         title=title,
         domain_tag=domain_tag,
         tasks=tasks,
-        environment=ARCEnv(),
-        grammar=ARCGrammar(seed=args.seed),
-        drive=ARCDrive(),
-        rounds=resolved["rounds"],
-        beam_width=resolved["beam_width"],
-        max_generations=resolved["max_generations"],
-        workers=resolved["workers"],
-        seed=args.seed,
-        compute_cap=args.compute_cap,
-        mutations_per_candidate=2,
-        crossover_fraction=0.3,
-        energy_alpha=1.0,
-        energy_beta=0.002,
-        solve_threshold=0.001,
-        exhaustive_depth=args.exhaustive_depth,
-        exhaustive_top_k=args.exhaustive_top_k,
-        sequential_compounding=args.sequential_compounding,
-        culture_path=args.culture,
-        runs_dir=args.runs_dir,
-        no_log=args.no_log,
-        verbose=args.verbose,
-        mode=args.mode,
-    ))
-
-
-def _run_train_eval_pipeline(args, resolved, max_tasks):
-    """Full pipeline: train → save culture → eval with culture."""
-    print("=" * 72)
-    print("  PIPELINE MODE: Train → Save Culture → Evaluate")
-    print("=" * 72)
-    print()
-
-    # Step 1: Train
-    print("  STEP 1: Training...")
-    print()
-    train_dir = args.data_dir or find_arc_data("training")
-    if not train_dir:
-        print("  ERROR: Training data not found.")
-        sys.exit(1)
-
-    tasks = load_arc_dataset(train_dir, max_tasks=max_tasks)
-    print(f"  Loaded {len(tasks)} training tasks")
-
-    # Run training — culture file will be auto-saved by runner
-    run_experiment(ExperimentConfig(
-        title="PHASE 1: ARC-AGI-1 TRAINING (pipeline)",
-        domain_tag="phase1_train",
-        tasks=tasks,
-        environment=ARCEnv(),
-        grammar=ARCGrammar(seed=args.seed),
-        drive=ARCDrive(),
-        rounds=resolved["rounds"],
-        beam_width=resolved["beam_width"],
-        max_generations=resolved["max_generations"],
-        workers=resolved["workers"],
-        seed=args.seed,
-        compute_cap=args.compute_cap,
-        mutations_per_candidate=2,
-        crossover_fraction=0.3,
-        energy_alpha=1.0,
-        energy_beta=0.002,
-        solve_threshold=0.001,
-        exhaustive_depth=args.exhaustive_depth,
-        exhaustive_top_k=args.exhaustive_top_k,
-        sequential_compounding=args.sequential_compounding,
-        runs_dir=args.runs_dir,
-        no_log=args.no_log,
-        verbose=args.verbose,
-        mode=args.mode,
-    ))
-
-    # Find the most recent culture file
-    import glob
-    culture_files = sorted(glob.glob(os.path.join(args.runs_dir, "*_culture.json")))
-    if not culture_files:
-        print("  WARNING: No culture file produced. Running eval without culture.")
-        culture_path = ""
-    else:
-        culture_path = culture_files[-1]
-        print(f"\n  Culture file: {culture_path}")
-
-    # Step 2: Evaluate
-    print()
-    print("  STEP 2: Evaluating...")
-    print()
-    eval_dir = find_arc_data("evaluation")
-    if not eval_dir:
-        print("  ERROR: Evaluation data not found.")
-        sys.exit(1)
-
-    eval_tasks = load_arc_dataset(eval_dir, max_tasks=max_tasks)
-    print(f"  Loaded {len(eval_tasks)} evaluation tasks")
-
-    run_experiment(ExperimentConfig(
-        title="PHASE 1: ARC-AGI-1 EVALUATION (pipeline)",
-        domain_tag="phase1_eval",
-        tasks=eval_tasks,
         environment=ARCEnv(),
         grammar=ARCGrammar(seed=args.seed),
         drive=ARCDrive(),
@@ -243,7 +115,98 @@ def _run_train_eval_pipeline(args, resolved, max_tasks):
         no_log=args.no_log,
         verbose=args.verbose,
         mode=args.mode,
-    ))
+    )
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def main():
+    parser = make_parser(
+        description="Phase 1: ARC-AGI-1 Curriculum Training & Evaluation",
+        domain_name="phase1_arc",
+    )
+    parser.add_argument("--data-dir", type=str, default=None,
+                        help="Path to ARC-AGI data dir (auto-detected if not set)")
+    parser.add_argument("--train-only", action="store_true",
+                        help="Run on training set only (no eval)")
+    parser.add_argument("--eval-only", action="store_true",
+                        help="Run on evaluation set only (requires --culture)")
+    # Keep --eval and --pipeline as hidden aliases for backward compat
+    parser.add_argument("--eval", action="store_true", dest="eval_only",
+                        help="Alias for --eval-only")
+    parser.add_argument("--pipeline", action="store_true",
+                        help="(default behavior, kept for backward compat)")
+    args = parser.parse_args()
+
+    # Resolve preset + overrides
+    preset = PRESETS[args.mode]
+    resolved = resolve_from_preset(args, preset)
+    max_tasks = resolved["max_tasks"]
+
+    if args.eval_only:
+        if not args.culture:
+            print("  ERROR: --eval-only requires --culture <path>")
+            sys.exit(1)
+        _run_eval(args, resolved, max_tasks)
+    elif args.train_only:
+        _run_train(args, resolved, max_tasks)
+    else:
+        # Default: full pipeline (train → eval)
+        _run_pipeline(args, resolved, max_tasks)
+
+
+def _run_train(args, resolved, max_tasks):
+    """Run training only."""
+    tasks = _load_tasks("training", args.data_dir, max_tasks)
+    cfg = _make_config(args, resolved, max_tasks,
+                       title="PHASE 1: ARC-AGI-1 TRAINING",
+                       domain_tag="phase1_train",
+                       tasks=tasks)
+    run_experiment(cfg)
+
+
+def _run_eval(args, resolved, max_tasks):
+    """Run evaluation only with a pre-trained culture file."""
+    tasks = _load_tasks("evaluation", args.data_dir, max_tasks)
+    cfg = _make_config(args, resolved, max_tasks,
+                       title="PHASE 1: ARC-AGI-1 EVALUATION",
+                       domain_tag="phase1_eval",
+                       tasks=tasks,
+                       culture_path=args.culture)
+    run_experiment(cfg)
+
+
+def _run_pipeline(args, resolved, max_tasks):
+    """Full pipeline: train → save culture → eval with culture."""
+    print("=" * 72)
+    print("  PIPELINE MODE: Train → Save Culture → Evaluate")
+    print("=" * 72)
+    print()
+
+    # Step 1: Train
+    print("  STEP 1: Training...")
+    print()
+    train_tasks = _load_tasks("training", args.data_dir, max_tasks)
+    train_cfg = _make_config(args, resolved, max_tasks,
+                             title="PHASE 1: ARC-AGI-1 TRAINING (pipeline)",
+                             domain_tag="phase1_train",
+                             tasks=train_tasks)
+    culture_path = run_experiment(train_cfg)
+    print(f"\n  Culture file: {culture_path}")
+
+    # Step 2: Evaluate using the culture file produced by training
+    print()
+    print("  STEP 2: Evaluating...")
+    print()
+    eval_tasks = _load_tasks("evaluation", args.data_dir, max_tasks)
+    eval_cfg = _make_config(args, resolved, max_tasks,
+                            title="PHASE 1: ARC-AGI-1 EVALUATION (pipeline)",
+                            domain_tag="phase1_eval",
+                            tasks=eval_tasks,
+                            culture_path=culture_path)
+    run_experiment(eval_cfg)
 
     print()
     print("=" * 72)

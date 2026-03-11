@@ -49,12 +49,12 @@ cd data/ARC-AGI && git pull && cd ../..
 
 ```bash
 # Just run it. No flags needed.
-# Auto-detects ARC data, uses performance cores, sensible defaults.
+# Runs the full pipeline: train on 400 tasks → save culture → eval on 400 tasks.
 python -m experiments.phase1_arc
 ```
 
-If the ARC dataset is cloned (step 4 above), it runs on all 400 training tasks.
-If not, it falls back to built-in sample tasks.
+If the ARC dataset is cloned (step 4 above), it runs the full train→eval pipeline.
+If not, training falls back to built-in sample tasks.
 
 ### Other demos (no dataset needed)
 
@@ -85,9 +85,11 @@ Three modes. Pick one. That's the only knob most users need.
 Compute budget = beam × gens. Early stopping saves unused compute on easy tasks.
 
 ```bash
-python -m experiments.phase1_arc                  # default
-python -m experiments.phase1_arc --mode quick     # fast dev loop
-python -m experiments.phase1_arc --mode contest   # full benchmark
+python -m experiments.phase1_arc                  # default (full pipeline: train → eval)
+python -m experiments.phase1_arc --mode quick     # fast dev loop (pipeline)
+python -m experiments.phase1_arc --mode contest   # full benchmark (pipeline)
+python -m experiments.phase1_arc --train-only     # train only, no eval
+python -m experiments.phase1_arc --eval-only --culture runs/XXX_culture.json
 ```
 
 ### Expected performance

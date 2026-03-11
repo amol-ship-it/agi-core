@@ -438,8 +438,10 @@ def resolve_from_preset(args, preset: dict) -> dict:
     }
 
 
-def run_experiment(cfg: ExperimentConfig) -> None:
+def run_experiment(cfg: ExperimentConfig) -> str:
     """Run a complete wake-sleep experiment on any domain.
+
+    Returns the path to the saved culture file (for pipeline chaining).
 
     This is the top-level entry point. It:
     1. Sets up output files (log, jsonl, json, metrics, library)
@@ -463,6 +465,8 @@ def run_experiment(cfg: ExperimentConfig) -> None:
     metrics_json_path = os.path.join(runs_dir, f"{prefix}_metrics.json")
     metrics_csv_path = os.path.join(runs_dir, f"{prefix}_metrics.csv")
 
+    culture_path = library_path.replace("_library.json", "_culture.json")
+
     tee = None
     if not cfg.no_log:
         tee = TeeWriter(log_path, sys.stdout)
@@ -470,7 +474,8 @@ def run_experiment(cfg: ExperimentConfig) -> None:
 
     try:
         _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
-                        library_path, metrics_json_path, metrics_csv_path)
+                        library_path, metrics_json_path, metrics_csv_path,
+                        culture_path)
     except KeyboardInterrupt:
         print("\n\nAborted by user — partial results above.\n")
     finally:
@@ -478,9 +483,12 @@ def run_experiment(cfg: ExperimentConfig) -> None:
             sys.stdout = tee._original
             tee.close()
 
+    return culture_path
+
 
 def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
-                    library_path, metrics_json_path, metrics_csv_path):
+                    library_path, metrics_json_path, metrics_csv_path,
+                    culture_path):
     """Core run logic, separated so tee cleanup always happens."""
     machine = detect_machine()
     workers = cfg.workers if cfg.workers > 0 else Learner.performance_core_count()
@@ -746,7 +754,6 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     save_metrics_csv(metrics, metrics_csv_path)
 
     # Save culture file (proper serialization with program reconstruction)
-    culture_path = library_path.replace("_library.json", "_culture.json")
     memory.save_culture(culture_path)
     # Also save legacy format
     memory.save(library_path)
@@ -760,6 +767,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print(f"  Metrics JSON:     {metrics_json_path}")
     print(f"  Metrics CSV:      {metrics_csv_path}")
     print(f"  Library:          {library_path}")
+    print(f"  Culture:          {culture_path}")
     if not cfg.no_log:
         print(f"  Console log:      {log_path}")
 
