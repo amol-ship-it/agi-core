@@ -28,7 +28,7 @@ class ParetoEntry:
 class WakeResult:
     """What comes out of one wake phase."""
     task_id: str
-    solved: bool
+    train_solved: bool  # matched all training examples (error < threshold)
     best: Optional[ScoredProgram]
     generations_used: int
     evaluations: int = 0    # total program evaluations (deterministic compute measure)
@@ -36,7 +36,17 @@ class WakeResult:
     pareto_front: list[ParetoEntry] = field(default_factory=list)
     dedup_count: int = 0    # how many duplicates were removed
     test_error: Optional[float] = None  # error on held-out test examples (None if unavailable)
-    test_solved: Optional[bool] = None  # did the program solve the test examples?
+    test_solved: Optional[bool] = None  # did the program solve the held-out test examples?
+
+    @property
+    def solved(self) -> bool:
+        """A task is 'solved' only when its test examples are solved.
+
+        Falls back to train_solved when no test data is available.
+        """
+        if self.test_solved is not None:
+            return self.test_solved
+        return self.train_solved
 
 
 @dataclass
@@ -54,7 +64,17 @@ class RoundResult:
     round_number: int
     wake_results: list[WakeResult]
     sleep_result: SleepResult
-    tasks_solved: int
+    train_solved: int      # tasks matching training examples
     tasks_total: int
-    solve_rate: float
+    train_solve_rate: float
     cumulative_library_size: int
+
+    @property
+    def solved(self) -> int:
+        """Tasks solved = test-verified (falls back to train when no test data)."""
+        return sum(1 for w in self.wake_results if w.solved)
+
+    @property
+    def solve_rate(self) -> float:
+        """Solve rate = test-verified (falls back to train when no test data)."""
+        return self.solved / self.tasks_total if self.tasks_total > 0 else 0.0

@@ -999,7 +999,7 @@ class TestARCFullLoop(unittest.TestCase):
             tasks, CurriculumConfig(wake_sleep_rounds=1),
         )
         self.assertEqual(len(results), 1)
-        self.assertGreater(results[0].tasks_solved, 0)
+        self.assertGreater(results[0].solved, 0)
 
 
 class TestBatch4Primitives(unittest.TestCase):

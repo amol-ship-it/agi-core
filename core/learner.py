@@ -237,7 +237,7 @@ class Learner:
                     f"  [wake] Task {task.task_id}: SOLVED by enumeration, "
                     f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
                 return WakeResult(
-                    task_id=task.task_id, solved=True, best=best_so_far,
+                    task_id=task.task_id, train_solved=True, best=best_so_far,
                     generations_used=0, evaluations=n_evals, wall_time=wall,
                     pareto_front=front, dedup_count=0,
                     test_error=test_error, test_solved=test_solved)
@@ -269,7 +269,7 @@ class Learner:
                     f"  [wake] Task {task.task_id}: SOLVED by object decomposition, "
                     f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
                 return WakeResult(
-                    task_id=task.task_id, solved=True, best=best_so_far,
+                    task_id=task.task_id, train_solved=True, best=best_so_far,
                     generations_used=0, evaluations=n_evals, wall_time=wall,
                     pareto_front=front, dedup_count=0,
                     test_error=test_error, test_solved=test_solved)
@@ -302,7 +302,7 @@ class Learner:
                         f"  [wake] Task {task.task_id}: SOLVED by conditional, "
                         f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
                     return WakeResult(
-                        task_id=task.task_id, solved=True, best=best_so_far,
+                        task_id=task.task_id, train_solved=True, best=best_so_far,
                         generations_used=0, evaluations=n_evals, wall_time=wall,
                         pareto_front=front, dedup_count=0,
                         test_error=test_error, test_solved=test_solved)
@@ -334,7 +334,7 @@ class Learner:
                     f"  [wake] Task {task.task_id}: SOLVED by near-miss refinement, "
                     f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
                 return WakeResult(
-                    task_id=task.task_id, solved=True, best=best_so_far,
+                    task_id=task.task_id, train_solved=True, best=best_so_far,
                     generations_used=0, evaluations=n_evals, wall_time=wall,
                     pareto_front=front, dedup_count=0,
                     test_error=test_error, test_solved=test_solved)
@@ -364,7 +364,7 @@ class Learner:
                         f"  [wake] Task {task.task_id}: SOLVED by color fix, "
                         f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
                     return WakeResult(
-                        task_id=task.task_id, solved=True, best=best_so_far,
+                        task_id=task.task_id, train_solved=True, best=best_so_far,
                         generations_used=0, evaluations=n_evals, wall_time=wall,
                         pareto_front=front, dedup_count=0,
                         test_error=test_error, test_solved=test_solved)
@@ -497,14 +497,14 @@ class Learner:
         front = self._extract_pareto_front(pareto)
         wall = time.time() - t0
         logger.info(
-            f"  [wake] Task {task.task_id}: solved={solved}, "
+            f"  [wake] Task {task.task_id}: train_solved={solved}, "
             f"energy={best_so_far.energy:.6f}, gens={gens_used}, "
             f"evals={n_evals}, deduped={total_deduped}, "
             f"pareto={len(front)}, time={wall:.1f}s"
         )
         return WakeResult(
             task_id=task.task_id,
-            solved=solved,
+            train_solved=solved,
             best=best_so_far,
             generations_used=gens_used,
             evaluations=n_evals,
@@ -714,24 +714,25 @@ class Learner:
             sleep_result = self.sleep()
 
             # Metrics
-            solved = sum(1 for w in wake_results if w.solved)
+            train_solved = sum(1 for w in wake_results if w.train_solved)
             total = len(wake_results)
-            rate = solved / total if total > 0 else 0.0
+            train_rate = train_solved / total if total > 0 else 0.0
 
             rr = RoundResult(
                 round_number=round_num + 1,
                 wake_results=wake_results,
                 sleep_result=sleep_result,
-                tasks_solved=solved,
+                train_solved=train_solved,
                 tasks_total=total,
-                solve_rate=rate,
+                train_solve_rate=train_rate,
                 cumulative_library_size=len(self.memory.get_library()),
             )
             results.append(rr)
 
             logger.info(
                 f"=== Round {round_num + 1} summary: "
-                f"solved {solved}/{total} ({rate:.1%}), "
+                f"solved {rr.solved}/{total} ({rr.solve_rate:.1%}), "
+                f"train_matched {train_solved}/{total} ({train_rate:.1%}), "
                 f"library={rr.cumulative_library_size} ==="
             )
 
@@ -842,7 +843,7 @@ class Learner:
             if wr and wr.best:
                 self.memory.record_episode(
                     wr.task_id, [], wr.best.program, wr.best.energy)
-                if wr.solved:
+                if wr.train_solved:
                     self.memory.store_solution(wr.task_id, wr.best)
                     self._credit_library_usage(wr.best.program)
 
@@ -875,7 +876,7 @@ class Learner:
                 on_task_done(round_num, i + 1, total_tasks, wr)
 
             # Immediate concept promotion on solve
-            if wr.solved and wr.best:
+            if wr.train_solved and wr.best:
                 self._immediate_promote(wr.best, task.task_id)
 
         return wake_results
