@@ -9,3 +9,6 @@ build/
 .venv/
 data/
 .coverage
+experiments/results/
+library.json
+library/
