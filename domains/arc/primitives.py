@@ -4428,6 +4428,194 @@ def complete_sym_180(grid: Grid) -> Grid:
     return result
 
 
+def remove_small_components(grid: Grid, max_size: int = 2) -> Grid:
+    """Remove connected components with size <= max_size (set to 0).
+
+    Uses 4-connectivity. Removes noise clusters larger than single pixels
+    (which remove_color_noise handles) but smaller than real objects.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    visited: set[tuple[int, int]] = set()
+    result = [row[:] for row in grid]
+
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0 or (r, c) in visited:
+                continue
+            # BFS to find component
+            color = grid[r][c]
+            component: list[tuple[int, int]] = []
+            stack = [(r, c)]
+            visited.add((r, c))
+            while stack:
+                cr, cc = stack.pop()
+                component.append((cr, cc))
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = cr + dr, cc + dc
+                    if (0 <= nr < h and 0 <= nc < w
+                            and (nr, nc) not in visited
+                            and grid[nr][nc] == color):
+                        visited.add((nr, nc))
+                        stack.append((nr, nc))
+            if len(component) <= max_size:
+                for cr, cc in component:
+                    result[cr][cc] = 0
+    return result
+
+
+def remove_components_lte3(grid: Grid) -> Grid:
+    """Remove connected components with size <= 3."""
+    return remove_small_components(grid, max_size=3)
+
+
+def keep_solid_rectangle(grid: Grid) -> Grid:
+    """Keep only the largest solid monochromatic rectangle, zero the rest.
+
+    Finds all axis-aligned rectangles of uniform non-zero color and keeps
+    only the largest one. Useful for extracting signal from noise.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    best_rect = None
+    best_area = 0
+
+    # For each possible top-left corner and color
+    for r0 in range(h):
+        for c0 in range(w):
+            if grid[r0][c0] == 0:
+                continue
+            color = grid[r0][c0]
+            # Extend right as far as possible
+            max_c = c0
+            while max_c + 1 < w and grid[r0][max_c + 1] == color:
+                max_c += 1
+            # Extend down, narrowing width as needed
+            for r1 in range(r0, h):
+                if grid[r1][c0] != color:
+                    break
+                # Find rightmost extent in this row
+                row_max = c0
+                while row_max + 1 <= max_c and grid[r1][row_max + 1] == color:
+                    row_max += 1
+                max_c = row_max
+                area = (r1 - r0 + 1) * (max_c - c0 + 1)
+                if area > best_area:
+                    best_area = area
+                    best_rect = (r0, c0, r1, max_c, color)
+
+    if best_rect is None:
+        return grid
+
+    r0, c0, r1, c1, color = best_rect
+    result = [[0] * w for _ in range(h)]
+    for r in range(r0, r1 + 1):
+        for c in range(c0, c1 + 1):
+            result[r][c] = color
+    return result
+
+
+def propagate_in_subcells(grid: Grid) -> Grid:
+    """Detect sub-grid structure and propagate markers across sub-cells.
+
+    Identifies separator lines (full rows/cols of 0) that divide the grid
+    into a regular arrangement of sub-cells. In each sub-cell, finds
+    the dominant (most common) non-zero color and treats other non-zero
+    colors as markers. Propagates markers across sub-cells in the same
+    sub-grid row and column.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    # Find separator rows (all 0) and separator cols (all 0)
+    sep_rows = [r for r in range(h) if all(grid[r][c] == 0 for c in range(w))]
+    sep_cols = [c for c in range(w) if all(grid[r][c] == 0 for r in range(h))]
+
+    if not sep_rows or not sep_cols:
+        return grid
+
+    # Find cell boundaries
+    def _find_ranges(seps, total):
+        ranges = []
+        prev = 0
+        for s in seps:
+            if s > prev:
+                ranges.append((prev, s))
+            prev = s + 1
+        if prev < total:
+            ranges.append((prev, total))
+        return ranges
+
+    row_ranges = _find_ranges(sep_rows, h)
+    col_ranges = _find_ranges(sep_cols, w)
+
+    if len(row_ranges) < 2 or len(col_ranges) < 2:
+        return grid
+
+    # Check all sub-cells have the same size
+    cell_h = row_ranges[0][1] - row_ranges[0][0]
+    cell_w = col_ranges[0][1] - col_ranges[0][0]
+    if not all(r1 - r0 == cell_h for r0, r1 in row_ranges):
+        return grid
+    if not all(c1 - c0 == cell_w for c0, c1 in col_ranges):
+        return grid
+
+    n_rows = len(row_ranges)
+    n_cols = len(col_ranges)
+
+    # Extract sub-cell content
+    cells = [[None] * n_cols for _ in range(n_rows)]
+    for ri, (r0, r1) in enumerate(row_ranges):
+        for ci, (c0, c1) in enumerate(col_ranges):
+            cell = []
+            for r in range(r0, r1):
+                row = []
+                for c in range(c0, c1):
+                    row.append(grid[r][c])
+                cell.append(row)
+            cells[ri][ci] = cell
+
+    # Find the dominant non-zero color across all sub-cells
+    from collections import Counter
+    all_nz = [v for ri in range(n_rows) for ci in range(n_cols)
+              for row in cells[ri][ci] for v in row if v != 0]
+    if not all_nz:
+        return grid
+    dominant = Counter(all_nz).most_common(1)[0][0]
+
+    # A marker is any non-zero, non-dominant pixel in a sub-cell
+    def _get_markers(cell):
+        markers = []
+        for dr in range(cell_h):
+            for dc in range(cell_w):
+                if cell[dr][dc] != 0 and cell[dr][dc] != dominant:
+                    markers.append((dr, dc, cell[dr][dc]))
+        return markers
+
+    result = [row[:] for row in grid]
+
+    # Propagate: if a cell has markers, copy those markers to all cells
+    # in the same sub-grid row
+    for ri in range(n_rows):
+        for ci in range(n_cols):
+            markers = _get_markers(cells[ri][ci])
+            if not markers:
+                continue
+            for ci2 in range(n_cols):
+                if ci2 == ci:
+                    continue
+                r0, _ = row_ranges[ri]
+                c0, _ = col_ranges[ci2]
+                for dr, dc, color in markers:
+                    result[r0 + dr][c0 + dc] = color
+
+    return result
+
+
 def mark_intersections_exclude_axis(grid: Grid) -> Grid:
     """Mark row/col intersections with color 2, excluding the axes' own crossing.
 
@@ -4958,6 +5146,10 @@ def _build_arc_primitives() -> list[Primitive]:
         ("rect_around_objs",        draw_rect_around_objects),
         # --- Batch 5: targeted near-miss improvements ---
         ("complete_sym_180",        complete_sym_180),
+        ("remove_small_2",          remove_small_components),
+        ("remove_small_3",          remove_components_lte3),
+        ("keep_solid_rect",         keep_solid_rectangle),
+        ("propagate_subcells",      propagate_in_subcells),
         ("mark_inters_excl_axis",   mark_intersections_exclude_axis),
         ("flood_fill_accent",       flood_fill_enclosed_with_accent),
         ("draw_diag_nearest",       draw_diagonal_nearest),
