@@ -49,6 +49,15 @@ _ARC_ESSENTIAL_PAIR_CONCEPTS: frozenset = frozenset([
     "keep_unique_rows",
     "keep_unique_cols",
     "fill_enclosed_dominant",
+    # Batch 4 additions
+    "select_odd_cell",
+    "overlay_cells",
+    "majority_cells",
+    "draw_cross_contact",
+    "connect_h",
+    "connect_v",
+    "surround_3x3",
+    "fill_convex_hull",
 ])
 
 
