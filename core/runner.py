@@ -239,6 +239,8 @@ Examples:
                         help="Process tasks sequentially with immediate concept promotion")
     parser.add_argument("--culture", type=str, default="",
                         help="Path to culture file to load (cross-run knowledge transfer)")
+    parser.add_argument("--save-culture", type=str, default="",
+                        help="Override auto culture save path (e.g. culture_train.json)")
     return parser
 
 
@@ -259,6 +261,7 @@ class ProgressTracker:
         self._file = open(jsonl_path, "w")
         self._t0 = t0
 
+        # Cumulative (across all rounds)
         self.done = 0
         self.solved = 0
         self.total_evals = 0
@@ -267,13 +270,26 @@ class ProgressTracker:
         self.times: list[float] = []
         self.all_records: list[dict] = []
 
+        # Per-round tracking (reset each round)
+        self._current_round = -1
+        self._round_done = 0
+        self._round_solved = 0
+
     def on_task_done(
         self, round_num: int, task_index: int, total_tasks: int, wr: WakeResult,
     ) -> None:
         """Called after each task completes. Streams live output."""
+        # Reset per-round counters on new round
+        if round_num != self._current_round:
+            self._current_round = round_num
+            self._round_done = 0
+            self._round_solved = 0
+
         self.done += 1
+        self._round_done += 1
         if wr.solved:
             self.solved += 1
+            self._round_solved += 1
         self.total_evals += wr.evaluations
         self.total_gens += wr.generations_used
         if wr.best:
@@ -284,6 +300,11 @@ class ProgressTracker:
         icon = "✓" if wr.solved else "✗"
         energy_str = f"{wr.best.energy:.4f}" if wr.best else "    N/A"
         program_str = repr(wr.best.program) if wr.best else ""
+
+        # Test accuracy tag
+        test_tag = ""
+        if wr.test_solved is not None:
+            test_tag = " [test:✓]" if wr.test_solved else " [test:✗]"
 
         slow_tag = ""
         if len(self.times) >= 5:
@@ -296,14 +317,13 @@ class ProgressTracker:
             f"{wr.task_id:<20s} "
             f"E={energy_str}  gens={wr.generations_used:<4d} "
             f"evals={wr.evaluations:<6d} {wr.wall_time:.1f}s"
-            f"{slow_tag}",
+            f"{test_tag}{slow_tag}",
             flush=True,
         )
         if wr.solved and program_str:
             print(f"       program: {program_str}")
         print(
-            f"       done={self.done}  "
-            f"solved={self.solved}/{self.done}  "
+            f"       R{round_num}: solved={self._round_solved}/{self._round_done}  "
             f"evals={self.total_evals:,}  "
             f"[{fmt_duration(elapsed)} elapsed]",
         )
@@ -313,6 +333,8 @@ class ProgressTracker:
             "task_index": task_index,
             "task_id": wr.task_id,
             "solved": wr.solved,
+            "test_solved": wr.test_solved,
+            "test_error": round(wr.test_error, 6) if wr.test_error is not None else None,
             "energy": wr.best.energy if wr.best else None,
             "prediction_error": wr.best.prediction_error if wr.best else None,
             "generations": wr.generations_used,
@@ -346,8 +368,8 @@ class ProgressTracker:
             f"{rate:.1f} tasks/s ──"
         )
         print(
-            f"  │  ✓ solved={self.solved}/{self.done}  "
-            f"✗ unsolved={self.done - self.solved}/{self.done}"
+            f"  │  R{round_num}: ✓ solved={self._round_solved}/{self._round_done}  "
+            f"✗ unsolved={self._round_done - self._round_solved}/{self._round_done}"
         )
         print(
             f"  │  Energy: mean={mean_energy:.4f}  "
@@ -412,6 +434,7 @@ class ExperimentConfig:
 
     # Culture file (load pre-trained library)
     culture_path: str = ""
+    save_culture: str = ""  # override auto-generated culture output path
 
     # Output
     runs_dir: str = DEFAULT_RUNS_DIR
@@ -431,8 +454,10 @@ def resolve_from_preset(args, preset: dict) -> dict:
     }
 
 
-def run_experiment(cfg: ExperimentConfig) -> None:
+def run_experiment(cfg: ExperimentConfig) -> str:
     """Run a complete wake-sleep experiment on any domain.
+
+    Returns the path to the saved culture file (for pipeline chaining).
 
     This is the top-level entry point. It:
     1. Sets up output files (log, jsonl, json, metrics, library)
@@ -456,6 +481,9 @@ def run_experiment(cfg: ExperimentConfig) -> None:
     metrics_json_path = os.path.join(runs_dir, f"{prefix}_metrics.json")
     metrics_csv_path = os.path.join(runs_dir, f"{prefix}_metrics.csv")
 
+    culture_path = (cfg.save_culture if cfg.save_culture
+                     else library_path.replace("_library.json", "_culture.json"))
+
     tee = None
     if not cfg.no_log:
         tee = TeeWriter(log_path, sys.stdout)
@@ -463,7 +491,8 @@ def run_experiment(cfg: ExperimentConfig) -> None:
 
     try:
         _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
-                        library_path, metrics_json_path, metrics_csv_path)
+                        library_path, metrics_json_path, metrics_csv_path,
+                        culture_path)
     except KeyboardInterrupt:
         print("\n\nAborted by user — partial results above.\n")
     finally:
@@ -471,9 +500,12 @@ def run_experiment(cfg: ExperimentConfig) -> None:
             sys.stdout = tee._original
             tee.close()
 
+    return culture_path
+
 
 def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
-                    library_path, metrics_json_path, metrics_csv_path):
+                    library_path, metrics_json_path, metrics_csv_path,
+                    culture_path):
     """Core run logic, separated so tee cleanup always happens."""
     machine = detect_machine()
     workers = cfg.workers if cfg.workers > 0 else Learner.performance_core_count()
@@ -602,15 +634,33 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print("  FINAL RESULTS")
     hline("═")
 
-    print(f"  Tasks:             {tracker.done}")
-    print(f"  Solved:            {tracker.solved}/{tracker.done}")
-    if tracker.scores:
-        print(f"  Mean energy:       {statistics.mean(tracker.scores):.4f}")
+    # Use last round's metrics for the headline numbers (not cumulative)
+    last = metrics[-1] if metrics else None
+    n_tasks = len(tasks)
+
+    if last:
+        print(f"  Tasks:             {n_tasks}")
+        print(f"  ✓ Solved (train):  {last.tasks_solved}/{n_tasks}  "
+              f"({last.solve_rate:.1%})")
+    else:
+        print(f"  Tasks:             {n_tasks}")
+
+    # Test accuracy (generalization) — deduplicate by task_id, last round wins
+    all_wake = [wr for rr in results for wr in rr.wake_results]
+    test_by_task: dict[str, bool] = {}
+    for wr in all_wake:
+        if wr.test_solved is not None:
+            test_by_task[wr.task_id] = wr.test_solved
+    if test_by_task:
+        unique_test_solved = sum(1 for v in test_by_task.values() if v)
+        unique_test_total = len(test_by_task)
+        print(f"  ✓ Solved (test):   {unique_test_solved}/{unique_test_total}  "
+              f"({unique_test_solved / max(unique_test_total, 1):.1%})")
+
+    print(f"  Rounds:            {rounds}")
     print(f"  Total evaluations: {total_evals:,}")
-    print(f"  Total generations: {tracker.total_gens:,}")
     if tracker.times:
         print(f"  Median task time:  {statistics.median(tracker.times):.2f}s")
-        print(f"  Mean task time:    {statistics.mean(tracker.times):.2f}s")
     print(f"  Wall-clock time:   {fmt_duration(total_time)}")
     throughput = tracker.done / max(total_time, 0.001)
     print(f"  Throughput:        {throughput:.1f} tasks/s ({workers} workers)")
@@ -662,9 +712,11 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             "machine": machine,
         },
         "summary": {
-            "tasks_completed": tracker.done,
-            "tasks_solved": tracker.solved,
-            "solve_rate": tracker.solved / max(tracker.done, 1),
+            "n_tasks": len(tasks),
+            "rounds": rounds,
+            "last_round_solved": last.tasks_solved if last else 0,
+            "last_round_solve_rate": round(last.solve_rate, 4) if last else 0,
+            "total_task_instances": tracker.done,
             "mean_energy": round(statistics.mean(tracker.scores), 4) if tracker.scores else None,
             "total_evaluations": total_evals,
             "total_generations": tracker.total_gens,
@@ -721,7 +773,6 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     save_metrics_csv(metrics, metrics_csv_path)
 
     # Save culture file (proper serialization with program reconstruction)
-    culture_path = library_path.replace("_library.json", "_culture.json")
     memory.save_culture(culture_path)
     # Also save legacy format
     memory.save(library_path)
@@ -735,6 +786,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print(f"  Metrics JSON:     {metrics_json_path}")
     print(f"  Metrics CSV:      {metrics_csv_path}")
     print(f"  Library:          {library_path}")
+    print(f"  Culture:          {culture_path}")
     if not cfg.no_log:
         print(f"  Console log:      {log_path}")
 

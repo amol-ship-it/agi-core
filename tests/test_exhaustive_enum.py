@@ -17,8 +17,9 @@ from core import (
     Learner, InMemoryStore, SearchConfig, SleepConfig, CurriculumConfig,
 )
 from core.memory import _program_to_dict, _program_from_dict
-from grammars.arc import (
-    ARCEnv, ARCGrammar, ARCDrive, ARC_PRIMITIVES,
+from domains.arc import ARCEnv, ARCGrammar, ARCDrive, ARC_PRIMITIVES
+from domains.arc.dataset import make_sample_tasks
+from domains.arc.primitives import (
     extract_largest_object, extract_smallest_object,
     anti_diagonal_mirror, make_symmetric_h, make_symmetric_v,
     repeat_pattern_right, repeat_pattern_down,
@@ -26,7 +27,7 @@ from grammars.arc import (
     sort_rows_by_color_count, sort_cols_by_color_count,
     unique_rows, unique_cols, recolor_by_size_rank,
     extend_lines_h, extend_lines_v,
-    make_sample_tasks, rotate_90_cw, mirror_horizontal,
+    rotate_90_cw, mirror_horizontal,
 )
 
 

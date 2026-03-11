@@ -35,6 +35,8 @@ class WakeResult:
     wall_time: float = 0.0
     pareto_front: list[ParetoEntry] = field(default_factory=list)
     dedup_count: int = 0    # how many duplicates were removed
+    test_error: Optional[float] = None  # error on held-out test examples (None if unavailable)
+    test_solved: Optional[bool] = None  # did the program solve the test examples?
 
 
 @dataclass

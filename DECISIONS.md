@@ -396,4 +396,29 @@ Cyclic shifts (4), symmetry completion (2), split-by-separator (2), morphologica
 
 ---
 
+## Session — Codebase Audit & Refactoring (March 11, 2026)
+
+### Audit: Self-Review of Entire Codebase
+
+Performed a full audit as if looking at the repository for the first time.
+
+**Bugs fixed:**
+1. **`_wake_on_task_no_record` was a 175-line copy-paste of `wake_on_task`** — refactored into shared `_wake_core(task, record=bool)` method. Any future change to wake logic now only needs to be made once.
+2. **`_near_miss_refine` prepend was a no-op** — `node.root = old_root` wrote the same value back. Fixed to correctly wrap deepest leaf: `leaf → prim(leaf)`.
+3. **`_evaluate_program` wastefully called `drive.energy(program, None, None)`** then discarded the result and recomputed everything. Removed the dead call.
+
+**Architecture cleanup:**
+4. **Removed `grammars/` backward-compat shim files** — tests migrated to import directly from `domains/`. Per CLAUDE.md: "Avoid backwards-compatibility hacks."
+5. **Added test accuracy (generalization) tracking** — `WakeResult` now includes `test_error` and `test_solved` computed on held-out test examples. Runner displays train vs test accuracy in final results and compounding table.
+
+**Documentation fixes:**
+6. README test count updated (205 → 323), structure diagram updated to reflect `domains/` directory, demo commands fixed.
+
+**Test coverage:** 64% → 70% overall. `learner.py` 66% → 79%. Added 18 new tests covering test accuracy, near-miss refinement, runner helpers, and edge cases.
+
+**Decision: Why `_wake_core(record=bool)` over other patterns.**
+Alternatives considered: (a) decorator pattern, (b) inheritance. Chose simple boolean parameter because the recording behavior is a single if-check at 3 callsites. A decorator or inheritance would add complexity for no benefit.
+
+---
+
 *This document will be updated with each new session and major decision.*

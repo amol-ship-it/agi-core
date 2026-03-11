@@ -34,6 +34,10 @@ class CompoundingMetrics:
     avg_energy_of_solutions: float
     wall_time_wake: float
     wall_time_sleep: float
+    # Test accuracy (generalization): how the best program performs on held-out test examples
+    test_solve_rate: float = 0.0
+    test_tasks_solved: int = 0
+    test_tasks_evaluated: int = 0
 
 
 def extract_metrics(results: list[RoundResult]) -> list[CompoundingMetrics]:
@@ -58,6 +62,12 @@ def extract_metrics(results: list[RoundResult]) -> list[CompoundingMetrics]:
         wake_time = sum(w.wall_time for w in rr.wake_results)
         sleep_time = rr.sleep_result.wall_time
 
+        # Test accuracy (generalization)
+        test_evaluated = [w for w in rr.wake_results if w.test_solved is not None]
+        test_solved_count = sum(1 for w in test_evaluated if w.test_solved)
+        test_total = len(test_evaluated)
+        test_rate = test_solved_count / test_total if test_total > 0 else 0.0
+
         m = CompoundingMetrics(
             round_number=rr.round_number,
             solve_rate=rr.solve_rate,
@@ -69,6 +79,9 @@ def extract_metrics(results: list[RoundResult]) -> list[CompoundingMetrics]:
             avg_energy_of_solutions=avg_energy,
             wall_time_wake=wake_time,
             wall_time_sleep=sleep_time,
+            test_solve_rate=test_rate,
+            test_tasks_solved=test_solved_count,
+            test_tasks_evaluated=test_total,
         )
         metrics.append(m)
     return metrics
@@ -76,24 +89,46 @@ def extract_metrics(results: list[RoundResult]) -> list[CompoundingMetrics]:
 
 def print_compounding_table(metrics: list[CompoundingMetrics]) -> None:
     """Print the compounding curve as a text table."""
-    header = (
-        f"{'Round':>5}  {'Solved':>8}  {'Rate':>7}  "
-        f"{'Library':>7}  {'New':>4}  {'Avg Energy':>10}  "
-        f"{'Wake(s)':>8}  {'Sleep(s)':>8}"
-    )
+    has_test = any(m.test_tasks_evaluated > 0 for m in metrics)
+    if has_test:
+        header = (
+            f"{'Round':>5}  {'Train':>10}  {'TrRate':>7}  "
+            f"{'Test':>10}  {'TsRate':>7}  "
+            f"{'Library':>7}  {'New':>4}  "
+            f"{'Wake(s)':>8}  {'Sleep(s)':>8}"
+        )
+    else:
+        header = (
+            f"{'Round':>5}  {'Solved':>8}  {'Rate':>7}  "
+            f"{'Library':>7}  {'New':>4}  {'Avg Energy':>10}  "
+            f"{'Wake(s)':>8}  {'Sleep(s)':>8}"
+        )
     print(header)
     print("-" * len(header))
     for m in metrics:
-        print(
-            f"{m.round_number:>5}  "
-            f"{m.tasks_solved:>3}/{m.tasks_total:<4}  "
-            f"{m.solve_rate:>6.1%}  "
-            f"{m.library_size:>7}  "
-            f"{m.new_abstractions:>4}  "
-            f"{m.avg_energy_of_solutions:>10.4f}  "
-            f"{m.wall_time_wake:>8.1f}  "
-            f"{m.wall_time_sleep:>8.1f}"
-        )
+        if has_test:
+            print(
+                f"{m.round_number:>5}  "
+                f"{m.tasks_solved:>4}/{m.tasks_total:<4}  "
+                f"{m.solve_rate:>6.1%}  "
+                f"{m.test_tasks_solved:>4}/{m.test_tasks_evaluated:<4}  "
+                f"{m.test_solve_rate:>6.1%}  "
+                f"{m.library_size:>7}  "
+                f"{m.new_abstractions:>4}  "
+                f"{m.wall_time_wake:>8.1f}  "
+                f"{m.wall_time_sleep:>8.1f}"
+            )
+        else:
+            print(
+                f"{m.round_number:>5}  "
+                f"{m.tasks_solved:>3}/{m.tasks_total:<4}  "
+                f"{m.solve_rate:>6.1%}  "
+                f"{m.library_size:>7}  "
+                f"{m.new_abstractions:>4}  "
+                f"{m.avg_energy_of_solutions:>10.4f}  "
+                f"{m.wall_time_wake:>8.1f}  "
+                f"{m.wall_time_sleep:>8.1f}"
+            )
 
 
 def save_metrics_json(metrics: list[CompoundingMetrics], path: str) -> None:

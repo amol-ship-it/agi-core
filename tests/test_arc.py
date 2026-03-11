@@ -17,18 +17,16 @@ import tempfile
 import unittest
 
 from core import Program, Task, InMemoryStore, Learner, SearchConfig, CurriculumConfig
-from grammars.arc import (
-    ARCEnv, ARCGrammar, ARCDrive, ARC_PRIMITIVES,
+from domains.arc import ARCEnv, ARCGrammar, ARCDrive, ARC_PRIMITIVES, to_np, from_np
+from domains.arc.dataset import make_sample_tasks, load_arc_task, load_arc_dataset
+from domains.arc.primitives import (
     rotate_90_cw, mirror_horizontal, mirror_vertical, transpose,
     crop_to_nonzero, gravity_down, fill_enclosed, identity,
-    to_np, from_np, make_sample_tasks,
     grid_shape, valid_grid, empty_grid, invert_colors,
     replace_bg_with_most_common, keep_color, remove_color,
     most_common_color, fill_color, crop_to_color,
     xor_halves_v, or_halves_v, xor_halves_h, or_halves_h,
     count_colors, find_bounding_box, overlay,
-    load_arc_task, load_arc_dataset,
-    # New primitives
     _find_connected_components,
     keep_largest_object_only, keep_smallest_object_only,
     remove_largest_object, remove_smallest_object,
@@ -43,7 +41,6 @@ from grammars.arc import (
     denoise_majority, fill_rectangles,
     extract_minority_color, extract_majority_color,
     replace_noise_in_objects, hollow_objects,
-    # Batch 2 primitives
     shift_down_1, shift_up_1, shift_left_1, shift_right_1,
     complete_symmetry_h, complete_symmetry_v,
     overlay_split_halves_h, overlay_split_halves_v,
