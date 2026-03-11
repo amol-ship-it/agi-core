@@ -1281,19 +1281,37 @@ class Learner:
         if max_depth < 3:
             return scored, n_evals
 
-        # --- Build triple pool: essentials first, then top-K singles ---
-        # Same strategy as pairs: guarantee essential concepts get included.
+        # --- Build triple pool: use depth-2 results + essentials ---
+        # Include primitives that appear in top depth-2 programs (they
+        # work well in compositions) plus essentials and top singles.
         # Total pool is hard-capped at triple_top_k (cost = K³).
+        depth2_ranked = sorted(
+            [s for s in scored if s.program.children],
+            key=lambda s: s.prediction_error)
         triple_seen: set[str] = set()
         triple_pool: list[str] = []
-        triple_essential_cap = triple_top_k // 2
+
+        # Phase 1: extract primitives from top depth-2 programs
+        depth2_cap = triple_top_k // 3
+        for sp in depth2_ranked:
+            if len(triple_pool) >= depth2_cap:
+                break
+            for name in [sp.program.root] + [
+                    c.root for c in (sp.program.children or [])]:
+                if name not in triple_seen and name in prim_by_name:
+                    triple_pool.append(name)
+                    triple_seen.add(name)
+
+        # Phase 2: essentials
+        triple_essential_cap = triple_top_k * 2 // 3
         for name in essential_names:
             if len(triple_pool) >= triple_essential_cap:
                 break
-            if name in prim_by_name:
+            if name not in triple_seen and name in prim_by_name:
                 triple_pool.append(name)
                 triple_seen.add(name)
 
+        # Phase 3: top singles to fill remaining slots
         for sp in depth1_ranked:
             name = sp.program.root
             if name not in triple_seen:
