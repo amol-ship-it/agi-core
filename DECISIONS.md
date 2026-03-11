@@ -599,6 +599,53 @@ The 281 primitives now help (21.5% vs 13%) instead of hurting (4.5%). Semantic d
 
 **Key insight:** Beam search contributes minimally to solve rate (~2 tasks out of 86). The exhaustive enumeration (depth 1-3) does the heavy lifting. This suggests future work should focus on better enumeration (richer primitives, smarter pool selection) rather than deeper beam search.
 
+## Session 10 — Batch 4 Primitives: Grid Partition, Annotation, Scaling
+
+### Analysis of Unsolved Tasks
+
+Systematic analysis of 314 unsolved tasks from session 9 revealed:
+
+| Pattern | Count | Description |
+|---------|-------|-------------|
+| Object annotation | 96 | Modify pixels around/between objects |
+| Grid-partitioned | 51 | Input split by separator lines into regions |
+| Same-size small diff | 99 | Few cells changed (filling, recoloring) |
+| Subgrid selection | 26 | Extract one subgrid from structured input |
+| Scaling | 27 | Up/downscale by various factors |
+| Recoloring only | 29 | Same positions, different colors |
+
+Most unsolved tasks (210/314) have same-size input/output. The dominant change type is filling background cells (138 tasks).
+
+### New Primitives Added (302 total, up from 281)
+
+**Grid partition (7):** `select_odd_cell`, `overlay_cells`, `majority_cells`, `xor_cells`, `most_colorful_cell`, `most_filled_cell`, `least_filled_cell`. Also improved separator detection to handle zero-valued grid lines (many ARC tasks use bg=0 as separator).
+
+**Pixel annotation (5):** `surround_3x3`, `draw_cross`, `draw_cross_contact`, `draw_diag`, `fill_convex_hull`.
+
+**Line connection (2):** `connect_h`, `connect_v`.
+
+**Scaling (7):** `scale_4x`, `scale_5x`, `downscale_4x`, `downscale_5x`, `downscale_7x`, `downscale_maj_2x`, `downscale_maj_3x`.
+
+**Other (1):** `recolor_objects_by_neighbor_count`.
+
+### Benchmark Results
+
+| Session | Primitives | Train acc | Eval acc | Median/task | Notes |
+|---------|-----------|-----------|----------|-------------|-------|
+| 9b | 281 | 86/400 = 21.5% | 7/122 = 5.7% | 2.8s | Baseline |
+| 10 | 302 | 93/400 = 23.2% | 33/400 = 8.2% | 6.4s | +21 new prims |
+
+Net +7 train tasks (+8 new, -1 regression). The 8 newly solved tasks:
+- `select_odd_cell`: directly solved 2 partition tasks
+- `downscale_7x`: solved 1 task
+- `connect_h(connect_v)`: composition solved 1 task
+- `binarize(surround_3x3)`: composition solved 1 task
+- `downscale_4x(keep_smallest_only)`, `crop_nonzero(select_odd_cell(left_half))`: deeper compositions solved 2 tasks
+
+**Speed tradeoff:** Median time doubled (2.8s → 6.4s) due to 302 primitives in exhaustive search. The depth-2 search space grew from 281² ≈ 79K to 302² ≈ 91K programs per task.
+
+**Eval improvement:** From 5.7% to 8.2% on the evaluation set (400 tasks with culture transfer).
+
 ---
 
 *This document will be updated with each new session and major decision.*
