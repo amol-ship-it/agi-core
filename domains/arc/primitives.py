@@ -4377,6 +4377,57 @@ def fill_convex_hull(grid: Grid) -> Grid:
 # =============================================================================
 
 
+def complete_sym_180(grid: Grid) -> Grid:
+    """Complete 180° rotational symmetry around the center of non-zero content.
+
+    For each zero cell that has a non-zero 180°-symmetric counterpart
+    (relative to the bounding box center of non-zero pixels), fill it
+    with that counterpart's color. Also applies H and V mirror symmetry
+    iteratively until stable.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    # Find bounding box of non-zero content
+    nz_rows = [r for r in range(h) if any(grid[r][c] != 0 for c in range(w))]
+    nz_cols = [c for c in range(w) if any(grid[r][c] != 0 for r in range(h))]
+    if not nz_rows or not nz_cols:
+        return grid
+
+    r0, r1 = min(nz_rows), max(nz_rows)
+    c0, c1 = min(nz_cols), max(nz_cols)
+
+    result = [row[:] for row in grid]
+    # Iterate: apply 180°, H-mirror, V-mirror until no changes
+    for _ in range(3):
+        changed = False
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                if result[r][c] != 0:
+                    continue
+                # 180° rotation
+                sr, sc = r0 + r1 - r, c0 + c1 - c
+                if r0 <= sr <= r1 and c0 <= sc <= c1 and result[sr][sc] != 0:
+                    result[r][c] = result[sr][sc]
+                    changed = True
+                    continue
+                # H-mirror (flip across horizontal center)
+                sr2 = r0 + r1 - r
+                if r0 <= sr2 <= r1 and result[sr2][c] != 0:
+                    result[r][c] = result[sr2][c]
+                    changed = True
+                    continue
+                # V-mirror (flip across vertical center)
+                sc2 = c0 + c1 - c
+                if c0 <= sc2 <= c1 and result[r][sc2] != 0:
+                    result[r][c] = result[r][sc2]
+                    changed = True
+        if not changed:
+            break
+    return result
+
+
 def mark_intersections_exclude_axis(grid: Grid) -> Grid:
     """Mark row/col intersections with color 2, excluding the axes' own crossing.
 
@@ -4906,6 +4957,7 @@ def _build_arc_primitives() -> list[Primitive]:
         ("fill_bbox_objs",          fill_bbox_per_object),
         ("rect_around_objs",        draw_rect_around_objects),
         # --- Batch 5: targeted near-miss improvements ---
+        ("complete_sym_180",        complete_sym_180),
         ("mark_inters_excl_axis",   mark_intersections_exclude_axis),
         ("flood_fill_accent",       flood_fill_enclosed_with_accent),
         ("draw_diag_nearest",       draw_diagonal_nearest),
