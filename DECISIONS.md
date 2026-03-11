@@ -455,4 +455,103 @@ Wake-sleep rounds haven't shown accuracy improvements in practice. The library e
 
 ---
 
+## Session 7 — Color Fix, Conditional Branching, Object Decomposition (2026-03-11)
+
+### Feature: Post-hoc color fixing (Phase 1.75)
+
+Many ARC near-misses differ from the target by a consistent color substitution (e.g., all 3s should be 5s). The color fix phase:
+
+1. Collects near-miss programs (prediction_error < 0.30)
+2. Executes each on all training inputs, compares pixel-by-pixel
+3. Builds a consistent (got→want) color remap with 80% consistency threshold
+4. Wraps the original program with a color_remap primitive
+
+**Architecture:** `Environment.infer_output_correction()` interface. ARCEnv overrides with pixel-level color remap detection. Domain-agnostic — other domains could implement their own correction inference.
+
+### Feature: Conditional branching (Phase 1.25)
+
+Implements if-then-else programs: `if pred(input) then A(input) else B(input)`.
+
+- 17 predicates ported from agi-mvp-general: symmetric_h/v, square, tall, wide, single_color, many_colors, small, large, bg_majority, mostly_empty, frame, diag_sym, odd_dims, two_colors, h_stripe, v_stripe
+- `Grammar.get_predicates()` interface for domain-agnostic predicate access
+- Search strategy: partition training inputs by predicate, score top-K per group, try best 5×5 combos per non-trivial predicate
+- Cost: O(P' × top_k × N_examples + P' × 25) where P' = non-trivial predicates
+
+### Feature: Object decomposition (Phase 1.1)
+
+Per-object transform pipeline: perceive → transform-per-object → reassemble.
+
+- Connected component extraction via 4-connectivity flood fill
+- `apply_transform_per_object()`: applies same primitive to each object's subgrid
+- 7 conditional recolor strategies: by_size, by_singleton, by_input_color, by_shape, by_size_rank, by_compactness, by_has_hole
+- `Environment.try_object_decomposition()` interface
+
+### Current solver pipeline phases
+
+1. **Phase 1**: Exhaustive enumeration (depth 1/2/3)
+2. **Phase 1.1**: Object decomposition (per-object transforms + conditional recolor)
+3. **Phase 1.25**: Conditional search (if-then-else with predicates)
+4. **Phase 1.5**: Near-miss refinement (append/prepend primitives)
+5. **Phase 1.75**: Color fix (learn color remap from mismatches)
+6. **Phase 2**: Beam search (adaptive generations, seeded with Phase 1 results)
+
+### Benchmark Results (50-task quick test)
+
+| Version | Primitives | Train Solved | Test Solved |
+|---------|-----------|-------------|-------------|
+| Session 5 baseline | 101 | 52/400 (13.0%) | — |
+| + 121 primitives | 222 | 9/50 (18.0%) | 8/50 (16.0%) |
+| + enumeration + 38 prims | 260 | 12/50 (24.0%) | 10/50 (20.0%) |
+| + color fix + conditionals + obj decomp | 260 | **13/50 (26.0%)** | **11/50 (22.0%)** |
+
+**New solve:** Task 0d3d703e solved by `per_object_recolor(by_input_color)` — object decomposition feature correctly learned an input_color→output_color mapping and applied it per-object. No regressions.
+
+### Test coverage
+
+- 365 total tests, all passing
+- 8 color fix tests, 18 conditional/predicate tests, 16 object decomposition tests
+
+---
+
+## Session 8 — Performance Optimization (March 11, 2026)
+
+### Performance profiling results
+
+Profiled per-phase timing on 5 representative tasks:
+
+| Phase | Worst Case (before) | Worst Case (after) | Speedup |
+|-------|--------------------|--------------------|---------|
+| Phase 1 (enum) | 4.24s | 4.24s (unchanged) | 1x |
+| Phase 1.1 (obj decomp) | 0.03s | 0.03s | 1x |
+| Phase 1.25 (conditional) | 0.11s | 0.11s | 1x |
+| Phase 1.5 (near-miss) | **11.25s** | **1.35s** | **8.3x** |
+| Phase 2 (beam) | varies | varies | 1x |
+| Phase 3 (post-beam) | ~11s | ~0.1s | **~100x** |
+
+**Root cause:** Near-miss refinement tried 10 near-misses × 280 unary primitives × 2 directions = 5,600 evaluations per task.
+
+### Optimizations applied
+
+1. **Near-miss refinement**: Top-5 near-misses × top-50 primitives (by depth-1 score) + essential pair concepts. Reduces from 5,600 to ~550 evaluations.
+2. **Phase 3**: Removed redundant second near-miss pass on beam results. Phase 1.5 already covers enum near-misses. Only color fix runs post-beam.
+3. **Per-task speedup**: 28.7s → 6.2s for unsolved tasks (4.6x end-to-end).
+
+### Bug fix: test > train accuracy
+
+`test_solved` was evaluated for ALL tasks including unsolved ones. A program failing on training (bad average across 3 examples) could pass test (only 1 example). Fixed: only evaluate test when training is solved.
+
+### Task ordering: shuffle instead of sort
+
+Changed default from sorted-by-difficulty to seeded shuffle for parallel benchmarks. Sorting creates biased progress (easy tasks solve first, giving inflated early metrics). Shuffle gives honest progress estimates throughout the run. Sorting retained for sequential compounding mode where easy→hard ordering helps library build up.
+
+### NumPy/Numba analysis
+
+agi-mvp-general uses targeted numpy (scoring) and numba @njit (flood fill). Our scoring already uses numpy. Numba-ing flood fill would help for large grids but profiling showed object decomposition is only 0.03s — not the bottleneck. The real bottleneck was near-miss refinement (now fixed).
+
+### Benchmark (in progress)
+
+Running 400-task quick benchmark with all optimizations, shuffled order, 4 workers.
+
+---
+
 *This document will be updated with each new session and major decision.*

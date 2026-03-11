@@ -157,6 +157,18 @@ def _make_replace_color(from_c: int, to_c: int):
     return fn
 
 
+def _make_color_remap(mapping: dict[int, int]):
+    """Create a primitive that applies a multi-color remapping."""
+    def fn(grid: Grid) -> Grid:
+        a = to_np(grid)
+        result = a.copy()
+        for old_c, new_c in mapping.items():
+            result[a == old_c] = new_c
+        return result.tolist()
+    fn.__name__ = f"color_remap_{'_'.join(f'{k}to{v}' for k, v in sorted(mapping.items()))}"
+    return fn
+
+
 def _make_keep_color(color: int):
     """Create a primitive that keeps only the given color."""
     def fn(grid: Grid) -> Grid:
@@ -3412,6 +3424,273 @@ def _make_recolor_nonzero_inside_bbox(accent_color: int, new_color: int):
 
 
 # =============================================================================
+# Batch 3: Additional high-value primitives
+# =============================================================================
+
+def _fill_bg_adjacent_to_color(target_color: int, fill_color: int):
+    """Fill background cells adjacent to target_color with fill_color."""
+    def fn(grid: Grid) -> Grid:
+        a = to_np(grid)
+        h, w = a.shape
+        result = a.copy()
+        for r in range(h):
+            for c in range(w):
+                if a[r, c] != 0:
+                    continue
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and a[nr, nc] == target_color:
+                        result[r, c] = fill_color
+                        break
+        return result.tolist()
+    return fn
+
+
+def color_by_row_position(grid: Grid) -> Grid:
+    """Assign each non-zero cell a color based on its row index (mod 9 + 1)."""
+    return [[(r % 9 + 1) if c != 0 else 0 for c in row] for r, row in enumerate(grid)]
+
+
+def color_by_col_position(grid: Grid) -> Grid:
+    """Assign each non-zero cell a color based on its column index (mod 9 + 1)."""
+    return [[(ci % 9 + 1) if c != 0 else 0 for ci, c in enumerate(row)] for row in grid]
+
+
+def fill_col_from_bottom(grid: Grid) -> Grid:
+    """For each column, fill upward from the bottom-most non-zero cell."""
+    a = to_np(grid)
+    h, w = a.shape
+    result = a.copy()
+    for c in range(w):
+        bottom_color = 0
+        for r in range(h - 1, -1, -1):
+            if a[r, c] != 0:
+                bottom_color = a[r, c]
+                break
+        if bottom_color:
+            for r in range(h):
+                if result[r, c] == 0:
+                    result[r, c] = bottom_color
+    return result.tolist()
+
+
+def fill_row_from_right(grid: Grid) -> Grid:
+    """For each row, fill leftward from the right-most non-zero cell."""
+    a = to_np(grid)
+    h, w = a.shape
+    result = a.copy()
+    for r in range(h):
+        right_color = 0
+        for c in range(w - 1, -1, -1):
+            if a[r, c] != 0:
+                right_color = a[r, c]
+                break
+        if right_color:
+            for c in range(w):
+                if result[r, c] == 0:
+                    result[r, c] = right_color
+    return result.tolist()
+
+
+def extend_color_within_row_bounds(grid: Grid) -> Grid:
+    """Extend non-zero cells horizontally to fill gaps within the same row's bounds."""
+    a = to_np(grid)
+    h, w = a.shape
+    result = a.copy()
+    for r in range(h):
+        nonzero = [(c, a[r, c]) for c in range(w) if a[r, c] != 0]
+        if len(nonzero) < 2:
+            continue
+        min_c = nonzero[0][0]
+        max_c = nonzero[-1][0]
+        for c in range(min_c, max_c + 1):
+            if result[r, c] == 0:
+                # Fill with nearest non-zero in this row
+                left_color = 0
+                for cc in range(c - 1, -1, -1):
+                    if a[r, cc] != 0:
+                        left_color = a[r, cc]
+                        break
+                result[r, c] = left_color
+    return result.tolist()
+
+
+def extend_color_within_col_bounds(grid: Grid) -> Grid:
+    """Extend non-zero cells vertically to fill gaps within the same column's bounds."""
+    a = to_np(grid)
+    h, w = a.shape
+    result = a.copy()
+    for c in range(w):
+        nonzero = [(r, a[r, c]) for r in range(h) if a[r, c] != 0]
+        if len(nonzero) < 2:
+            continue
+        min_r = nonzero[0][0]
+        max_r = nonzero[-1][0]
+        for r in range(min_r, max_r + 1):
+            if result[r, c] == 0:
+                top_color = 0
+                for rr in range(r - 1, -1, -1):
+                    if a[rr, c] != 0:
+                        top_color = a[rr, c]
+                        break
+                result[r, c] = top_color
+    return result.tolist()
+
+
+def fill_diagonal_stripes(grid: Grid) -> Grid:
+    """Fill background cells where diagonal neighbors have the same non-zero color."""
+    a = to_np(grid)
+    h, w = a.shape
+    result = a.copy()
+    for r in range(h):
+        for c in range(w):
+            if a[r, c] != 0:
+                continue
+            diag_colors = []
+            for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and a[nr, nc] != 0:
+                    diag_colors.append(a[nr, nc])
+            if len(diag_colors) >= 2 and len(set(diag_colors)) == 1:
+                result[r, c] = diag_colors[0]
+    return result.tolist()
+
+
+def fill_rooms_with_new_color(grid: Grid) -> Grid:
+    """Fill each enclosed room (connected bg region not touching border) with a unique color."""
+    a = to_np(grid)
+    h, w = a.shape
+    visited = np.zeros((h, w), dtype=bool)
+
+    # Mark border-connected background
+    queue = []
+    for r in range(h):
+        for c in range(w):
+            if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and a[r, c] == 0:
+                visited[r, c] = True
+                queue.append((r, c))
+    while queue:
+        r, c = queue.pop()
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and not visited[nr, nc] and a[nr, nc] == 0:
+                visited[nr, nc] = True
+                queue.append((nr, nc))
+
+    # Find and fill interior rooms
+    result = a.copy()
+    color = 1
+    for r in range(h):
+        for c in range(w):
+            if a[r, c] == 0 and not visited[r, c]:
+                # Flood fill this room
+                room = [(r, c)]
+                visited[r, c] = True
+                idx = 0
+                while idx < len(room):
+                    cr, cc = room[idx]
+                    idx += 1
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr, nc] and a[nr, nc] == 0:
+                            visited[nr, nc] = True
+                            room.append((nr, nc))
+                # Assign color to this room (cycle through 1-9)
+                for cr, cc in room:
+                    result[cr, cc] = color
+                color = (color % 9) + 1
+    return result.tolist()
+
+
+def count_per_row(grid: Grid) -> Grid:
+    """Replace each row with a count of non-zero cells (as a 1-wide grid)."""
+    return [[sum(1 for c in row if c != 0)] for row in grid]
+
+
+def count_objects_grid(grid: Grid) -> Grid:
+    """Return a 1×1 grid containing the number of connected components."""
+    from .objects import _find_connected_components
+    comps = _find_connected_components(grid)
+    return [[len(comps)]]
+
+
+def recolor_by_size_rank(grid: Grid) -> Grid:
+    """Recolor objects by size rank: largest=1, next=2, etc."""
+    from .objects import _find_connected_components
+    comps = _find_connected_components(grid)
+    if not comps:
+        return [row[:] for row in grid]
+    comps_sorted = sorted(comps, key=lambda c: -c["size"])
+    result = [[0] * len(row) for row in grid]
+    for rank, comp in enumerate(comps_sorted):
+        color = rank % 9 + 1
+        for r, c in comp["pixels"]:
+            result[r][c] = color
+    return result
+
+
+def downscale_2x(grid: Grid) -> Grid:
+    """Downscale grid by 2x, taking the most common non-zero value in each 2x2 block."""
+    a = to_np(grid)
+    h, w = a.shape
+    nh, nw = h // 2, w // 2
+    if nh == 0 or nw == 0:
+        return grid
+    result = np.zeros((nh, nw), dtype=np.int32)
+    for r in range(nh):
+        for c in range(nw):
+            block = a[r*2:r*2+2, c*2:c*2+2].flatten()
+            nonzero = [v for v in block if v != 0]
+            if nonzero:
+                result[r, c] = max(set(nonzero), key=nonzero.count)
+    return result.tolist()
+
+
+def downscale_3x(grid: Grid) -> Grid:
+    """Downscale grid by 3x, taking the most common non-zero value in each 3x3 block."""
+    a = to_np(grid)
+    h, w = a.shape
+    nh, nw = h // 3, w // 3
+    if nh == 0 or nw == 0:
+        return grid
+    result = np.zeros((nh, nw), dtype=np.int32)
+    for r in range(nh):
+        for c in range(nw):
+            block = a[r*3:r*3+3, c*3:c*3+3].flatten()
+            nonzero = [v for v in block if v != 0]
+            if nonzero:
+                result[r, c] = max(set(nonzero), key=nonzero.count)
+    return result.tolist()
+
+
+def extend_nonzero_fill_row(grid: Grid) -> Grid:
+    """For each row, extend non-zero values to fill entire row."""
+    result = []
+    for row in grid:
+        nonzero = [c for c in row if c != 0]
+        if nonzero:
+            fill = max(set(nonzero), key=nonzero.count)
+            result.append([fill] * len(row))
+        else:
+            result.append(row[:])
+    return result
+
+
+def extend_nonzero_fill_col(grid: Grid) -> Grid:
+    """For each column, extend non-zero values to fill entire column."""
+    a = to_np(grid)
+    h, w = a.shape
+    result = a.copy()
+    for c in range(w):
+        col = a[:, c]
+        nonzero = [v for v in col if v != 0]
+        if nonzero:
+            fill = max(set(nonzero), key=nonzero.count)
+            result[:, c] = fill
+    return result.tolist()
+
+
+# =============================================================================
 # Build the ARC primitive registry
 # =============================================================================
 
@@ -3600,6 +3879,18 @@ def _build_arc_primitives() -> list[Primitive]:
         ("recolor_2nd_dom",         recolor_2nd_to_dominant),
         ("erase_2nd_color",         erase_2nd_color),
         ("fill_enclosed_dominant",  recolor_bg_enclosed_by_dominant),
+        # --- Port batch 3: new high-value primitives ---
+        ("color_by_row",            color_by_row_position),
+        ("color_by_col",            color_by_col_position),
+        ("extend_within_row",       extend_color_within_row_bounds),
+        ("extend_within_col",       extend_color_within_col_bounds),
+        ("fill_rooms",              fill_rooms_with_new_color),
+        ("count_per_row",           count_per_row),
+        ("count_objects_grid",      count_objects_grid),
+        ("downscale_2x",            downscale_2x),
+        ("downscale_3x",            downscale_3x),
+        ("extend_fill_row",         extend_nonzero_fill_row),
+        ("extend_fill_col",         extend_nonzero_fill_col),
     ]
 
     for name, fn in unary_ops:
@@ -3707,6 +3998,19 @@ def _build_arc_primitives() -> list[Primitive]:
             arity=1, fn=_make_recolor_nonzero_inside_bbox(accent, new), domain="arc",
         ))
 
+    # Fill bg adjacent to dominant/accent with specific colors
+    for target_desc, fill_color in [("dominant", 3), ("dominant", 8),
+                                     ("accent", 3), ("accent", 8)]:
+        # Use color 1 as a representative dominant/accent target
+        for target_color in [1, 2, 3, 4, 5]:
+            name = f"fill_adj_{target_color}_with_{fill_color}"
+            if not any(p.name == name for p in prims):
+                prims.append(Primitive(
+                    name=name, arity=1,
+                    fn=_fill_bg_adjacent_to_color(target_color, fill_color),
+                    domain="arc",
+                ))
+
     # Arity-2 primitives (compose two transforms): overlay is the main one
     prims.append(Primitive(name="overlay", arity=2, fn=overlay, domain="arc"))
 
@@ -3725,3 +4029,145 @@ def register_prim(p: Primitive) -> None:
 def lookup_prim(name: str) -> Optional[Primitive]:
     """Look up a primitive by name."""
     return _PRIM_MAP.get(name)
+
+
+# =============================================================================
+# Predicates: Grid → bool functions for conditional branching
+# =============================================================================
+
+def _pred_is_symmetric_h(grid: Grid) -> bool:
+    """Check if grid has horizontal (left-right) symmetry."""
+    return all(row == row[::-1] for row in grid)
+
+
+def _pred_is_symmetric_v(grid: Grid) -> bool:
+    """Check if grid has vertical (top-bottom) symmetry."""
+    h = len(grid)
+    return all(grid[i] == grid[h - 1 - i] for i in range(h // 2))
+
+
+def _pred_is_square(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    return h == w and h > 0
+
+
+def _pred_has_single_color(grid: Grid) -> bool:
+    colors = {c for row in grid for c in row if c != 0}
+    return len(colors) <= 1
+
+
+def _pred_is_tall(grid: Grid) -> bool:
+    return len(grid) > (len(grid[0]) if grid else 0)
+
+
+def _pred_is_wide(grid: Grid) -> bool:
+    return (len(grid[0]) if grid else 0) > len(grid)
+
+
+def _pred_has_many_colors(grid: Grid) -> bool:
+    colors = {c for row in grid for c in row if c != 0}
+    return len(colors) > 3
+
+
+def _pred_is_small(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    return h * w < 50
+
+
+def _pred_is_large(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    return h * w > 200
+
+
+def _pred_has_bg_majority(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0:
+        return True
+    zero_count = sum(1 for row in grid for c in row if c == 0)
+    return zero_count > h * w / 2
+
+
+def _pred_is_mostly_empty(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0:
+        return True
+    zero_count = sum(1 for row in grid for c in row if c == 0)
+    return zero_count > h * w * 0.8
+
+
+def _pred_has_frame(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h < 3 or w < 3:
+        return False
+    border = set()
+    interior = set()
+    for r in range(h):
+        for c in range(w):
+            v = grid[r][c]
+            if v == 0:
+                continue
+            if r == 0 or r == h - 1 or c == 0 or c == w - 1:
+                border.add(v)
+            else:
+                interior.add(v)
+    return bool(border) and bool(interior) and not (border & interior)
+
+
+def _pred_has_diag_sym(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h != w or h == 0:
+        return False
+    return all(grid[r][c] == grid[c][r] for r in range(h) for c in range(r + 1, w))
+
+
+def _pred_is_odd_dims(grid: Grid) -> bool:
+    h, w = len(grid), len(grid[0]) if grid else 0
+    return h % 2 == 1 and w % 2 == 1 and h > 0
+
+
+def _pred_has_two_colors(grid: Grid) -> bool:
+    colors = {c for row in grid for c in row if c != 0}
+    return len(colors) == 2
+
+
+def _pred_has_h_stripe(grid: Grid) -> bool:
+    for row in grid:
+        non_zero = [c for c in row if c != 0]
+        if len(non_zero) == len(row) and len(set(non_zero)) == 1:
+            return True
+    return False
+
+
+def _pred_has_v_stripe(grid: Grid) -> bool:
+    h = len(grid)
+    w = len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return False
+    for c in range(w):
+        col = [grid[r][c] for r in range(h)]
+        non_zero = [v for v in col if v != 0]
+        if len(non_zero) == h and len(set(non_zero)) == 1:
+            return True
+    return False
+
+
+# All predicates as (name, function) pairs
+ARC_PREDICATES: list[tuple[str, callable]] = [
+    ("is_symmetric_h", _pred_is_symmetric_h),
+    ("is_symmetric_v", _pred_is_symmetric_v),
+    ("is_square", _pred_is_square),
+    ("has_single_color", _pred_has_single_color),
+    ("is_tall", _pred_is_tall),
+    ("is_wide", _pred_is_wide),
+    ("has_many_colors", _pred_has_many_colors),
+    ("is_small", _pred_is_small),
+    ("is_large", _pred_is_large),
+    ("has_bg_majority", _pred_has_bg_majority),
+    ("is_mostly_empty", _pred_is_mostly_empty),
+    ("has_frame", _pred_has_frame),
+    ("has_diag_sym", _pred_has_diag_sym),
+    ("is_odd_dims", _pred_is_odd_dims),
+    ("has_two_colors", _pred_has_two_colors),
+    ("has_h_stripe", _pred_has_h_stripe),
+    ("has_v_stripe", _pred_has_v_stripe),
+]

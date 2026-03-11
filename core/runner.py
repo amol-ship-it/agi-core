@@ -613,7 +613,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     results = learner.run_curriculum(
         tasks,
         CurriculumConfig(
-            sort_by_difficulty=True,
+            sort_by_difficulty=cfg.sequential_compounding,  # sort for compounding, shuffle for parallel
             wake_sleep_rounds=rounds,
             workers=workers,
             sequential_compounding=cfg.sequential_compounding,

@@ -54,6 +54,47 @@ class Environment(ABC):
         """Reset environment state between tasks."""
         ...
 
+    def register_primitive(self, primitive: "Primitive") -> None:
+        """Register a dynamically created primitive for execution.
+
+        Used by the learner to register conditional or other synthesized
+        primitives so execute() can resolve them.
+
+        Default: no-op (environments that don't need dynamic registration).
+        """
+
+    def try_object_decomposition(
+        self,
+        task: "Task",
+        primitives: list["Primitive"],
+    ) -> Optional[tuple[str, Any]]:
+        """Try solving a task by applying transforms per-object.
+
+        For domains with discrete objects (like ARC grids), this tries
+        applying each primitive to individual objects and reassembling.
+
+        Returns (name, transform_fn) if a pixel-perfect decomposition
+        is found, or None.
+
+        Default: no decomposition (returns None).
+        """
+        return None
+
+    def infer_output_correction(
+        self,
+        program_outputs: list[Any],
+        expected_outputs: list[Any],
+    ) -> Optional[Program]:
+        """Given a program's outputs and expected outputs, try to infer a
+        simple correction transform (e.g., color remapping for ARC grids).
+
+        Returns a Program node that should be composed on top of the original
+        program, or None if no consistent correction is found.
+
+        Default: no correction (returns None).
+        """
+        return None
+
 
 # =============================================================================
 # Interface 2: Grammar (primitives + composition rules)
@@ -96,6 +137,16 @@ class Grammar(ABC):
     def crossover(self, a: Program, b: Program) -> Program:
         """Combine sub-trees from two programs into a new program."""
         ...
+
+    def get_predicates(self) -> list[tuple[str, Any]]:
+        """Return (name, callable) pairs of predicate functions.
+
+        Predicates are input→bool functions used for conditional branching:
+        if pred(input) then A(input) else B(input).
+
+        Default: no predicates.
+        """
+        return []
 
     def essential_pair_concepts(self) -> frozenset[str]:
         """Return names of primitives that should always be included in pair/triple

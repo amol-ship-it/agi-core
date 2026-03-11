@@ -6,8 +6,13 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from core import Environment, Program, Task, Observation
-from .primitives import Grid, _PRIM_MAP
+from collections import Counter
+
+import numpy as np
+
+from core import Environment, Primitive, Program, Task, Observation
+from .primitives import Grid, _PRIM_MAP, _make_color_remap
+from .objects import try_object_decomposition
 
 
 class ARCEnv(Environment):
@@ -34,6 +39,75 @@ class ARCEnv(Environment):
 
     def reset(self):
         self._current_task = None
+
+    def register_primitive(self, primitive) -> None:
+        """Register a dynamically created primitive for ARC execution."""
+        _PRIM_MAP[primitive.name] = primitive
+
+    def try_object_decomposition(self, task, primitives):
+        """Try per-object transform decomposition for ARC grids."""
+        result = try_object_decomposition(task.train_examples, primitives)
+        if result is None:
+            return None
+        name, fn = result
+        # Register as a primitive so it can be executed
+        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+        _PRIM_MAP[name] = prim
+        return (name, fn)
+
+    def infer_output_correction(
+        self,
+        program_outputs: list[Any],
+        expected_outputs: list[Any],
+    ) -> Optional[Program]:
+        """Infer a color remapping that fixes mismatches between outputs.
+
+        For each (got, expected) grid pair, collects pixel-level color
+        mismatches.  If a consistent remap exists (>80% agreement per
+        source color), creates a correction Program.
+        """
+        votes: Counter = Counter()
+
+        for got, expected in zip(program_outputs, expected_outputs):
+            got_arr = np.array(got, dtype=np.int32)
+            exp_arr = np.array(expected, dtype=np.int32)
+            if got_arr.shape != exp_arr.shape:
+                return None
+            diff = got_arr != exp_arr
+            if not diff.any():
+                continue
+            for g, w in zip(got_arr[diff].flat, exp_arr[diff].flat):
+                if g != w:
+                    votes[(int(g), int(w))] += 1
+
+        if not votes:
+            return None
+
+        # Build per-source-color vote tallies
+        by_src: dict[int, Counter] = {}
+        for (g, w), count in votes.items():
+            if g not in by_src:
+                by_src[g] = Counter()
+            by_src[g][w] += count
+
+        # Check consistency: each source color must map to one target >80%
+        remap: dict[int, int] = {}
+        for g, tally in by_src.items():
+            best_w, best_count = tally.most_common(1)[0]
+            total = sum(tally.values())
+            if best_count / total < 0.80:
+                return None  # ambiguous remap
+            remap[g] = best_w
+
+        if not remap:
+            return None
+
+        # Register the remap as a primitive and return a Program node
+        name = f"color_remap_{'_'.join(f'{k}to{v}' for k, v in sorted(remap.items()))}"
+        if name not in _PRIM_MAP:
+            prim = Primitive(name=name, arity=1, fn=_make_color_remap(remap), domain="arc")
+            _PRIM_MAP[name] = prim
+        return Program(root=name)
 
     def _eval_tree(self, node: Program, grid: Grid) -> Grid:
         """Recursively evaluate a program tree on a grid."""

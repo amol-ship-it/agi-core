@@ -563,7 +563,7 @@ class TestConfigDefaults(unittest.TestCase):
 
     def test_curriculum_config_defaults(self):
         cfg = CurriculumConfig()
-        self.assertTrue(cfg.sort_by_difficulty)
+        self.assertFalse(cfg.sort_by_difficulty)
         self.assertEqual(cfg.wake_sleep_rounds, 3)
         self.assertEqual(cfg.workers, 0)
 

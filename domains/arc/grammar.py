@@ -9,7 +9,7 @@ import random
 
 from core import Grammar, Primitive, Program, Task
 from .primitives import (
-    ARC_PRIMITIVES, _PRIM_MAP, register_prim,
+    ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP, register_prim,
     _make_replace_color,
 )
 
@@ -67,6 +67,9 @@ class ARCGrammar(Grammar):
     def __init__(self, seed: int = 42):
         self._rng = random.Random(seed)
         self._task_prims: list[Primitive] = []
+
+    def get_predicates(self) -> list[tuple[str, callable]]:
+        return list(ARC_PREDICATES)
 
     def essential_pair_concepts(self) -> frozenset[str]:
         return _ARC_ESSENTIAL_PAIR_CONCEPTS

@@ -197,6 +197,7 @@ class Learner:
                 self._credit_library_usage(best_so_far.program)
 
         # --- Phase 1: Exhaustive enumeration ---
+        t_phase = time.time()
         if cfg.exhaustive_depth >= 1:
             enum_candidates, n_enum_evals = self._exhaustive_enumerate(
                 all_prims, task, cfg.exhaustive_depth)
@@ -222,9 +223,77 @@ class Learner:
                     pareto_front=front, dedup_count=0,
                     test_error=test_error, test_solved=test_solved)
 
+        logger.debug(f"  [wake] Phase 1 enumeration: {time.time()-t_phase:.2f}s, {n_evals} evals")
+
+        # --- Phase 1.1: Object decomposition ---
+        # Try applying the same transform to each object independently.
+        # High-ROI for tasks where objects are transformed in-place.
+        t_phase = time.time()
+        decomp_result = self.env.try_object_decomposition(task, all_prims)
+        if decomp_result is not None:
+            name, fn = decomp_result
+            prog = Program(root=name)
+            sp = self._evaluate_program(prog, task)
+            n_evals += 1
+            self._update_pareto_front(pareto, sp)
+            if best_so_far is None or sp.energy < best_so_far.energy:
+                best_so_far = sp
+            enum_candidates.append(sp)
+
+            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                best_so_far.task_id = task.task_id
+                _record_solve()
+                test_error, test_solved = self._evaluate_on_test(best_so_far, task)
+                front = self._extract_pareto_front(pareto)
+                wall = time.time() - t0
+                logger.info(
+                    f"  [wake] Task {task.task_id}: SOLVED by object decomposition, "
+                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                return WakeResult(
+                    task_id=task.task_id, solved=True, best=best_so_far,
+                    generations_used=0, evaluations=n_evals, wall_time=wall,
+                    pareto_front=front, dedup_count=0,
+                    test_error=test_error, test_solved=test_solved)
+
+        logger.debug(f"  [wake] Phase 1.1 object decomp: {time.time()-t_phase:.2f}s")
+
+        # --- Phase 1.25: Conditional search ---
+        # Try if(predicate, A, B) programs. For each predicate, partition
+        # training inputs into true/false groups and find best primitives
+        # per group. Cost: O(P × top_k²) where P = #predicates (~17).
+        t_phase = time.time()
+        predicates = self.grammar.get_predicates()
+        if predicates and enum_candidates:
+            cond_result, n_cond_evals = self._try_conditional_search(
+                predicates, enum_candidates, all_prims, task)
+            n_evals += n_cond_evals
+            if cond_result is not None:
+                self._update_pareto_front(pareto, cond_result)
+                if best_so_far is None or cond_result.energy < best_so_far.energy:
+                    best_so_far = cond_result
+                enum_candidates.append(cond_result)
+
+                if best_so_far.prediction_error <= cfg.solve_threshold:
+                    best_so_far.task_id = task.task_id
+                    _record_solve()
+                    test_error, test_solved = self._evaluate_on_test(best_so_far, task)
+                    front = self._extract_pareto_front(pareto)
+                    wall = time.time() - t0
+                    logger.info(
+                        f"  [wake] Task {task.task_id}: SOLVED by conditional, "
+                        f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                    return WakeResult(
+                        task_id=task.task_id, solved=True, best=best_so_far,
+                        generations_used=0, evaluations=n_evals, wall_time=wall,
+                        pareto_front=front, dedup_count=0,
+                        test_error=test_error, test_solved=test_solved)
+
+        logger.debug(f"  [wake] Phase 1.25 conditional: {time.time()-t_phase:.2f}s")
+
         # --- Phase 1.5: Near-miss refinement ---
         # Try appending/prepending primitives to near-miss programs.
         # High-ROI: catches "almost right" programs that need one more step.
+        t_phase = time.time()
         if cfg.near_miss_threshold > 0 and enum_candidates:
             refine_candidates, n_refine_evals = self._near_miss_refine(
                 enum_candidates, all_prims, task, cfg.near_miss_threshold)
@@ -251,10 +320,43 @@ class Learner:
                     pareto_front=front, dedup_count=0,
                     test_error=test_error, test_solved=test_solved)
 
+        logger.debug(f"  [wake] Phase 1.5 near-miss refine: {time.time()-t_phase:.2f}s")
+
+        # --- Phase 1.75: Color fix ---
+        # For near-miss programs, try learning a color remapping from
+        # pixel-level mismatches. Many ARC tasks differ from target by a
+        # consistent color substitution. Cost: O(near_misses × examples).
+        t_phase = time.time()
+        if enum_candidates:
+            color_fix_result = self._try_color_fix(enum_candidates, task)
+            if color_fix_result is not None:
+                n_evals += 1
+                self._update_pareto_front(pareto, color_fix_result)
+                if best_so_far is None or color_fix_result.energy < best_so_far.energy:
+                    best_so_far = color_fix_result
+
+                if best_so_far.prediction_error <= cfg.solve_threshold:
+                    best_so_far.task_id = task.task_id
+                    _record_solve()
+                    test_error, test_solved = self._evaluate_on_test(best_so_far, task)
+                    front = self._extract_pareto_front(pareto)
+                    wall = time.time() - t0
+                    logger.info(
+                        f"  [wake] Task {task.task_id}: SOLVED by color fix, "
+                        f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                    return WakeResult(
+                        task_id=task.task_id, solved=True, best=best_so_far,
+                        generations_used=0, evaluations=n_evals, wall_time=wall,
+                        pareto_front=front, dedup_count=0,
+                        test_error=test_error, test_solved=test_solved)
+
+        logger.debug(f"  [wake] Phase 1.75 color fix: {time.time()-t_phase:.2f}s")
+
         # --- Phase 2: Beam search (seeded with top enumeration results) ---
         # Adaptive: reduce beam effort when enumeration found nothing promising.
         # If best error > 0.3, beam search rarely recovers — cap at 25% gens.
         # If best error > 0.15, moderate reduction — cap at 50% gens.
+        t_phase = time.time()
         best_enum_error = best_so_far.prediction_error if best_so_far else 1.0
         if best_enum_error > 0.3:
             effective_gens = max(5, cfg.max_generations // 4)
@@ -317,6 +419,29 @@ class Learner:
 
             beam = next_gen
 
+        logger.debug(f"  [wake] Phase 2 beam search: {time.time()-t_phase:.2f}s, gens={gens_used}")
+
+        # --- Phase 3: Post-beam color fix ---
+        t_phase = time.time()
+        # Try color remapping on beam results. Skip Phase 3a near-miss
+        # refinement — it's expensive and Phase 1.5 already covered enum
+        # near-misses. Only run color fix on beam candidates.
+        if best_so_far and best_so_far.prediction_error > cfg.solve_threshold:
+            # Build pool from beam + enumeration for color fix only
+            all_candidates = list(enum_candidates)
+            if 'scored' in dir() and scored:
+                all_candidates.extend(scored)
+
+            # Phase 3: Color fix on all candidates
+            color_fixed = self._try_color_fix(all_candidates, task)
+            if color_fixed is not None:
+                n_evals += 1
+                self._update_pareto_front(pareto, color_fixed)
+                if color_fixed.energy < best_so_far.energy:
+                    best_so_far = color_fixed
+
+        logger.debug(f"  [wake] Phase 3 post-beam: {time.time()-t_phase:.2f}s")
+
         # Record the episode and store solution if solved
         solved = best_so_far is not None and best_so_far.prediction_error <= self.search_cfg.solve_threshold
         if best_so_far:
@@ -333,7 +458,12 @@ class Learner:
                     self._credit_library_usage(best_so_far.program)
 
         # Evaluate on held-out test examples if available
-        test_error, test_solved = self._evaluate_on_test(best_so_far, task)
+        # Only evaluate test if training was solved — otherwise test_solved
+        # can be True when train is not, which is misleading.
+        if solved:
+            test_error, test_solved = self._evaluate_on_test(best_so_far, task)
+        else:
+            test_error, test_solved = None, None
 
         front = self._extract_pareto_front(pareto)
         wall = time.time() - t0
@@ -524,6 +654,10 @@ class Learner:
 
         if cfg.sort_by_difficulty:
             tasks = sorted(tasks, key=lambda t: t.difficulty)
+        else:
+            # Seeded shuffle for unbiased progress metrics
+            tasks = list(tasks)
+            random.Random(self.search_cfg.seed or 42).shuffle(tasks)
 
         # Resolve worker count: 0 = performance cores (not all cores)
         if cfg.workers <= 0:
@@ -762,7 +896,9 @@ class Learner:
         are "almost right" — often they just need one more step
         (e.g. a crop, color fix, or flip).
 
-        Cost: O(near_misses × N_primitives × 2) — cheap and high ROI.
+        Cost: O(near_misses × refine_prims × 2).
+        Optimized: uses top-5 near-misses and top-50 primitives (by depth-1
+        score) plus essential pair concepts, instead of all primitives.
         """
         solve_thresh = self.search_cfg.solve_threshold
         near_misses = [
@@ -772,13 +908,29 @@ class Learner:
         if not near_misses:
             return [], 0
 
-        # Sort by quality (best near-misses first)
+        # Sort by quality (best near-misses first), limit to top-5
         near_misses.sort(key=lambda s: s.prediction_error)
+        near_misses = near_misses[:5]
 
-        # Limit to top-10 near-misses to control cost
-        near_misses = near_misses[:10]
-
-        unary_prims = [p for p in primitives if p.arity <= 1]
+        # Select top-50 unary primitives by depth-1 score from candidates,
+        # plus essential pair concepts. This reduces from ~280 to ~50-60 prims.
+        all_unary = [p for p in primitives if p.arity <= 1]
+        essential = self.grammar.essential_pair_concepts()
+        depth1 = [sp for sp in candidates if sp.program.depth == 1]
+        depth1.sort(key=lambda s: s.prediction_error)
+        top_names = set()
+        for sp in depth1:
+            top_names.add(sp.program.root)
+            if len(top_names) >= 50:
+                break
+        # Always include essential pair concepts
+        for p in all_unary:
+            if p.name in essential:
+                top_names.add(p.name)
+        unary_prims = [p for p in all_unary if p.name in top_names]
+        # Fallback: if very few candidates, use all
+        if len(unary_prims) < 10:
+            unary_prims = all_unary
         refined: list[ScoredProgram] = []
         n_evals = 0
 
@@ -813,6 +965,199 @@ class Learner:
                     return refined, n_evals
 
         return refined, n_evals
+
+    def _try_conditional_search(
+        self,
+        predicates: list[tuple[str, callable]],
+        candidates: list[ScoredProgram],
+        primitives: list[Primitive],
+        task: Task,
+        top_k: int = 15,
+    ) -> tuple[Optional[ScoredProgram], int]:
+        """Search for conditional programs: if pred(input) then A else B.
+
+        For each predicate:
+          1. Partition training inputs into true/false groups
+          2. Skip trivial predicates (all-true or all-false)
+          3. Score top-K single primitives on each group independently
+          4. Try best 5×5 combinations per group
+
+        Cost: ~P × top_k (for per-group scoring) + P × 25 (for combos)
+        where P = number of non-trivial predicates.
+        """
+        n_evals = 0
+        solve_thresh = self.search_cfg.solve_threshold
+
+        # Use depth-1 scores from candidates to pick top-K primitives
+        depth1 = [sp for sp in candidates if sp.program.depth == 1]
+        depth1.sort(key=lambda s: s.prediction_error)
+        top_prims_names = []
+        seen = set()
+        for sp in depth1:
+            if sp.program.root not in seen:
+                top_prims_names.append(sp.program.root)
+                seen.add(sp.program.root)
+            if len(top_prims_names) >= top_k:
+                break
+
+        # Resolve to Primitive objects
+        prim_map = {p.name: p for p in primitives}
+        top_prims = [prim_map[n] for n in top_prims_names if n in prim_map]
+        if len(top_prims) < 2:
+            return None, 0
+
+        best_result: Optional[ScoredProgram] = None
+
+        for pred_name, pred_fn in predicates:
+            # Partition training examples by predicate
+            true_indices = []
+            false_indices = []
+            for idx, (inp, _) in enumerate(task.train_examples):
+                try:
+                    if pred_fn(inp):
+                        true_indices.append(idx)
+                    else:
+                        false_indices.append(idx)
+                except Exception:
+                    false_indices.append(idx)
+
+            # Skip trivial predicates (no branching)
+            if not true_indices or not false_indices:
+                continue
+
+            # Score each top primitive on each group
+            true_scores: list[tuple[float, Primitive]] = []
+            false_scores: list[tuple[float, Primitive]] = []
+
+            for prim in top_prims:
+                true_err = 0.0
+                for idx in true_indices:
+                    inp, expected = task.train_examples[idx]
+                    try:
+                        out = self.env.execute(Program(root=prim.name), inp)
+                        true_err += self.drive.prediction_error(out, expected)
+                    except Exception:
+                        true_err += 1.0
+                true_scores.append((true_err / len(true_indices), prim))
+
+                false_err = 0.0
+                for idx in false_indices:
+                    inp, expected = task.train_examples[idx]
+                    try:
+                        out = self.env.execute(Program(root=prim.name), inp)
+                        false_err += self.drive.prediction_error(out, expected)
+                    except Exception:
+                        false_err += 1.0
+                false_scores.append((false_err / len(false_indices), prim))
+
+            # Sort by per-group error (lower is better)
+            true_scores.sort(key=lambda x: x[0])
+            false_scores.sort(key=lambda x: x[0])
+
+            # Try best 5×5 combos
+            best_true = [p for _, p in true_scores[:5]]
+            best_false = [p for _, p in false_scores[:5]]
+
+            for then_prim in best_true:
+                for else_prim in best_false:
+                    if then_prim.name == else_prim.name:
+                        continue
+
+                    # Create a conditional primitive on the fly
+                    def _make_cond(pf, tf, ef):
+                        def cond_fn(grid):
+                            try:
+                                if pf(grid):
+                                    return tf(grid)
+                                else:
+                                    return ef(grid)
+                            except Exception:
+                                return grid
+                        return cond_fn
+
+                    cond_fn = _make_cond(pred_fn, then_prim.fn, else_prim.fn)
+                    cond_name = f"if_{pred_name}_{then_prim.name}_else_{else_prim.name}"
+
+                    # Register as a primitive
+                    cond_prim = Primitive(
+                        name=cond_name, arity=1, fn=cond_fn, domain="arc")
+                    prim_map[cond_name] = cond_prim
+                    self.env.register_primitive(cond_prim)
+
+                    prog = Program(root=cond_name)
+                    sp = self._evaluate_program(prog, task)
+                    n_evals += 1
+
+                    if sp.prediction_error <= solve_thresh:
+                        return sp, n_evals
+                    if best_result is None or sp.energy < best_result.energy:
+                        best_result = sp
+
+        return best_result, n_evals
+
+    def _try_color_fix(
+        self,
+        candidates: list[ScoredProgram],
+        task: Task,
+        threshold: float = 0.30,
+    ) -> Optional[ScoredProgram]:
+        """Try to fix near-miss programs by learning a color remapping.
+
+        For each candidate with low prediction error, execute it on all
+        training inputs, compare outputs to expected, and ask the environment
+        to infer a correction (e.g., color remap).  If found, compose the
+        correction on top and evaluate the result.
+
+        Returns the best color-fixed ScoredProgram, or None.
+        """
+        solve_thresh = self.search_cfg.solve_threshold
+        near_misses = [
+            sp for sp in candidates
+            if solve_thresh < sp.prediction_error <= threshold
+        ]
+        if not near_misses:
+            return None
+
+        near_misses.sort(key=lambda s: s.prediction_error)
+        near_misses = near_misses[:20]
+
+        best_fix: Optional[ScoredProgram] = None
+
+        for nm in near_misses:
+            # Execute program on all training inputs
+            outputs = []
+            expected = []
+            ok = True
+            for inp, exp in task.train_examples:
+                try:
+                    out = self.env.execute(nm.program, inp)
+                    outputs.append(out)
+                    expected.append(exp)
+                except Exception:
+                    ok = False
+                    break
+            if not ok:
+                continue
+
+            # Ask environment for a correction
+            correction = self.env.infer_output_correction(outputs, expected)
+            if correction is None:
+                continue
+
+            # Compose: correction(original_program)
+            fixed_prog = Program(
+                root=correction.root,
+                children=[copy.deepcopy(nm.program)],
+                params=correction.params,
+            )
+            sp = self._evaluate_program(fixed_prog, task)
+
+            if sp.prediction_error <= solve_thresh:
+                return sp
+            if best_fix is None or sp.energy < best_fix.energy:
+                best_fix = sp
+
+        return best_fix
 
     def _exhaustive_enumerate(
         self,
