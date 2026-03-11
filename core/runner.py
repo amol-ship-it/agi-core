@@ -663,24 +663,23 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     last = metrics[-1] if metrics else None
     n_tasks = len(tasks)
 
-    if last:
-        print(f"  Tasks:             {n_tasks}")
-        print(f"  ✓ Solved (train):  {last.tasks_solved}/{n_tasks}  "
-              f"({last.solve_rate:.1%})")
-    else:
-        print(f"  Tasks:             {n_tasks}")
-
     # Test accuracy (generalization) — deduplicate by task_id, last round wins
     all_wake = [wr for rr in results for wr in rr.wake_results]
     test_by_task: dict[str, bool] = {}
     for wr in all_wake:
         if wr.test_solved is not None:
             test_by_task[wr.task_id] = wr.test_solved
-    if test_by_task:
-        unique_test_solved = sum(1 for v in test_by_task.values() if v)
-        unique_test_total = len(test_by_task)
-        print(f"  ✓ Solved (test):   {unique_test_solved}/{unique_test_total}  "
-              f"({unique_test_solved / max(unique_test_total, 1):.1%})")
+    unique_test_solved = sum(1 for v in test_by_task.values() if v) if test_by_task else 0
+
+    if last:
+        print(f"  Tasks:             {n_tasks}")
+        print(f"  ✓ Solved:          {last.tasks_solved}/{n_tasks}  "
+              f"({last.solve_rate:.1%})")
+        if test_by_task:
+            print(f"    generalized:     {unique_test_solved}/{last.tasks_solved}  "
+                  f"({unique_test_solved / max(last.tasks_solved, 1):.1%})")
+    else:
+        print(f"  Tasks:             {n_tasks}")
 
     print(f"  Rounds:            {rounds}")
     print(f"  Total evaluations: {total_evals:,}")
