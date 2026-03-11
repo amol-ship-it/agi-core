@@ -42,20 +42,20 @@ from .metrics import extract_metrics, print_compounding_table, save_metrics_json
 PRESETS = {
     "quick": {
         "rounds": 1,
-        "beam_width": 80,
-        "max_generations": 40,
+        "beam_width": 30,
+        "max_generations": 15,
         "max_tasks": 0,
     },
     "default": {
         "rounds": 1,
-        "beam_width": 150,
-        "max_generations": 80,
+        "beam_width": 80,
+        "max_generations": 40,
         "max_tasks": 0,
     },
     "contest": {
         "rounds": 1,
-        "beam_width": 500,
-        "max_generations": 200,
+        "beam_width": 250,
+        "max_generations": 100,
         "max_tasks": 0,
     },
 }
