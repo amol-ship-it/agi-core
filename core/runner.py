@@ -231,10 +231,12 @@ Examples:
                         help="Disable log file (console only)")
     parser.add_argument("--verbose", action="store_true",
                         help="Debug logging")
-    parser.add_argument("--exhaustive-depth", type=int, default=2,
-                        help="Exhaustive enumeration depth (0=disabled, 2=pairs)")
-    parser.add_argument("--exhaustive-top-k", type=int, default=20,
-                        help="Top-K primitives for depth-2+ enumeration")
+    parser.add_argument("--exhaustive-depth", type=int, default=3,
+                        help="Exhaustive enumeration depth (0=disabled, 2=pairs, 3=triples)")
+    parser.add_argument("--exhaustive-pair-top-k", type=int, default=40,
+                        help="Top-K singles for pair exhaustion (default 40)")
+    parser.add_argument("--exhaustive-triple-top-k", type=int, default=15,
+                        help="Top-K singles for triple exhaustion (default 15)")
     parser.add_argument("--sequential-compounding", action="store_true",
                         help="Process tasks sequentially with immediate concept promotion")
     parser.add_argument("--culture", type=str, default="",
@@ -427,7 +429,8 @@ class ExperimentConfig:
 
     # Exhaustive enumeration
     exhaustive_depth: int = 3
-    exhaustive_top_k: int = 20
+    exhaustive_pair_top_k: int = 40
+    exhaustive_triple_top_k: int = 15
 
     # Sequential compounding
     sequential_compounding: bool = False
@@ -584,7 +587,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             solve_threshold=cfg.solve_threshold,
             seed=cfg.seed,
             exhaustive_depth=cfg.exhaustive_depth,
-            exhaustive_top_k=cfg.exhaustive_top_k,
+            exhaustive_pair_top_k=cfg.exhaustive_pair_top_k,
+            exhaustive_triple_top_k=cfg.exhaustive_triple_top_k,
         ),
         sleep_config=SleepConfig(
             min_occurrences=cfg.min_occurrences,

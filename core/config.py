@@ -29,11 +29,15 @@ class SearchConfig:
 
     # Exhaustive enumeration: try ALL programs up to this depth before beam search.
     # depth 1 = all single primitives, depth 2 = all pairs, depth 3 = all triples.
-    # Set to 0 to disable. Enumeration is cheap for depth <= 2 (N + N² programs).
+    # Set to 0 to disable.
     exhaustive_depth: int = 3
-    # For depth 2+, limit inner primitives to top-K ranked by performance.
-    # Depth-3 cost is N×K (not K³) due to smart subtree reuse.
-    exhaustive_top_k: int = 20
+    # Pair exhaustion: top-K singles (by individual score) + essential structural
+    # concepts form the pair pool. Both steps drawn from this pool → K² combos.
+    # Wider K catches solutions where the first step scores low individually.
+    exhaustive_pair_top_k: int = 40
+    # Triple exhaustion: top-K singles + essential concepts → K³ combos.
+    # Smaller K (15) keeps cost manageable: ~15% of ARC needs exactly 3 steps.
+    exhaustive_triple_top_k: int = 15
 
 
 @dataclass
