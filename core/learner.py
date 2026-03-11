@@ -91,6 +91,7 @@ def _wake_worker(args: tuple) -> WakeResult:
         exhaustive_pair_top_k=search_cfg.exhaustive_pair_top_k,
         exhaustive_triple_top_k=search_cfg.exhaustive_triple_top_k,
         near_miss_threshold=search_cfg.near_miss_threshold,
+        eval_budget=search_cfg.eval_budget,
     )
 
     learner = Learner(
