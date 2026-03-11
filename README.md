@@ -46,7 +46,7 @@ git -C data/ARC-AGI pull
 # Full pipeline: train → save culture → eval (default, recommended)
 python -m experiments.phase1_arc
 
-# Quick subset for development (50 tasks, fast iteration, ~2 min)
+# Quick subset for development (50 tasks, compute-capped, ~2 min)
 python -m experiments.phase1_arc --mode quick
 
 # Train only, save culture for later
@@ -68,7 +68,7 @@ Tasks are **shuffled by default** using a deterministic seed (`--seed 42`), so a
 # Quick mode already uses 50 tasks — fastest way to iterate (~2 min)
 python -m experiments.phase1_arc --mode quick
 
-# Custom subset: 100 tasks with default search depth (~8 min)
+# Custom subset: 100 tasks with default search depth
 python -m experiments.phase1_arc --max-tasks 100
 
 # Tiny smoke test: 10 tasks (~20 sec)
@@ -78,7 +78,7 @@ python -m experiments.phase1_arc --mode quick --max-tasks 10
 python -m experiments.phase1_arc --mode quick --max-tasks 0
 ```
 
-**Extrapolation:** If you solve 12/50 tasks (24%) in quick mode, you can expect roughly 96/400 (24%) on the full dataset. The seeded shuffle ensures the subset is unbiased. Variance decreases with larger subsets — 50 tasks gives a reasonable estimate, 100 tasks gives a tight one.
+**Extrapolation:** If you solve 12/50 tasks (24%) in quick mode, you can expect roughly 96/400 (24%) on the full dataset. The seeded shuffle ensures the subset is unbiased.
 
 ### Other demos (no dataset needed)
 
@@ -114,16 +114,22 @@ tail -f runs/*_phase1_train.log      # watch full console output
 
 ### Verifying individual solves
 
-The console output ends with a **SOLVED TASKS** section listing every solved task and its program. Each line shows the task ID, program, and test status:
+The console output ends with a **SOLVED TASKS** section listing every solved task and its program:
 
 ```
-  SOLVED TASKS (95 total)
-    ✓ 007bbfb7                 program: upscale_pattern [test:✓]
-    ✓ 00d62c1b                 program: fill_rect_interior_4 [test:✓]
+  SOLVED TASKS (24 total)
+    ✓ 007bbfb7                 program: upscale_pattern
+    ✓ 00d62c1b                 program: fill_rect_interior_4
+    ...
+
+  OVERFIT TASKS (13 matched training but failed test)
+    ~ 22168020                 program: fill_by_symmetry
     ...
 ```
 
-To verify a specific solve, look up the task in the ARC dataset and trace the program:
+"Solved" means the program passes held-out test examples — the real metric. "Overfit" means it matched training examples but failed test.
+
+To verify a specific solve:
 
 ```bash
 # View the original task
@@ -136,37 +142,29 @@ grep "007bbfb7" runs/*_phase1_train.jsonl | python -m json.tool
 python -c "import json; d=json.load(open('runs/TIMESTAMP_phase1_train.json')); print(json.dumps(d['tasks']['007bbfb7'], indent=2))"
 ```
 
-Each task record (JSONL and JSON) includes: `task_id`, `solved`, `test_solved`, `test_error`, `energy`, `prediction_error`, `program`, `evaluations`, `wall_time`.
+Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, `test_solved`, `test_error`, `energy`, `prediction_error`, `program`, `evaluations`, `wall_time`.
 
-### Presets
+## Presets
 
 Three modes. Pick one. That's the only knob most users need.
 
-| Mode | Rounds | Beam | Gens | Tasks | ~Evals/task | Use case |
-|------|--------|------|------|-------|-------------|----------|
-| `quick` | 1 | 30 | 15 | 50 | ~450 | Fast iteration (~2 min) |
-| `default` | 1 | 80 | 40 | all | ~3,200 | Balanced speed/accuracy |
-| `contest` | 1 | 250 | 100 | all | ~25,000 | Maximum accuracy |
+| Mode | Tasks | Beam | Gens | Compute Cap | Use case |
+|------|-------|------|------|-------------|----------|
+| `quick` | 50 | 30 | 15 | 5M | Fast dev loop (~2 min) |
+| `default` | all (400) | 80 | 40 | 50M | Balanced speed/accuracy |
+| `contest` | all (400) | 250 | 100 | 200M | Maximum accuracy |
 
-Compute budget = beam × gens. Early stopping saves unused compute on easy tasks.
+All presets run 1 round and use deterministic seed 42 by default.
 
-### Expected performance
+**Compute cap** is cell-normalized: small grids (cheap to evaluate) get more search, large grids (expensive) get capped. This prevents runaway tasks from dominating wall time. Override with `--compute-cap`:
 
-Times scale inversely with worker count and CPU speed.
+```bash
+python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
+```
 
-| Mode | Training | Eval (culture transfer) | Wall time (M1 Max, 8 workers) |
-|------|----------|------------------------|-------------------------------|
-| `quick` | ~13/50 (~26%) | ~4/50 (~8%) | **~2 min** |
-| `default` | **~108/400 (~27%)** | **~35/400 (~9%)** | **~11 min** |
-| `contest` | higher | TBD | ~3-4 hr |
+**Reproducibility:** All runs are fully deterministic. Same seed + same preset = identical results regardless of machine. The seed controls task shuffling, search randomness, and per-task worker seeds.
 
-**330 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
-**Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
-**Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
-
-The key metric is whether solve rate **increases across rounds** as the library grows — that validates compounding.
-
-### Options
+## Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -176,25 +174,32 @@ The key metric is whether solve rate **increases across rounds** as the library 
 | `--eval-only` | off | Eval only (requires `--culture`) |
 | `--culture` | none | Culture file to load (cross-run knowledge transfer) |
 | `--save-culture` | auto | Override auto culture save path |
-| `--max-tasks` | from preset | Limit tasks (0 = all) |
-| `--rounds` | from preset | Wake-sleep rounds |
-| `--beam-width` | from preset | Candidates per generation |
-| `--max-generations` | from preset | Generations per task |
-| `--workers` | 0 (perf cores) | Parallel workers (0 = performance cores only) |
-| `--seed` | 42 | Random seed (deterministic) |
-| `--compute-cap` | 0 (unlimited) | Total eval budget. Accepts: `50M`, `500K`, `0` |
+| `--max-tasks` | from preset | Limit tasks (0 = all). Quick: 50, default/contest: all |
+| `--rounds` | `1` | Wake-sleep rounds |
+| `--beam-width` | from preset | Candidates per generation. Quick: 30, default: 80, contest: 250 |
+| `--max-generations` | from preset | Generations per task. Quick: 15, default: 40, contest: 100 |
+| `--workers` | perf cores | Parallel workers (0 = auto-detect performance cores) |
+| `--seed` | `42` | Random seed for deterministic, reproducible runs |
+| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick: 5M, default: 50M, contest: 200M |
+| `--exhaustive-depth` | `3` | Exhaustive enumeration depth (0=off, 2=pairs, 3=triples) |
+| `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
+| `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |
+| `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
 | `--no-log` | off | Disable log file (console only) |
+| `--verbose` | off | Enable debug logging |
 
 ## How It Works
 
 ### The wake-sleep loop
 
 1. **WAKE**: For each task, search for a program that transforms input to output.
-   Uses beam search with mutation and crossover over a library of primitives.
-   - **Semantic deduplication** removes algebraically-equivalent programs from the beam (e.g. `cos(π/2+x²)` = `sin(x²)`) by hashing output vectors.
-   - **Pareto front tracking** records the best program at each complexity level, showing the full accuracy-complexity tradeoff.
-   - **Constant optimization** (symbolic math only): after structural mutations, fits constants via `scipy.optimize.minimize` (Nelder-Mead), decoupling structure search from coefficient search.
+   - **Exhaustive enumeration** (depth 1-3): systematically tries all single primitives, top-K pairs, and top-K triples. Solves ~97% of solvable tasks.
+   - **Object decomposition**: detects per-object transform patterns via connected components, with conditional recoloring by size, shape, or position.
+   - **Conditional branching**: partitions inputs by predicates (symmetric, tall, square, etc.) and finds per-group transforms.
+   - **Near-miss refinement**: takes programs with error < 20% and tries appending/prepending each primitive.
+   - **Color fix**: infers pixel-level color remappings from near-perfect programs.
+   - **Beam search**: seeded with top enumeration results, mutates and crosses programs with semantic deduplication.
 2. **SLEEP**: Analyze all solved programs. Extract recurring sub-programs.
    Add them to the library as new reusable abstractions.
 3. **REPEAT**: The grown library biases future search toward proven compositions.
@@ -212,6 +217,13 @@ Every domain implements exactly 4 things:
 | **Memory** | Store episodes, library, solutions | InMemoryStore | InMemoryStore | InMemoryStore |
 
 The core loop (`core/learner.py`) depends **only** on these interfaces. It never imports anything domain-specific. This is the "one algorithm" claim — the same loop works for grid puzzles, symbolic math, text adventures, and (eventually) robotics.
+
+### Terminology
+
+- **solved** — program passes held-out test examples (the real metric)
+- **train_solved** — program matches training examples within a task (may overfit)
+- **overfit** — train_solved but NOT solved (matched training, failed test)
+- **solve_rate** — fraction of tasks solved (test-verified)
 
 ### The key metric: the compounding curve
 
@@ -245,7 +257,7 @@ agi-core/
 │   └── phase1_arc.py        # ARC curriculum training (dataset loading + ARC wiring)
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
-│   ├── arc/                 # ARC-AGI grid transformations (317 primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (330 primitives)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
@@ -255,13 +267,16 @@ agi-core/
 │   └── symbolic_math/       # 1D symbolic regression (15 math primitives)
 │       └── __init__.py      # All 4 interfaces in one file
 │
-├── tests/                   # Test suite (380 tests)
+├── tests/                   # Test suite (380 tests, 12 files)
 │   ├── test_arc.py
+│   ├── test_color_fix.py
+│   ├── test_conditional_search.py
 │   ├── test_exhaustive_enum.py
 │   ├── test_interfaces.py
 │   ├── test_learner.py
 │   ├── test_memory.py
 │   ├── test_metrics.py
+│   ├── test_object_decomposition.py
 │   └── test_symbolic_math.py
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
@@ -292,7 +307,7 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** 🔧 ARC-AGI-1 training, curriculum style (317 primitives, beam search, wake-sleep)
+- **Phase 1** 🔧 ARC-AGI-1 training, curriculum style (330 primitives, beam search, wake-sleep)
 - **Phase 2** ARC-AGI-1 eval, zero-shot transfer
 - **Phase 3** Second domain (Zork), same core, cold start
 - **Phase 4** Cross-domain library transfer
