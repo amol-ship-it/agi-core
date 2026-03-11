@@ -592,9 +592,12 @@ Comparison across sessions:
 |---------|-----------|---------|-----------|-------------|-------|
 | 7       | 101       | quick   | 52/400 = 13.0% | 2.30s | Baseline |
 | 8       | 281       | default | 18/400 = 4.5%  | 15-30s | Regression (bloated pool) |
-| 9       | 281       | quick   | 84/400 = 21.0% | 2.3s  | **Pool fix + optimizations** |
+| 9a      | 281       | quick   | 84/400 = 21.0% | 2.3s  | Pool fix, broken dedup |
+| 9b      | 281       | quick   | 86/400 = 21.5% | 2.8s  | Pool fix + dedup fix + reduced beam |
 
-The 281 primitives now help (21% vs 13%) instead of hurting (4.5%). The semantic dedup fix (beam diversity) was NOT active during this benchmark — should improve further.
+The 281 primitives now help (21.5% vs 13%) instead of hurting (4.5%). Semantic dedup fix adds 2 more solves with ~0.5s/task overhead. Presets reduced (beam 80→30, gens 40→15) to compensate for proper beam diversity.
+
+**Key insight:** Beam search contributes minimally to solve rate (~2 tasks out of 86). The exhaustive enumeration (depth 1-3) does the heavy lifting. This suggests future work should focus on better enumeration (richer primitives, smarter pool selection) rather than deeper beam search.
 
 ---
 
