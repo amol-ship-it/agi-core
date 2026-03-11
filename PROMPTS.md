@@ -182,4 +182,14 @@
 
 ---
 
+## Session 5 — Claude Code Web (March 11, 2026)
+
+### Prompt 29: Quick Mode Too Slow
+
+> Why is the quick mode documented to be relatively slow now (i.e. 32 minutes)? Can we make it run in 5 minutes or less, but with reasonable accuracy? Also, provide examples with operating on a subset of tasks in the README. Also, the default mode is shuffled tasks, right? i.e. If I run a subset of tasks, e.g. max-tasks=50, I can roughly extrapolate the number of solves?
+
+[User identified that quick mode was slow because it still ran all 400 tasks. Asked to reduce to <5 min with reasonable accuracy, add subset examples to README, and confirm that shuffled tasks allow extrapolation from subsets.]
+
+---
+
 *This document will be updated with each new session.*

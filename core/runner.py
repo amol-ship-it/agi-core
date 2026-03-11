@@ -44,7 +44,7 @@ PRESETS = {
         "rounds": 1,
         "beam_width": 30,
         "max_generations": 15,
-        "max_tasks": 0,
+        "max_tasks": 50,
     },
     "default": {
         "rounds": 1,

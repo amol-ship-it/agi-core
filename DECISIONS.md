@@ -648,4 +648,20 @@ Net +7 train tasks (+8 new, -1 regression). The 8 newly solved tasks:
 
 ---
 
+## Decision: Quick Preset — 50 Tasks Instead of All 400 (2026-03-11)
+
+**Problem:** Quick mode ran all 400 tasks with smaller beam/gens, taking ~32 minutes. This defeats the purpose of a "quick" iteration mode.
+
+**Change:** Set `max_tasks: 50` in the quick preset (was `0` = all tasks).
+
+**Rationale:**
+- 50 tasks × ~3s/task ÷ 4 workers ≈ ~40 seconds per phase. Full pipeline (train + eval) completes in ~2 minutes.
+- Tasks are shuffled with a deterministic seed (42), so any subset is a representative random sample.
+- Extrapolation works: if 12/50 (24%) solve in quick mode, expect ~96/400 (24%) on the full dataset.
+- Users who want quick search settings on all 400 tasks can use `--mode quick --max-tasks 0`.
+
+**Trade-off:** Quick mode no longer produces a full 400-task result. But the purpose of quick mode is fast iteration, not final benchmarking — that's what default/contest modes are for.
+
+---
+
 *This document will be updated with each new session and major decision.*
