@@ -421,4 +421,38 @@ Alternatives considered: (a) decorator pattern, (b) inheritance. Chose simple bo
 
 ---
 
+## Session — Porting agi-mvp-general Solver (March 11, 2026)
+
+### Decision: Port exhaustive enumeration strategy from agi-mvp-general
+
+**Problem:** agi-core's exhaustive search used top-20 inner prims with N×K enumeration (all outers × top-K inners). This missed solutions where the first step scored low individually but was structurally critical (e.g. crop, fill, compress).
+
+**Solution:** Adapted agi-mvp-general's proven approach:
+- **Pair search:** top-40 singles + 30 essential structural concepts → K² combos (both steps from same pool)
+- **Triple search:** top-15 + essential concepts → K³ exhaustive (guaranteed to find all 3-step solutions in pool)
+- **Grammar.essential_pair_concepts():** domain-agnostic interface for structural prims
+- **Adaptive beam search:** reduce generations when enumeration best error > 0.3 (beam rarely recovers)
+
+**Primitive porting:** 101 → 222 → 260 primitives across two batches:
+- Batch 1: fill, pattern, grid arithmetic, symmetry, color, propagation, object-level (121 new)
+- Batch 2: connectivity, gravity, line extension, color reordering, factory-generated variants (38 new)
+
+### Benchmark Results (50-task quick test)
+
+| Version | Primitives | Train Solved | Test Solved |
+|---------|-----------|-------------|-------------|
+| Session 5 baseline | 101 | 52/400 (13.0%) | — |
+| + 121 primitives | 222 | 9/50 (18.0%) | 8/50 (16.0%) |
+| + enumeration + 38 prims | 260 | **12/50 (24.0%)** | **10/50 (20.0%)** |
+
+**Key observation:** 3 new solves from wider enumeration + new primitives. The improvement from 18% → 24% validates that both wider search AND more primitives contribute. The remaining 76% unsolved tasks likely need conditionals, object decomposition, or DSL synthesis.
+
+### Decision: Default rounds to 1
+
+Wake-sleep rounds haven't shown accuracy improvements in practice. The library extraction phase adds abstractions but they don't measurably help subsequent rounds. Defaulted all presets to rounds=1.
+
+**Rationale:** Until the sleep phase's extraction quality improves (better subtree scoring, cross-task transfer), multiple rounds just waste compute. The flag is preserved for experimentation.
+
+---
+
 *This document will be updated with each new session and major decision.*
