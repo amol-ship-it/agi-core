@@ -289,7 +289,7 @@ class ProgressTracker:
 
         self.done += 1
         self._round_done += 1
-        if wr.solved:
+        if wr.solved:  # test-verified (falls back to train when no test data)
             self.solved += 1
             self._round_solved += 1
         self.total_evals += wr.evaluations
@@ -303,10 +303,10 @@ class ProgressTracker:
         energy_str = f"{wr.best.energy:.4f}" if wr.best else "    N/A"
         program_str = repr(wr.best.program) if wr.best else ""
 
-        # Test accuracy tag
-        test_tag = ""
-        if wr.test_solved is not None:
-            test_tag = " [test:✓]" if wr.test_solved else " [test:✗]"
+        # Overfit tag: matched training but failed test
+        overfit_tag = ""
+        if wr.train_solved and wr.test_solved is False:
+            overfit_tag = " [overfit]"
 
         slow_tag = ""
         if len(self.times) >= 5:
@@ -319,7 +319,7 @@ class ProgressTracker:
             f"{wr.task_id:<20s} "
             f"E={energy_str}  gens={wr.generations_used:<4d} "
             f"evals={wr.evaluations:<6d} {wr.wall_time:.1f}s"
-            f"{test_tag}{slow_tag}",
+            f"{overfit_tag}{slow_tag}",
             flush=True,
         )
         if wr.solved and program_str:
@@ -334,7 +334,8 @@ class ProgressTracker:
             "round": round_num,
             "task_index": task_index,
             "task_id": wr.task_id,
-            "solved": wr.solved,
+            "solved": wr.solved,           # test-verified (the real metric)
+            "train_solved": wr.train_solved,
             "test_solved": wr.test_solved,
             "test_error": round(wr.test_error, 6) if wr.test_error is not None else None,
             "energy": wr.best.energy if wr.best else None,
@@ -663,26 +664,14 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     last = metrics[-1] if metrics else None
     n_tasks = len(tasks)
 
-    # Test accuracy — deduplicate by task_id, last round wins
-    all_wake = [wr for rr in results for wr in rr.wake_results]
-    test_by_task: dict[str, bool] = {}
-    for wr in all_wake:
-        if wr.test_solved is not None:
-            test_by_task[wr.task_id] = wr.test_solved
-    unique_test_solved = sum(1 for v in test_by_task.values() if v) if test_by_task else 0
-
     print(f"  Tasks:             {n_tasks}")
-    if last and test_by_task:
-        # Show test-verified solve rate as the headline number
-        print(f"  ✓ Solved:          {unique_test_solved}/{n_tasks}  "
-              f"({unique_test_solved / max(n_tasks, 1):.1%})")
-        if last.tasks_solved > unique_test_solved:
-            overfits = last.tasks_solved - unique_test_solved
-            print(f"    (+ {overfits} overfit: solved training examples "
-                  f"but failed held-out test)")
-    elif last:
+    if last:
         print(f"  ✓ Solved:          {last.tasks_solved}/{n_tasks}  "
               f"({last.solve_rate:.1%})")
+        if last.train_solved > last.tasks_solved:
+            overfits = last.train_solved - last.tasks_solved
+            print(f"    (+ {overfits} overfit: matched training examples "
+                  f"but failed held-out test)")
 
     print(f"  Rounds:            {rounds}")
     print(f"  Total evaluations: {total_evals:,}")
@@ -721,22 +710,28 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
 
     # --- Solved tasks summary (for verification) ---
     solved_records = [r for r in tracker.all_records if r["solved"]]
+    overfit_records = [r for r in tracker.all_records
+                       if r.get("train_solved") and not r["solved"]]
     if solved_records:
         print()
         hline("─")
         print(f"  SOLVED TASKS ({len(solved_records)} total)")
         hline("─")
         for r in sorted(solved_records, key=lambda r: r["task_id"]):
-            test_tag = ""
-            if r.get("test_solved") is True:
-                test_tag = " [test:✓]"
-            elif r.get("test_solved") is False:
-                test_tag = f" [test:✗ err={r.get('test_error', '?')}]"
-            print(f"    ✓ {r['task_id']:<24s} program: {r['program']}{test_tag}")
+            print(f"    ✓ {r['task_id']:<24s} program: {r['program']}")
+    if overfit_records:
+        print()
+        hline("─")
+        print(f"  OVERFIT TASKS ({len(overfit_records)} matched training but failed test)")
+        hline("─")
+        for r in sorted(overfit_records, key=lambda r: r["task_id"]):
+            err_str = f" err={r.get('test_error', '?')}" if r.get("test_error") else ""
+            print(f"    ~ {r['task_id']:<24s} program: {r['program']}{err_str}")
 
     # --- Near misses (for debugging unsolved tasks) ---
     near_misses = [r for r in tracker.all_records
-                   if not r["solved"] and r.get("prediction_error") is not None
+                   if not r["solved"] and not r.get("train_solved")
+                   and r.get("prediction_error") is not None
                    and r["prediction_error"] < 0.1]
     if near_misses:
         near_misses.sort(key=lambda r: r["prediction_error"])
@@ -745,13 +740,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         print(f"  NEAR MISSES ({len(near_misses)} tasks with error < 0.1)")
         hline("─")
         for r in near_misses[:20]:
-            test_tag = ""
-            if r.get("test_solved") is True:
-                test_tag = " [test:✓]"
-            elif r.get("test_solved") is False:
-                test_tag = " [test:✗]"
             print(f"    ✗ {r['task_id']:<24s} err={r['prediction_error']:.4f}  "
-                  f"program: {r['program']}{test_tag}")
+                  f"program: {r['program']}")
         if len(near_misses) > 20:
             print(f"    ... and {len(near_misses) - 20} more")
 
@@ -779,6 +769,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             "rounds": rounds,
             "last_round_solved": last.tasks_solved if last else 0,
             "last_round_solve_rate": round(last.solve_rate, 4) if last else 0,
+            "last_round_train_solved": last.train_solved if last else 0,
+            "last_round_train_solve_rate": round(last.train_solve_rate, 4) if last else 0,
             "total_task_instances": tracker.done,
             "mean_energy": round(statistics.mean(tracker.scores), 4) if tracker.scores else None,
             "total_evaluations": total_evals,
@@ -793,6 +785,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
                     "round": m.round_number,
                     "solve_rate": round(m.solve_rate, 4),
                     "tasks_solved": m.tasks_solved,
+                    "train_solve_rate": round(m.train_solve_rate, 4),
+                    "train_solved": m.train_solved,
                     "tasks_total": m.tasks_total,
                     "library_size": m.library_size,
                     "new_abstractions": m.new_abstractions,
@@ -808,6 +802,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             r["task_id"]: {
                 "round": r["round"],
                 "solved": r["solved"],
+                "train_solved": r.get("train_solved"),
                 "test_solved": r.get("test_solved"),
                 "test_error": r.get("test_error"),
                 "energy": r["energy"],

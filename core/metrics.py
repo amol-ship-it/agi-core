@@ -7,6 +7,10 @@ The most important output is the COMPOUNDING CURVE:
 
 If this curve bends upward, the framework is working.
 If it plateaus, we've hit a ceiling. Both are valuable data.
+
+Terminology:
+    - "solved" = program passes held-out test examples (the real metric)
+    - "train_matched" = program matches training examples (may overfit)
 """
 
 from __future__ import annotations
@@ -23,31 +27,36 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CompoundingMetrics:
-    """The numbers that matter for testing the core claim."""
+    """The numbers that matter for testing the core claim.
+
+    Primary metric: solve_rate (test-verified).
+    Secondary: train_solve_rate (training examples only, may overfit).
+    """
     round_number: int
+    # Primary: test-verified solve rate (falls back to train when no test data)
     solve_rate: float
     tasks_solved: int
     tasks_total: int
+    # Secondary: training-only match rate
+    train_solve_rate: float
+    train_solved: int
+    # Library / search stats
     library_size: int
     new_abstractions: int
     avg_reuse_per_entry: float  # are library entries actually being reused?
     avg_energy_of_solutions: float
     wall_time_wake: float
     wall_time_sleep: float
-    # Test accuracy (generalization): how the best program performs on held-out test examples
-    test_solve_rate: float = 0.0
-    test_tasks_solved: int = 0
-    test_tasks_evaluated: int = 0
 
 
 def extract_metrics(results: list[RoundResult]) -> list[CompoundingMetrics]:
     """Convert raw RoundResults into the metrics that test the claim."""
     metrics = []
     for rr in results:
-        # Average energy of solved tasks
+        # Average energy of solved tasks (train-matched, since those have programs)
         solved_energies = [
             w.best.energy for w in rr.wake_results
-            if w.solved and w.best is not None
+            if w.train_solved and w.best is not None
         ]
         avg_energy = (
             sum(solved_energies) / len(solved_energies)
@@ -62,26 +71,19 @@ def extract_metrics(results: list[RoundResult]) -> list[CompoundingMetrics]:
         wake_time = sum(w.wall_time for w in rr.wake_results)
         sleep_time = rr.sleep_result.wall_time
 
-        # Test accuracy (generalization)
-        test_evaluated = [w for w in rr.wake_results if w.test_solved is not None]
-        test_solved_count = sum(1 for w in test_evaluated if w.test_solved)
-        test_total = len(test_evaluated)
-        test_rate = test_solved_count / test_total if test_total > 0 else 0.0
-
         m = CompoundingMetrics(
             round_number=rr.round_number,
-            solve_rate=rr.solve_rate,
-            tasks_solved=rr.tasks_solved,
+            solve_rate=rr.solve_rate,          # test-verified (property)
+            tasks_solved=rr.solved,            # test-verified (property)
             tasks_total=rr.tasks_total,
+            train_solve_rate=rr.train_solve_rate,
+            train_solved=rr.train_solved,
             library_size=rr.cumulative_library_size,
             new_abstractions=len(rr.sleep_result.new_entries),
             avg_reuse_per_entry=avg_reuse,
             avg_energy_of_solutions=avg_energy,
             wall_time_wake=wake_time,
             wall_time_sleep=sleep_time,
-            test_solve_rate=test_rate,
-            test_tasks_solved=test_solved_count,
-            test_tasks_evaluated=test_total,
         )
         metrics.append(m)
     return metrics
@@ -89,11 +91,11 @@ def extract_metrics(results: list[RoundResult]) -> list[CompoundingMetrics]:
 
 def print_compounding_table(metrics: list[CompoundingMetrics]) -> None:
     """Print the compounding curve as a text table."""
-    has_test = any(m.test_tasks_evaluated > 0 for m in metrics)
-    if has_test:
+    has_overfit = any(m.train_solved > m.tasks_solved for m in metrics)
+    if has_overfit:
         header = (
-            f"{'Round':>5}  {'Train':>10}  {'TrRate':>7}  "
-            f"{'Test':>10}  {'TsRate':>7}  "
+            f"{'Round':>5}  {'Solved':>10}  {'Rate':>7}  "
+            f"{'TrMatch':>10}  {'TrRate':>7}  "
             f"{'Library':>7}  {'New':>4}  "
             f"{'Wake(s)':>8}  {'Sleep(s)':>8}"
         )
@@ -106,13 +108,13 @@ def print_compounding_table(metrics: list[CompoundingMetrics]) -> None:
     print(header)
     print("-" * len(header))
     for m in metrics:
-        if has_test:
+        if has_overfit:
             print(
                 f"{m.round_number:>5}  "
                 f"{m.tasks_solved:>4}/{m.tasks_total:<4}  "
                 f"{m.solve_rate:>6.1%}  "
-                f"{m.test_tasks_solved:>4}/{m.test_tasks_evaluated:<4}  "
-                f"{m.test_solve_rate:>6.1%}  "
+                f"{m.train_solved:>4}/{m.tasks_total:<4}  "
+                f"{m.train_solve_rate:>6.1%}  "
                 f"{m.library_size:>7}  "
                 f"{m.new_abstractions:>4}  "
                 f"{m.wall_time_wake:>8.1f}  "

@@ -40,7 +40,7 @@ def _make_round_result(round_num=1, n_solved=2, n_total=5, lib_size=3):
         )
         wake_results.append(WakeResult(
             task_id=f"t{i}",
-            solved=solved,
+            train_solved=solved,
             best=best,
             generations_used=10,
             evaluations=200,
@@ -60,9 +60,9 @@ def _make_round_result(round_num=1, n_solved=2, n_total=5, lib_size=3):
         round_number=round_num,
         wake_results=wake_results,
         sleep_result=sleep_result,
-        tasks_solved=n_solved,
+        train_solved=n_solved,
         tasks_total=n_total,
-        solve_rate=n_solved / n_total,
+        train_solve_rate=n_solved / n_total,
         cumulative_library_size=lib_size,
     )
 

@@ -293,7 +293,7 @@ class TestSequentialCompounding(unittest.TestCase):
             CurriculumConfig(wake_sleep_rounds=1, sequential_compounding=True),
         )
         self.assertEqual(len(results), 1)
-        self.assertGreater(results[0].tasks_solved, 0)
+        self.assertGreater(results[0].solved, 0)
 
     def test_immediate_promote(self):
         """_immediate_promote should add subtrees to the library."""
