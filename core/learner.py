@@ -403,6 +403,18 @@ class Learner:
 
             beam = next_gen
 
+        # --- Phase 3: Post-search color fix ---
+        # Try color fix on the best beam result if not already solved
+        if best_so_far and best_so_far.prediction_error > cfg.solve_threshold:
+            all_scored = [sp for sp in scored] if 'scored' in dir() else []
+            all_scored.extend(enum_candidates)
+            color_fixed = self._try_color_fix(all_scored, task)
+            if color_fixed is not None:
+                n_evals += 1
+                self._update_pareto_front(pareto, color_fixed)
+                if color_fixed.energy < best_so_far.energy:
+                    best_so_far = color_fixed
+
         # Record the episode and store solution if solved
         solved = best_so_far is not None and best_so_far.prediction_error <= self.search_cfg.solve_threshold
         if best_so_far:
