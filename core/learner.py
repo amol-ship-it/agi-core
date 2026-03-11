@@ -1409,16 +1409,22 @@ class Learner:
         """Hash a program by its outputs on training inputs.
 
         Two programs that produce identical output vectors are semantically
-        equivalent (e.g. cos(π/2 + x²) and sin(x²)).  Rounding to
-        `dedup_precision` decimal places provides tolerance for floating-point
-        noise while still catching true duplicates.
+        equivalent (e.g. cos(π/2 + x²) and sin(x²)).  For numeric outputs,
+        rounds to `dedup_precision` decimal places. For grid outputs (list
+        of lists), uses tuple representation for exact comparison.
         """
         precision = self.search_cfg.dedup_precision
         outputs = []
         for inp, _ in task.train_examples:
             try:
                 val = self.env.execute(program, inp)
-                outputs.append(round(float(val), precision))
+                if isinstance(val, (int, float)):
+                    outputs.append(round(float(val), precision))
+                elif isinstance(val, list):
+                    # Grid output: convert to nested tuples for hashing
+                    outputs.append(tuple(tuple(row) for row in val) if val and isinstance(val[0], list) else tuple(val))
+                else:
+                    outputs.append(val)
             except Exception:
                 outputs.append(None)
         return str(outputs)
