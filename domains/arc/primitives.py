@@ -2864,6 +2864,554 @@ def keep_border_only(grid: Grid) -> Grid:
 
 
 # =============================================================================
+# Port batch 2: remaining primitives from agi-mvp-general
+# =============================================================================
+
+def connect_pixels_to_rect(grid: Grid) -> Grid:
+    """Connect isolated single-pixel anomalies to the nearest rectangle border.
+
+    Finds isolated non-bg pixels (surrounded entirely by bg), then draws a
+    straight line (H or V) from that pixel to the nearest edge of any
+    rectangle object, filling with the isolated pixel's color.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    bg = Counter(flat).most_common(1)[0][0]
+    result = [row[:] for row in grid]
+
+    visited = [[False] * w for _ in range(h)]
+    components = []
+
+    def bfs(sr, sc):
+        color = grid[sr][sc]
+        cells = []
+        queue = [(sr, sc)]
+        visited[sr][sc] = True
+        while queue:
+            r, c = queue.pop(0)
+            cells.append((r, c))
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and not visited[nr][nc] and grid[nr][nc] == color:
+                    visited[nr][nc] = True
+                    queue.append((nr, nc))
+        return color, cells
+
+    for r in range(h):
+        for c in range(w):
+            if not visited[r][c] and grid[r][c] != bg:
+                color, cells = bfs(r, c)
+                components.append((color, cells))
+
+    if len(components) < 2:
+        return grid
+
+    isolated = []
+    rects = []
+    for color, cells in components:
+        if len(cells) == 1:
+            r, c = cells[0]
+            neighbors = [grid[r + dr][c + dc] for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                         if 0 <= r + dr < h and 0 <= c + dc < w]
+            if all(v == bg for v in neighbors):
+                isolated.append((color, r, c))
+            else:
+                rects.append((color, cells))
+        else:
+            rects.append((color, cells))
+
+    if not isolated or not rects:
+        return grid
+
+    rect_cells_set = set()
+    for _, cells in rects:
+        for rc in cells:
+            rect_cells_set.add(rc)
+
+    for iso_color, ir, ic in isolated:
+        best_dist = float('inf')
+        best_rc = None
+        for rr, rc in rect_cells_set:
+            if rr == ir or rc == ic:
+                d = abs(rr - ir) + abs(rc - ic)
+                if d < best_dist:
+                    best_dist = d
+                    best_rc = (rr, rc)
+        if best_rc is None:
+            for rr, rc in rect_cells_set:
+                d = abs(rr - ir) + abs(rc - ic)
+                if d < best_dist:
+                    best_dist = d
+                    best_rc = (rr, rc)
+        if best_rc is None:
+            continue
+        rr, rc = best_rc
+        if rr == ir:
+            c_start, c_end = min(ic, rc), max(ic, rc)
+            for c in range(c_start, c_end + 1):
+                if result[ir][c] == bg:
+                    result[ir][c] = iso_color
+        elif rc == ic:
+            r_start, r_end = min(ir, rr), max(ir, rr)
+            for r in range(r_start, r_end + 1):
+                if result[r][ic] == bg:
+                    result[r][ic] = iso_color
+        else:
+            if abs(ic - rc) <= abs(ir - rr):
+                c_start, c_end = min(ic, rc), max(ic, rc)
+                for c in range(c_start, c_end + 1):
+                    if result[ir][c] == bg:
+                        result[ir][c] = iso_color
+            else:
+                r_start, r_end = min(ir, rr), max(ir, rr)
+                for r in range(r_start, r_end + 1):
+                    if result[r][ic] == bg:
+                        result[r][ic] = iso_color
+    return result
+
+
+def gravity_toward_color(grid: Grid) -> Grid:
+    """Pull all non-bg cells toward rows/cols containing solid bands."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    bg = Counter(flat).most_common(1)[0][0]
+
+    band_rows = []
+    for r in range(h):
+        row_vals = set(grid[r])
+        if len(row_vals) == 1 and list(row_vals)[0] != bg:
+            band_rows.append((r, list(row_vals)[0]))
+
+    band_cols = []
+    for c in range(w):
+        col_vals = set(grid[r][c] for r in range(h))
+        if len(col_vals) == 1 and list(col_vals)[0] != bg:
+            band_cols.append((c, list(col_vals)[0]))
+
+    if not band_rows and not band_cols:
+        return grid
+
+    result = [row[:] for row in grid]
+    band_row_set = {r for r, _ in band_rows}
+    band_col_set = {c for c, _ in band_cols}
+
+    if band_rows:
+        for c in range(w):
+            vals_above, vals_below = [], []
+            first_band = band_rows[0][0]
+            last_band = band_rows[-1][0]
+            for r in range(h):
+                if r in band_row_set:
+                    continue
+                if grid[r][c] != bg:
+                    if r < first_band:
+                        vals_above.append(grid[r][c])
+                    else:
+                        vals_below.append(grid[r][c])
+            for r in range(h):
+                if r not in band_row_set:
+                    result[r][c] = bg
+            for i, val in enumerate(reversed(vals_above)):
+                r = first_band - 1 - i
+                if 0 <= r < h and r not in band_row_set:
+                    result[r][c] = val
+            for i, val in enumerate(vals_below):
+                r = last_band + 1 + i
+                if 0 <= r < h and r not in band_row_set:
+                    result[r][c] = val
+
+    if band_cols:
+        for r in range(h):
+            vals_left, vals_right = [], []
+            first_band = band_cols[0][0]
+            last_band = band_cols[-1][0]
+            for c in range(w):
+                if c in band_col_set:
+                    continue
+                if grid[r][c] != bg:
+                    if c < first_band:
+                        vals_left.append(grid[r][c])
+                    else:
+                        vals_right.append(grid[r][c])
+            for c in range(w):
+                if c not in band_col_set:
+                    result[r][c] = bg
+            for i, val in enumerate(reversed(vals_left)):
+                c = first_band - 1 - i
+                if 0 <= c < w and c not in band_col_set:
+                    result[r][c] = val
+            for i, val in enumerate(vals_right):
+                c = last_band + 1 + i
+                if 0 <= c < w and c not in band_col_set:
+                    result[r][c] = val
+    return result
+
+
+def recolor_2nd_to_3rd(grid: Grid) -> Grid:
+    """Replace the 2nd most common non-bg color with the 3rd most common."""
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    counts = Counter(flat)
+    bg = counts.most_common(1)[0][0]
+    non_bg = [v for v, _ in counts.most_common() if v != bg]
+    if len(non_bg) < 3:
+        return grid
+    src, dst = non_bg[1], non_bg[2]
+    return [[dst if v == src else v for v in row] for row in grid]
+
+
+def recolor_least_to_2nd_least(grid: Grid) -> Grid:
+    """Replace the least common non-bg color with the 2nd least common."""
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    counts = Counter(flat)
+    bg = counts.most_common(1)[0][0]
+    non_bg_sorted = [(v, c) for v, c in sorted(counts.items(), key=lambda x: x[1]) if v != bg]
+    if len(non_bg_sorted) < 2:
+        return grid
+    src, dst = non_bg_sorted[0][0], non_bg_sorted[1][0]
+    return [[dst if v == src else v for v in row] for row in grid]
+
+
+def swap_most_and_2nd_color(grid: Grid) -> Grid:
+    """Swap the most common and 2nd most common non-bg colors."""
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    counts = Counter(flat)
+    bg = counts.most_common(1)[0][0]
+    non_bg = [v for v, _ in counts.most_common() if v != bg]
+    if len(non_bg) < 2:
+        return grid
+    c1, c2 = non_bg[0], non_bg[1]
+    return [[c2 if v == c1 else (c1 if v == c2 else v) for v in row] for row in grid]
+
+
+def keep_unique_rows(grid: Grid) -> Grid:
+    """Remove duplicate rows, keeping only the first occurrence."""
+    if not grid:
+        return grid
+    seen = []
+    result = []
+    for row in grid:
+        key = tuple(row)
+        if key not in seen:
+            seen.append(key)
+            result.append(row[:])
+    return result if result else grid
+
+
+def keep_unique_cols(grid: Grid) -> Grid:
+    """Remove duplicate columns, keeping only the first occurrence."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    seen = []
+    keep_cols = []
+    for c in range(w):
+        key = tuple(grid[r][c] for r in range(h))
+        if key not in seen:
+            seen.append(key)
+            keep_cols.append(c)
+    if not keep_cols:
+        return grid
+    return [[grid[r][c] for c in keep_cols] for r in range(h)]
+
+
+def repeat_pattern_to_size(grid: Grid) -> Grid:
+    """Find smallest repeating sub-pattern and tile it to fill original size."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    for th in range(1, h // 2 + 1):
+        if h % th != 0:
+            continue
+        for tw in range(1, w // 2 + 1):
+            if w % tw != 0:
+                continue
+            tile = [grid[r][:tw] for r in range(th)]
+            valid = True
+            for r in range(h):
+                for c in range(w):
+                    if grid[r][c] != tile[r % th][c % tw]:
+                        valid = False
+                        break
+                if not valid:
+                    break
+            if valid and (th < h or tw < w):
+                return [[tile[r % th][c % tw] for c in range(w)] for r in range(h)]
+    return grid
+
+
+def extend_lines_to_contact(grid: Grid) -> Grid:
+    """Extend non-bg colored segments to fill gaps within their row or column."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    bg = Counter(flat).most_common(1)[0][0]
+    result = [row[:] for row in grid]
+    # Extend horizontally
+    for r in range(h):
+        non_bg_cols = [(c, grid[r][c]) for c in range(w) if grid[r][c] != bg]
+        if len(non_bg_cols) >= 2:
+            min_c, fill_color = non_bg_cols[0]
+            max_c = non_bg_cols[-1][0]
+            if all(grid[r][c] in (bg, fill_color) for c in range(min_c, max_c + 1)):
+                for c in range(min_c, max_c + 1):
+                    if result[r][c] == bg:
+                        result[r][c] = fill_color
+    # Extend vertically
+    for c in range(w):
+        non_bg_rows = [(r, grid[r][c]) for r in range(h) if grid[r][c] != bg]
+        if len(non_bg_rows) >= 2:
+            min_r, fill_color = non_bg_rows[0]
+            max_r = non_bg_rows[-1][0]
+            if all(grid[r][c] in (bg, fill_color) for r in range(min_r, max_r + 1)):
+                for r in range(min_r, max_r + 1):
+                    if result[r][c] == bg:
+                        result[r][c] = fill_color
+    return result
+
+
+def recolor_2nd_to_dominant(grid: Grid) -> Grid:
+    """Recolor the 2nd most common non-bg color to the dominant non-bg color."""
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    counts = Counter(flat)
+    bg = counts.most_common(1)[0][0]
+    non_bg = [v for v, _ in counts.most_common() if v != bg]
+    if len(non_bg) < 2:
+        return grid
+    dominant, accent = non_bg[0], non_bg[1]
+    return [[dominant if v == accent else v for v in row] for row in grid]
+
+
+def erase_2nd_color(grid: Grid) -> Grid:
+    """Erase (set to bg) the 2nd most common non-bg color."""
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    counts = Counter(flat)
+    bg = counts.most_common(1)[0][0]
+    non_bg = [v for v, _ in counts.most_common() if v != bg]
+    if len(non_bg) < 2:
+        return grid
+    accent = non_bg[1]
+    return [[bg if v == accent else v for v in row] for row in grid]
+
+
+def recolor_bg_enclosed_by_dominant(grid: Grid) -> Grid:
+    """Fill enclosed bg regions with the dominant non-bg color."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    counts = Counter(flat)
+    bg = counts.most_common(1)[0][0]
+    non_bg = [v for v, _ in counts.most_common() if v != bg]
+    if not non_bg:
+        return grid
+    fill_color = non_bg[0]
+
+    reachable = set()
+    queue = []
+    for r in range(h):
+        for c in range(w):
+            if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and grid[r][c] == bg:
+                if (r, c) not in reachable:
+                    reachable.add((r, c))
+                    queue.append((r, c))
+    while queue:
+        r, c = queue.pop()
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in reachable and grid[nr][nc] == bg:
+                reachable.add((nr, nc))
+                queue.append((nr, nc))
+
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == bg and (r, c) not in reachable:
+                result[r][c] = fill_color
+    return result
+
+
+def _fill_rect_interiors(grid: Grid, fill_color: int) -> Grid:
+    """Fill interior of rectangular frames (enclosed bg not reachable from border)."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    bg = Counter(flat).most_common(1)[0][0]
+
+    reachable = set()
+    queue = []
+    for r in range(h):
+        for c in range(w):
+            if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and grid[r][c] == bg:
+                if (r, c) not in reachable:
+                    reachable.add((r, c))
+                    queue.append((r, c))
+    while queue:
+        r, c = queue.pop()
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in reachable and grid[nr][nc] == bg:
+                reachable.add((nr, nc))
+                queue.append((nr, nc))
+
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == bg and (r, c) not in reachable:
+                result[r][c] = fill_color
+    return result
+
+
+def _recolor_cells_at_intersections(grid: Grid, new_color: int) -> Grid:
+    """Recolor bg cells at row/col intersections of non-bg content."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    bg = Counter(flat).most_common(1)[0][0]
+
+    active_rows = {r for r in range(h) if any(grid[r][c] != bg for c in range(w))}
+    active_cols = {c for c in range(w) if any(grid[r][c] != bg for r in range(h))}
+
+    result = [row[:] for row in grid]
+    for r in active_rows:
+        for c in active_cols:
+            if grid[r][c] == bg:
+                result[r][c] = new_color
+    return result
+
+
+def _make_recolor_dominant_touching_accent(new_color: int):
+    """Factory: recolor dominant-color cells adjacent to accent (2nd) color."""
+    def _fn(grid):
+        if not grid or not grid[0]:
+            return grid
+        h, w = len(grid), len(grid[0])
+        from collections import Counter
+        flat = [v for row in grid for v in row]
+        bg = Counter(flat).most_common(1)[0][0]
+        non_bg = [v for v, _ in Counter(flat).most_common() if v != bg]
+        if len(non_bg) < 2:
+            return grid
+        dominant, accent = non_bg[0], non_bg[1]
+        result = [row[:] for row in grid]
+        for r in range(h):
+            for c in range(w):
+                if grid[r][c] != dominant:
+                    continue
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] == accent:
+                        result[r][c] = new_color
+                        break
+        return result
+    return _fn
+
+
+def _make_fill_smallest_hole(new_color: int):
+    """Factory: fill the smallest enclosed bg region with new_color."""
+    def _fn(grid):
+        if not grid or not grid[0]:
+            return grid
+        h, w = len(grid), len(grid[0])
+        from collections import Counter
+        flat = [v for row in grid for v in row]
+        bg = Counter(flat).most_common(1)[0][0]
+
+        reachable = set()
+        queue = []
+        for r in range(h):
+            for c in range(w):
+                if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and grid[r][c] == bg:
+                    if (r, c) not in reachable:
+                        reachable.add((r, c))
+                        queue.append((r, c))
+        while queue:
+            r, c = queue.pop()
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in reachable and grid[nr][nc] == bg:
+                    reachable.add((nr, nc))
+                    queue.append((nr, nc))
+
+        visited = set()
+        holes = []
+        for sr in range(h):
+            for sc in range(w):
+                if grid[sr][sc] == bg and (sr, sc) not in reachable and (sr, sc) not in visited:
+                    hole = []
+                    q = [(sr, sc)]
+                    visited.add((sr, sc))
+                    while q:
+                        r, c = q.pop()
+                        hole.append((r, c))
+                        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in visited and grid[nr][nc] == bg:
+                                visited.add((nr, nc))
+                                q.append((nr, nc))
+                    holes.append(hole)
+
+        if not holes:
+            return grid
+        smallest = min(holes, key=len)
+        result = [row[:] for row in grid]
+        for r, c in smallest:
+            result[r][c] = new_color
+        return result
+    return _fn
+
+
+def _make_recolor_nonzero_inside_bbox(accent_color: int, new_color: int):
+    """Factory: recolor non-zero non-accent cells inside accent_color's bounding box."""
+    def _fn(grid):
+        if not grid or not grid[0]:
+            return grid
+        h, w = len(grid), len(grid[0])
+        accent_cells = [(r, c) for r in range(h) for c in range(w) if grid[r][c] == accent_color]
+        if not accent_cells:
+            return grid
+        min_r = min(r for r, c in accent_cells)
+        max_r = max(r for r, c in accent_cells)
+        min_c = min(c for r, c in accent_cells)
+        max_c = max(c for r, c in accent_cells)
+        result = [row[:] for row in grid]
+        for r in range(min_r, max_r + 1):
+            for c in range(min_c, max_c + 1):
+                v = grid[r][c]
+                if v != 0 and v != accent_color:
+                    result[r][c] = new_color
+        return result
+    return _fn
+
+
+# =============================================================================
 # Build the ARC primitive registry
 # =============================================================================
 
@@ -3039,6 +3587,19 @@ def _build_arc_primitives() -> list[Primitive]:
         ("mask_color_overlap",      mask_by_color_overlap),
         ("fill_diag_stripes",       fill_diagonal_stripes),
         ("keep_border",             keep_border_only),
+        # --- Port batch 2: agi-mvp-general ---
+        ("connect_to_rect",         connect_pixels_to_rect),
+        ("gravity_toward_color",    gravity_toward_color),
+        ("recolor_2nd_3rd",         recolor_2nd_to_3rd),
+        ("recolor_least_2nd",       recolor_least_to_2nd_least),
+        ("swap_most_2nd",           swap_most_and_2nd_color),
+        ("keep_unique_rows",        keep_unique_rows),
+        ("keep_unique_cols",        keep_unique_cols),
+        ("repeat_to_size",          repeat_pattern_to_size),
+        ("extend_to_contact",       extend_lines_to_contact),
+        ("recolor_2nd_dom",         recolor_2nd_to_dominant),
+        ("erase_2nd_color",         erase_2nd_color),
+        ("fill_enclosed_dominant",  recolor_bg_enclosed_by_dominant),
     ]
 
     for name, fn in unary_ops:
@@ -3109,6 +3670,42 @@ def _build_arc_primitives() -> list[Primitive]:
                     fn=_make_replace_color(from_c, to_c),
                     domain="arc",
                 ))
+
+    # Fill rect interiors with specific colors
+    for color in [1, 2, 3, 4]:
+        prims.append(Primitive(
+            name=f"fill_rect_interior_{color}",
+            arity=1, fn=lambda g, c=color: _fill_rect_interiors(g, c), domain="arc",
+        ))
+
+    # Mark row/col intersections with specific colors
+    for color in [2, 3, 4]:
+        prims.append(Primitive(
+            name=f"mark_intersections_{color}",
+            arity=1, fn=lambda g, c=color: _recolor_cells_at_intersections(g, c), domain="arc",
+        ))
+
+    # Recolor dominant-touching-accent to specific colors
+    for color in [2, 3, 4, 6, 7, 8]:
+        prims.append(Primitive(
+            name=f"dom_touch_accent_{color}",
+            arity=1, fn=_make_recolor_dominant_touching_accent(color), domain="arc",
+        ))
+
+    # Fill smallest rect hole with specific colors
+    for color in [1, 4, 8]:
+        prims.append(Primitive(
+            name=f"fill_hole_{color}",
+            arity=1, fn=_make_fill_smallest_hole(color), domain="arc",
+        ))
+
+    # Recolor nonzero inside accent bbox (most common accent/new pairs)
+    for accent, new in [(8, 3), (8, 4), (8, 2), (2, 4), (2, 8), (2, 3),
+                        (3, 4), (3, 8), (6, 4), (6, 8)]:
+        prims.append(Primitive(
+            name=f"recolor_in_{accent}_bbox_{new}",
+            arity=1, fn=_make_recolor_nonzero_inside_bbox(accent, new), domain="arc",
+        ))
 
     # Arity-2 primitives (compose two transforms): overlay is the main one
     prims.append(Primitive(name="overlay", arity=2, fn=overlay, domain="arc"))
