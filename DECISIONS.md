@@ -333,4 +333,67 @@ Pipeline run: `python -m experiments.phase1_arc --pipeline --mode quick`
 
 ---
 
+## Session 5 — Modular Restructuring + Scoring Improvement (March 10-11, 2026)
+
+### Decision: Restructure `grammars/` → `domains/` package
+
+**Rationale:** The monolithic `grammars/arc.py` (2240 lines) mixed primitives, environment, grammar, drive signal, and dataset loading in one file. This violated the principle that each domain's primitives, composition grammar, and interfaces should be cleanly separated.
+
+**New layout:**
+```
+domains/arc/
+  primitives.py   - All Grid→Grid transforms (101 primitives)
+  objects.py      - Connected component detection
+  environment.py  - ARCEnv (program execution)
+  grammar.py      - ARCGrammar (composition, mutation, crossover)
+  drive.py        - ARCDrive (structural similarity scoring)
+  dataset.py      - Task loading + sample tasks
+domains/symbolic_math/
+  __init__.py     - Full symbolic regression domain
+```
+
+`grammars/` retained as backward-compatible shims. All 305 tests pass unchanged.
+
+### Decision: Port structural similarity scorer from agi-mvp-general
+
+**Problem:** Binary pixel-match scoring creates a flat fitness landscape — programs either match or don't. Beam search can't make incremental progress.
+
+**Solution:** Weighted composite scorer:
+- 0.60 × pixel_accuracy
+- 0.15 × dimension_match
+- 0.15 × color_overlap (Jaccard on non-bg palettes)
+- 0.10 × nonzero_density_similarity
+
+**Result:** Smoother landscape enables beam search evolution to find depth-3 programs.
+
+### Decision: Add near-miss refinement (Phase 1.5)
+
+**Problem:** Many programs are "almost right" (prediction_error < 0.20) but need one more step.
+
+**Solution:** After exhaustive enumeration, try appending/prepending each primitive to the top-10 near-miss programs. Cost: O(10 × N_prims × 2) = ~2000 extra evals per task.
+
+### Decision: Add 12 new primitives (batch 2)
+
+Cyclic shifts (4), symmetry completion (2), split-by-separator (2), morphological (2), color cycling (2).
+
+### Benchmark Results
+
+| Metric | Session 4 | Session 5 | Change |
+|--------|-----------|-----------|--------|
+| Training (quick, 1 round) | 39/400 (9.75%) | 52/400 (13.0%) | **+33%** |
+| Primitives | 89 | 101 | +12 |
+| Tests | 285 | 305 | +20 |
+| Depth-3 solves | 0 | 7 | **first ever** |
+
+**13 new tasks solved, 0 regressions.** Notable new solves:
+- `shift_down_1` — new cyclic shift primitive
+- `complete_sym_h(recolor_4_to_0)` — new symmetry completion + color op
+- `overlay_split_h` — new split-by-separator
+- `make_sym_v(make_sym_h(tile_2x2))` — depth-3 symmetry tiling (first depth-3 solve!)
+- `left_half(top_half(crop_nonzero))` — depth-3 spatial extraction
+
+**Key insight:** The structural similarity scorer unlocked depth-3 solutions by giving beam search enough signal to navigate toward them incrementally.
+
+---
+
 *This document will be updated with each new session and major decision.*
