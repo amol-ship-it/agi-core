@@ -3694,54 +3694,74 @@ def extend_nonzero_fill_col(grid: Grid) -> Grid:
 # Batch 4: Grid partition, annotation, and scaling primitives
 # =============================================================================
 
-def _detect_any_separator_lines(grid: Grid) -> tuple[list[int], list[int]]:
-    """Detect separator lines including zero-valued (background) separators.
+import functools
 
-    A separator line is a full row or column of a single color (including 0)
-    that differs from adjacent rows/columns. Returns (h_lines, v_lines).
-    """
-    arr = to_np(grid)
-    h, w = arr.shape
-    h_lines = []
-    v_lines = []
+@functools.lru_cache(maxsize=64)
+def _detect_any_separator_lines_cached(grid_key: tuple) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Cached separator line detection. Takes hashable grid tuple."""
+    h = len(grid_key)
+    w = len(grid_key[0]) if h > 0 else 0
+    h_lines: list[int] = []
+    v_lines: list[int] = []
 
     # First try non-zero separators (standard)
     for r in range(h):
-        row = arr[r]
-        vals = set(row.tolist())
+        row = grid_key[r]
+        vals = set(row)
         if len(vals) == 1 and 0 not in vals:
             h_lines.append(r)
 
     for c in range(w):
-        col = arr[:, c]
-        vals = set(col.tolist())
+        col = tuple(grid_key[r][c] for r in range(h))
+        vals = set(col)
         if len(vals) == 1 and 0 not in vals:
             v_lines.append(c)
 
     if h_lines or v_lines:
-        return h_lines, v_lines
+        return tuple(h_lines), tuple(v_lines)
 
     # Fall back: try zero-valued separators
-    # A zero row is a separator if it splits non-zero content above and below
     for r in range(h):
-        if all(arr[r, c] == 0 for c in range(w)):
-            # Check there's non-zero content on both sides
-            has_above = r > 0 and np.any(arr[:r] != 0)
-            has_below = r < h - 1 and np.any(arr[r+1:] != 0)
+        if all(v == 0 for v in grid_key[r]):
+            has_above = r > 0 and any(v != 0 for rr in range(r) for v in grid_key[rr])
+            has_below = r < h - 1 and any(v != 0 for rr in range(r+1, h) for v in grid_key[rr])
             if has_above and has_below:
                 h_lines.append(r)
 
     for c in range(w):
-        if all(arr[r, c] == 0 for r in range(h)):
-            has_left = c > 0 and np.any(arr[:, :c] != 0)
-            has_right = c < w - 1 and np.any(arr[:, c+1:] != 0)
+        col = [grid_key[r][c] for r in range(h)]
+        if all(v == 0 for v in col):
+            has_left = c > 0 and any(grid_key[r][cc] != 0 for r in range(h) for cc in range(c))
+            has_right = c < w - 1 and any(grid_key[r][cc] != 0 for r in range(h) for cc in range(c+1, w))
             if has_left and has_right:
                 v_lines.append(c)
 
-    return h_lines, v_lines
+    return tuple(h_lines), tuple(v_lines)
+
+
+def _detect_any_separator_lines(grid: Grid) -> tuple[list[int], list[int]]:
+    """Detect separator lines including zero-valued (background) separators."""
+    grid_key = tuple(tuple(row) for row in grid)
+    h_lines, v_lines = _detect_any_separator_lines_cached(grid_key)
+    return list(h_lines), list(v_lines)
+
+
+@functools.lru_cache(maxsize=64)
+def _split_grid_cells_cached(grid_key: tuple) -> tuple:
+    """Cached grid cell splitting. Returns tuple of cell tuples."""
+    grid = [list(row) for row in grid_key]
+    cells = _split_grid_cells_impl(grid)
+    return tuple(tuple(tuple(row) for row in cell) for cell in cells)
 
 
 def _split_grid_cells(grid: Grid) -> list[Grid]:
+    """Split grid into cells (cached)."""
+    grid_key = tuple(tuple(row) for row in grid)
+    cached = _split_grid_cells_cached(grid_key)
+    return [[list(row) for row in cell] for cell in cached]
+
+
+def _split_grid_cells_impl(grid: Grid) -> list[Grid]:
     """Split grid into cells using both horizontal and vertical separator lines.
 
     Returns list of sub-grids (cells) extracted from the partition.
@@ -4065,6 +4085,119 @@ def connect_same_color_v(grid: Grid) -> Grid:
 
 
 # --- Additional scaling primitives ---
+
+def fill_between_objects_h(grid: Grid) -> Grid:
+    """Fill horizontal gaps between same-colored objects in each row."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+    for r in range(h):
+        # Find spans of colored pixels
+        color_ranges: dict[int, list[int]] = {}
+        for c in range(w):
+            v = arr[r, c]
+            if v != 0:
+                if v not in color_ranges:
+                    color_ranges[v] = []
+                color_ranges[v].append(c)
+        # Fill between first and last occurrence of each color
+        for color, cols in color_ranges.items():
+            if len(cols) >= 2:
+                for c in range(min(cols), max(cols) + 1):
+                    if result[r, c] == 0:
+                        result[r, c] = color
+    return from_np(result)
+
+
+def fill_between_objects_v(grid: Grid) -> Grid:
+    """Fill vertical gaps between same-colored objects in each column."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+    for c in range(w):
+        color_ranges: dict[int, list[int]] = {}
+        for r in range(h):
+            v = arr[r, c]
+            if v != 0:
+                if v not in color_ranges:
+                    color_ranges[v] = []
+                color_ranges[v].append(r)
+        for color, rows in color_ranges.items():
+            if len(rows) >= 2:
+                for r in range(min(rows), max(rows) + 1):
+                    if result[r, c] == 0:
+                        result[r, c] = color
+    return from_np(result)
+
+
+def fill_bbox_per_object(grid: Grid) -> Grid:
+    """Fill the bounding box of each object with its color (solid rectangles)."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = np.zeros_like(arr)
+
+    visited = np.zeros((h, w), dtype=bool)
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and not visited[r, c]:
+                color = arr[r, c]
+                # BFS to find component
+                queue = [(r, c)]
+                visited[r, c] = True
+                pixels = []
+                while queue:
+                    cr, cc = queue.pop(0)
+                    pixels.append((cr, cc))
+                    for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                        nr, nc = cr+dr, cc+dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr, nc] and arr[nr, nc] == color:
+                            visited[nr, nc] = True
+                            queue.append((nr, nc))
+                # Fill bounding box
+                min_r = min(p[0] for p in pixels)
+                max_r = max(p[0] for p in pixels)
+                min_c = min(p[1] for p in pixels)
+                max_c = max(p[1] for p in pixels)
+                result[min_r:max_r+1, min_c:max_c+1] = color
+    return from_np(result)
+
+
+def draw_rect_around_objects(grid: Grid) -> Grid:
+    """Draw a rectangle outline around each connected component."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+
+    visited = np.zeros((h, w), dtype=bool)
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and not visited[r, c]:
+                color = arr[r, c]
+                queue = [(r, c)]
+                visited[r, c] = True
+                pixels = []
+                while queue:
+                    cr, cc = queue.pop(0)
+                    pixels.append((cr, cc))
+                    for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                        nr, nc = cr+dr, cc+dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr, nc] and arr[nr, nc] == color:
+                            visited[nr, nc] = True
+                            queue.append((nr, nc))
+                min_r = min(p[0] for p in pixels)
+                max_r = max(p[0] for p in pixels)
+                min_c = min(p[1] for p in pixels)
+                max_c = max(p[1] for p in pixels)
+                # Draw rectangle outline
+                for rr in range(min_r, max_r + 1):
+                    if rr in (min_r, max_r):
+                        for cc in range(min_c, max_c + 1):
+                            result[rr, cc] = color
+                    else:
+                        result[rr, min_c] = color
+                        result[rr, max_c] = color
+    return from_np(result)
+
 
 def scale_4x(grid: Grid) -> Grid:
     """Scale grid up by 4x (each pixel becomes 4x4 block)."""
@@ -4462,6 +4595,10 @@ def _build_arc_primitives() -> list[Primitive]:
         ("downscale_maj_2x",        downscale_majority_2x),
         ("downscale_maj_3x",        downscale_majority_3x),
         ("fill_convex_hull",        fill_convex_hull),
+        ("fill_between_h",          fill_between_objects_h),
+        ("fill_between_v",          fill_between_objects_v),
+        ("fill_bbox_objs",          fill_bbox_per_object),
+        ("rect_around_objs",        draw_rect_around_objects),
     ]
 
     for name, fn in unary_ops:
@@ -4534,7 +4671,7 @@ def _build_arc_primitives() -> list[Primitive]:
                 ))
 
     # Fill rect interiors with specific colors
-    for color in [1, 2, 3, 4]:
+    for color in range(1, 10):
         prims.append(Primitive(
             name=f"fill_rect_interior_{color}",
             arity=1, fn=lambda g, c=color: _fill_rect_interiors(g, c), domain="arc",
@@ -4555,7 +4692,7 @@ def _build_arc_primitives() -> list[Primitive]:
         ))
 
     # Fill smallest rect hole with specific colors
-    for color in [1, 4, 8]:
+    for color in range(1, 10):
         prims.append(Primitive(
             name=f"fill_hole_{color}",
             arity=1, fn=_make_fill_smallest_hole(color), domain="arc",
