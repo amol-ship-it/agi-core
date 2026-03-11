@@ -266,6 +266,7 @@ class ProgressTracker:
         # Cumulative (across all rounds)
         self.done = 0
         self.solved = 0
+        self.overfit = 0
         self.total_evals = 0
         self.total_gens = 0
         self.scores: list[float] = []
@@ -276,6 +277,7 @@ class ProgressTracker:
         self._current_round = -1
         self._round_done = 0
         self._round_solved = 0
+        self._round_overfit = 0
 
     def on_task_done(
         self, round_num: int, task_index: int, total_tasks: int, wr: WakeResult,
@@ -286,12 +288,16 @@ class ProgressTracker:
             self._current_round = round_num
             self._round_done = 0
             self._round_solved = 0
+            self._round_overfit = 0
 
         self.done += 1
         self._round_done += 1
         if wr.solved:  # test-verified (falls back to train when no test data)
             self.solved += 1
             self._round_solved += 1
+        elif wr.train_solved and wr.test_solved is False:
+            self.overfit += 1
+            self._round_overfit += 1
         self.total_evals += wr.evaluations
         self.total_gens += wr.generations_used
         if wr.best:
@@ -324,8 +330,10 @@ class ProgressTracker:
         )
         if wr.solved and program_str:
             print(f"       program: {program_str}")
+        overfit_str = f"  overfit={self._round_overfit}" if self._round_overfit else ""
         print(
-            f"       R{round_num}: solved={self._round_solved}/{self._round_done}  "
+            f"       R{round_num}: solved={self._round_solved}/{self._round_done}"
+            f"{overfit_str}  "
             f"evals={self.total_evals:,}  "
             f"[{fmt_duration(elapsed)} elapsed]",
         )
@@ -370,9 +378,13 @@ class ProgressTracker:
             f"ETA {fmt_duration(eta)}  "
             f"{rate:.1f} tasks/s ──"
         )
+        overfit_str = (f"  ~ overfit={self._round_overfit}"
+                       if self._round_overfit else "")
+        unsolved = self._round_done - self._round_solved - self._round_overfit
         print(
             f"  │  R{round_num}: ✓ solved={self._round_solved}/{self._round_done}  "
-            f"✗ unsolved={self._round_done - self._round_solved}/{self._round_done}"
+            f"✗ unsolved={unsolved}/{self._round_done}"
+            f"{overfit_str}"
         )
         print(
             f"  │  Energy: mean={mean_energy:.4f}  "
