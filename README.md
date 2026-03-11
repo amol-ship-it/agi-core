@@ -8,53 +8,57 @@ SLEEP:  analyze solutions → extract recurring sub-programs → compress → ad
 REPEAT: library grows → search shrinks → harder problems → compounding
 ```
 
-## Prerequisites
+Based on the research and principles proposed by [Vibhor Jain](https://github.com/vibhor-77).
 
-- **Python 3.10+** (tested on 3.11)
-- **Git**
-- **pip**
-
-## Setup
+## Quick Start
 
 ```bash
-# 1. Clone this repository
+# Clone and install (NumPy is the only runtime dependency)
 git clone https://github.com/vibhor-77/agi-core.git
 cd agi-core
-
-# 2. (Recommended) Create a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate   # Linux/macOS
-# .venv\Scripts\activate    # Windows
-
-# 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Clone the ARC-AGI dataset (auto-detected by the experiment runner)
+# Clone the ARC-AGI dataset
 git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI
 
-# 5. Verify everything works
+# Reproduce our results — one command does train + eval with culture transfer
+python -m experiments.phase1_arc
+
+# Run the test suite (323 tests)
 python -m pytest tests/ -v
 ```
+
+The default command runs all 400 training tasks, saves the learned culture, then runs all 400 evaluation tasks using that culture. Results, logs, and culture snapshots are auto-saved with timestamps. Output file paths are printed at the start so you can `tail -f` them in another terminal.
+
+**Requirements:** Python 3.10+, NumPy.
 
 ### Syncing an existing clone
 
 ```bash
-cd agi-core
-git pull origin main
+cd agi-core && git pull origin main
 pip install -r requirements.txt
 cd data/ARC-AGI && git pull && cd ../..
 ```
 
-## Quick start
+## Usage
 
 ```bash
-# Just run it. No flags needed.
-# Runs the full pipeline: train on 400 tasks → save culture → eval on 400 tasks.
+# Full pipeline: train → save culture → eval (default, recommended)
 python -m experiments.phase1_arc
-```
 
-If the ARC dataset is cloned (step 4 above), it runs the full train→eval pipeline.
-If not, training falls back to built-in sample tasks.
+# Quick subset for development (fast iteration, still runs full pipeline)
+python -m experiments.phase1_arc --mode quick
+
+# Train only, save culture for later
+python -m experiments.phase1_arc --train-only
+python -m experiments.phase1_arc --train-only --save-culture my_culture.json
+
+# Eval only with a pre-trained culture file
+python -m experiments.phase1_arc --eval-only --culture runs/20260311_120000_phase1_train_culture.json
+
+# Single-process for debugging
+python -m experiments.phase1_arc --workers 1
+```
 
 ### Other demos (no dataset needed)
 
@@ -62,17 +66,33 @@ These demonstrate the **same invariant core algorithm** on different domains:
 
 ```bash
 # Symbolic regression — discover mathematical formulas (y=2x+1, y=x², y=sin(x)+x, ...)
-# Shows per-task progress: which formulas were found, which weren't
 python -m domains.symbolic_math
 
 # ARC with built-in sample tasks (rotate, mirror, crop, gravity, fill, ...)
-# Uses 8 sample tasks when no ARC dataset is present
 python -m experiments.phase1_arc --mode quick
 ```
 
-Both demos print live per-task progress, a compounding curve, and a library summary.
+### Auto-saved artifacts
 
-## Presets
+Every run automatically saves timestamped files. Paths are printed at the start so you can monitor progress live:
+
+```
+runs/20260311_164939_phase1_train.log          — full console output (tee'd)
+runs/20260311_164939_phase1_train.jsonl        — live per-task results (tail -f friendly)
+runs/20260311_164939_phase1_train.json         — final results: meta + summary + per-task + library
+runs/20260311_164939_phase1_train_culture.json — learned culture snapshot (for eval / cross-run transfer)
+runs/20260311_164939_phase1_train_library.json — learned abstractions (legacy format)
+runs/20260311_164939_phase1_train_metrics.json — compounding curve per round
+runs/20260311_164939_phase1_train_metrics.csv  — same, for spreadsheets
+```
+
+Monitor a running benchmark in another terminal:
+```bash
+tail -f runs/*_phase1_train.jsonl    # watch task results as they complete
+tail -f runs/*_phase1_train.log      # watch full console output
+```
+
+### Presets
 
 Three modes. Pick one. That's the only knob most users need.
 
@@ -83,14 +103,6 @@ Three modes. Pick one. That's the only knob most users need.
 | `contest` | 10 | 500 | 200 | 100,000 | Maximum accuracy |
 
 Compute budget = beam × gens. Early stopping saves unused compute on easy tasks.
-
-```bash
-python -m experiments.phase1_arc                  # default (full pipeline: train → eval)
-python -m experiments.phase1_arc --mode quick     # fast dev loop (pipeline)
-python -m experiments.phase1_arc --mode contest   # full benchmark (pipeline)
-python -m experiments.phase1_arc --train-only     # train only, no eval
-python -m experiments.phase1_arc --eval-only --culture runs/XXX_culture.json
-```
 
 ### Expected performance
 
@@ -110,71 +122,27 @@ Benchmarked on 2 CPU cores (x86_64). Times scale linearly with tasks, inversely 
 The ~10% solve rate is the Phase 1 baseline. The key metric is whether
 solve rate **increases across rounds** as the library grows — that validates compounding.
 
-### Overriding individual parameters
-
-Any flag overrides the preset:
-
-```bash
-python -m experiments.phase1_arc --max-tasks 50         # subset
-python -m experiments.phase1_arc --mode contest --rounds 5
-python -m experiments.phase1_arc --workers 1             # sequential
-```
-
-### All flags
+### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--mode` | `default` | Preset: `quick`, `default`, or `contest` |
-| `--data-dir` | auto-detect | Path to ARC-AGI training directory |
+| `--data-dir` | auto-detect | Path to ARC-AGI data directory |
+| `--train-only` | off | Train only, no eval phase |
+| `--eval-only` | off | Eval only (requires `--culture`) |
+| `--culture` | none | Culture file to load (cross-run knowledge transfer) |
+| `--save-culture` | auto | Override auto culture save path |
 | `--max-tasks` | from preset | Limit tasks (0 = all) |
 | `--rounds` | from preset | Wake-sleep rounds |
 | `--beam-width` | from preset | Candidates per generation |
 | `--max-generations` | from preset | Generations per task |
 | `--workers` | 0 (perf cores) | Parallel workers (0 = performance cores only) |
 | `--seed` | 42 | Random seed (deterministic) |
-| `--compute-cap` | 0 (unlimited) | Total eval budget. Accepts: `50M`, `8,000,000`, `500K`, `0` |
+| `--compute-cap` | 0 (unlimited) | Total eval budget. Accepts: `50M`, `500K`, `0` |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
 | `--no-log` | off | Disable log file (console only) |
-| `--verbose` | off | Debug logging |
 
-### Output files
-
-All files are written flat into `runs/` with a shared timestamp prefix.
-The output paths are printed at the start of each run so you can `tail -f` immediately:
-
-```
-runs/
-├── 20260310_164939_phase1.log          # exact copy of console output
-├── 20260310_164939_phase1.jsonl        # live per-task results (one JSON per line)
-├── 20260310_164939_phase1.json         # final results: meta + summary + per-task + library
-├── 20260310_164939_phase1_library.json # learned abstractions
-├── 20260310_164939_phase1_metrics.json # compounding curve per round
-└── 20260310_164939_phase1_metrics.csv  # same, for spreadsheets
-```
-
-### Live monitoring
-
-While a run is in progress:
-
-```bash
-# Watch live per-task results
-tail -f runs/*_phase1.jsonl
-
-# Or view the full console output from another terminal
-tail -f runs/*_phase1.log
-
-# List runs by most recent
-ls -t runs/
-```
-
-## Running tests
-
-```bash
-python -m pytest tests/ -v
-python -m pytest tests/ -v --cov=core --cov=grammars --cov-report=term-missing
-```
-
-## How it works
+## How It Works
 
 ### The wake-sleep loop
 
@@ -260,6 +228,13 @@ agi-core/
 ├── DECISIONS.md             # Chronological log of all decisions
 ├── requirements.txt         # Python dependencies (numpy, scipy, pytest)
 └── README.md                # This file
+```
+
+## Running Tests
+
+```bash
+python -m pytest tests/ -v
+python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
 ## Documentation

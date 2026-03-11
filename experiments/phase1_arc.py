@@ -13,6 +13,7 @@ Usage:
     python -m experiments.phase1_arc                      # full pipeline (train → eval)
     python -m experiments.phase1_arc --mode quick          # fast dev loop (pipeline)
     python -m experiments.phase1_arc --train-only          # train on training set only
+    python -m experiments.phase1_arc --train-only --save-culture my_culture.json
     python -m experiments.phase1_arc --eval-only --culture runs/XXX_culture.json
 """
 
@@ -87,7 +88,8 @@ def _load_tasks(split: str, data_dir: str | None, max_tasks: int):
 
 
 def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
-                 tasks, culture_path: str = "") -> ExperimentConfig:
+                 tasks, culture_path: str = "",
+                 save_culture: str = "") -> ExperimentConfig:
     """Build an ExperimentConfig with ARC-specific defaults."""
     return ExperimentConfig(
         title=title,
@@ -111,6 +113,7 @@ def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
         exhaustive_top_k=args.exhaustive_top_k,
         sequential_compounding=args.sequential_compounding,
         culture_path=culture_path,
+        save_culture=save_culture,
         runs_dir=args.runs_dir,
         no_log=args.no_log,
         verbose=args.verbose,
@@ -163,8 +166,10 @@ def _run_train(args, resolved, max_tasks):
     cfg = _make_config(args, resolved, max_tasks,
                        title="PHASE 1: ARC-AGI-1 TRAINING",
                        domain_tag="phase1_train",
-                       tasks=tasks)
-    run_experiment(cfg)
+                       tasks=tasks,
+                       save_culture=args.save_culture)
+    culture_path = run_experiment(cfg)
+    print(f"  Culture saved to: {culture_path}")
 
 
 def _run_eval(args, resolved, max_tasks):
