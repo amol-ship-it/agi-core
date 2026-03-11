@@ -513,4 +513,45 @@ Per-object transform pipeline: perceive → transform-per-object → reassemble.
 
 ---
 
+## Session 8 — Performance Optimization (March 11, 2026)
+
+### Performance profiling results
+
+Profiled per-phase timing on 5 representative tasks:
+
+| Phase | Worst Case (before) | Worst Case (after) | Speedup |
+|-------|--------------------|--------------------|---------|
+| Phase 1 (enum) | 4.24s | 4.24s (unchanged) | 1x |
+| Phase 1.1 (obj decomp) | 0.03s | 0.03s | 1x |
+| Phase 1.25 (conditional) | 0.11s | 0.11s | 1x |
+| Phase 1.5 (near-miss) | **11.25s** | **1.35s** | **8.3x** |
+| Phase 2 (beam) | varies | varies | 1x |
+| Phase 3 (post-beam) | ~11s | ~0.1s | **~100x** |
+
+**Root cause:** Near-miss refinement tried 10 near-misses × 280 unary primitives × 2 directions = 5,600 evaluations per task.
+
+### Optimizations applied
+
+1. **Near-miss refinement**: Top-5 near-misses × top-50 primitives (by depth-1 score) + essential pair concepts. Reduces from 5,600 to ~550 evaluations.
+2. **Phase 3**: Removed redundant second near-miss pass on beam results. Phase 1.5 already covers enum near-misses. Only color fix runs post-beam.
+3. **Per-task speedup**: 28.7s → 6.2s for unsolved tasks (4.6x end-to-end).
+
+### Bug fix: test > train accuracy
+
+`test_solved` was evaluated for ALL tasks including unsolved ones. A program failing on training (bad average across 3 examples) could pass test (only 1 example). Fixed: only evaluate test when training is solved.
+
+### Task ordering: shuffle instead of sort
+
+Changed default from sorted-by-difficulty to seeded shuffle for parallel benchmarks. Sorting creates biased progress (easy tasks solve first, giving inflated early metrics). Shuffle gives honest progress estimates throughout the run. Sorting retained for sequential compounding mode where easy→hard ordering helps library build up.
+
+### NumPy/Numba analysis
+
+agi-mvp-general uses targeted numpy (scoring) and numba @njit (flood fill). Our scoring already uses numpy. Numba-ing flood fill would help for large grids but profiling showed object decomposition is only 0.03s — not the bottleneck. The real bottleneck was near-miss refinement (now fixed).
+
+### Benchmark (in progress)
+
+Running 400-task quick benchmark with all optimizations, shuffled order, 4 workers.
+
+---
+
 *This document will be updated with each new session and major decision.*
