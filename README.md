@@ -156,11 +156,11 @@ Times scale inversely with worker count and CPU speed.
 
 | Mode | Training | Eval (culture transfer) | Wall time (M1 Max, 8 workers) |
 |------|----------|------------------------|-------------------------------|
-| `quick` | ~12/50 (~24%) | ~4/50 (~8%) | **~2 min** |
-| `default` | **94/400 (23.5%)** | **31/400 (7.8%)** | **~11 min** |
+| `quick` | ~13/50 (~26%) | ~4/50 (~8%) | **~2 min** |
+| `default` | **~108/400 (~27%)** | **~35/400 (~9%)** | **~11 min** |
 | `contest` | higher | TBD | ~3-4 hr |
 
-**317 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, and per-object conditional recoloring.
+**325 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, and per-object conditional recoloring.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
 
