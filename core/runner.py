@@ -45,18 +45,21 @@ PRESETS = {
         "beam_width": 30,
         "max_generations": 15,
         "max_tasks": 50,
+        "compute_cap": 5_000_000,   # 5M ops → ~6K evals/task, caps large grids (~2 min)
     },
     "default": {
         "rounds": 1,
         "beam_width": 80,
         "max_generations": 40,
         "max_tasks": 0,
+        "compute_cap": 50_000_000,  # 50M ops → ~62K evals/task, prevents runaway tasks
     },
     "contest": {
         "rounds": 1,
         "beam_width": 250,
         "max_generations": 100,
         "max_tasks": 0,
+        "compute_cap": 200_000_000, # 200M ops → ~250K evals/task, generous but bounded
     },
 }
 
@@ -193,9 +196,9 @@ def make_parser(description: str, domain_name: str = "experiment") -> argparse.A
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=f"""
 Presets (the only knob most users need):
-  quick     Fast dev loop
-  default   Balanced speed/accuracy
-  contest   Maximum accuracy
+  quick     Fast dev loop (~2 min, 50 tasks, 5M compute cap)
+  default   Balanced (all tasks, 50M compute cap)
+  contest   Maximum accuracy (all tasks, wide beam, 200M compute cap)
 
 Compute cap examples:
   --compute-cap 50M          # 50 million total evaluations
@@ -224,7 +227,7 @@ Examples:
                         help="Random seed for reproducibility")
     parser.add_argument("--compute-cap", type=parse_human_int,
                         default=str(0),
-                        help="Total eval budget (0=unlimited). Accepts: 50M, 500K, 0")
+                        help="Override preset compute cap (0=use preset default). Accepts: 50M, 500K, 0")
     parser.add_argument("--runs-dir", type=str, default=DEFAULT_RUNS_DIR,
                         help="Directory for all run artifacts")
     parser.add_argument("--no-log", action="store_true",
@@ -464,12 +467,19 @@ class ExperimentConfig:
 
 def resolve_from_preset(args, preset: dict) -> dict:
     """Resolve argument values: explicit args override preset defaults."""
+    # compute_cap: explicit --compute-cap overrides preset, but 0 (the argparse
+    # default) does NOT override a preset's non-zero cap. User must pass
+    # --compute-cap 0 explicitly to disable a preset's cap.
+    preset_cap = preset.get("compute_cap", 0)
+    args_cap = getattr(args, "compute_cap", 0)
+    explicit_cap = args_cap if args_cap > 0 else preset_cap
     return {
         "rounds": args.rounds if args.rounds is not None else preset["rounds"],
         "beam_width": args.beam_width if args.beam_width is not None else preset["beam_width"],
         "max_generations": args.max_generations if args.max_generations is not None else preset["max_generations"],
         "max_tasks": args.max_tasks if args.max_tasks is not None else preset["max_tasks"],
         "workers": args.workers if args.workers > 0 else Learner.performance_core_count(),
+        "compute_cap": explicit_cap,
     }
 
 
