@@ -542,9 +542,31 @@ class TestNewConfigFields(unittest.TestCase):
         self.assertEqual(cfg.exhaustive_pair_top_k, 40)
         self.assertEqual(cfg.exhaustive_triple_top_k, 15)
 
+    def test_search_config_eval_budget_default(self):
+        cfg = SearchConfig()
+        self.assertEqual(cfg.eval_budget, 0)  # unlimited by default
+
     def test_curriculum_sequential_default(self):
         cfg = CurriculumConfig()
         self.assertFalse(cfg.sequential_compounding)
+
+    def test_avg_cells(self):
+        """Test cell count calculation for budget normalization."""
+        task = Task(
+            task_id="test",
+            train_examples=[
+                ([[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]),  # 2×3=6 cells
+                ([[1, 2], [3, 4], [5, 6], [7, 8]], [[1], [2]]),       # 4×2=8 cells
+            ],
+            test_inputs=[],
+        )
+        avg = Learner._avg_cells(task)
+        self.assertEqual(avg, 7)  # (6+8)//2 = 7
+
+    def test_avg_cells_empty(self):
+        """Empty task returns 1 (safe default)."""
+        task = Task(task_id="test", train_examples=[], test_inputs=[])
+        self.assertEqual(Learner._avg_cells(task), 1)
 
 
 if __name__ == "__main__":
