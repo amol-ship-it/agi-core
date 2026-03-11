@@ -14,6 +14,37 @@ from .primitives import (
 )
 
 
+# Structural transforms that score low individually but are critical as
+# second/third steps in multi-step programs. Ported from agi-mvp-general.
+# Only includes concepts that exist in our primitives registry.
+_ARC_ESSENTIAL_PAIR_CONCEPTS: frozenset = frozenset([
+    "identity",
+    "fill_enclosed",
+    "crop_to_nonzero",
+    "compress_rows",
+    "compress_cols",
+    "max_color_per_cell",
+    "min_color_per_cell",
+    "fill_by_symmetry",
+    "fill_tile_pattern",
+    "spread_in_lanes_h",
+    "spread_in_lanes_v",
+    "fill_holes_in_objects",
+    "complete_pattern_4way",
+    "recolor_isolated_to_nearest",
+    "mirror_h_merge",
+    "mirror_v_merge",
+    "complete_symmetry_diagonal",
+    "sort_rows_by_value",
+    "remove_color_noise",
+    "fill_stripe_gaps_h",
+    "fill_stripe_gaps_v",
+    "propagate_color_v",
+    "complete_tile_from_modal_row",
+    "fill_enclosed_wall_color",
+])
+
+
 class ARCGrammar(Grammar):
     """
     Grammar for composing ARC grid transformation programs.
@@ -29,6 +60,9 @@ class ARCGrammar(Grammar):
     def __init__(self, seed: int = 42):
         self._rng = random.Random(seed)
         self._task_prims: list[Primitive] = []
+
+    def essential_pair_concepts(self) -> frozenset[str]:
+        return _ARC_ESSENTIAL_PAIR_CONCEPTS
 
     def base_primitives(self) -> list[Primitive]:
         return list(ARC_PRIMITIVES) + self._task_prims

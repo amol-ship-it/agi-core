@@ -97,6 +97,18 @@ class Grammar(ABC):
         """Combine sub-trees from two programs into a new program."""
         ...
 
+    def essential_pair_concepts(self) -> frozenset[str]:
+        """Return names of primitives that should always be included in pair/triple
+        exhaustive search, even if they rank low individually.
+
+        These are structural transforms (crop, fill, compress, etc.) that rarely
+        score well alone but are critical as second or third steps. Each domain
+        should override this with its own set of known-important compositions.
+
+        Default: empty (no forced inclusions).
+        """
+        return frozenset()
+
     def prepare_for_task(self, task: Task) -> None:
         """Called before the wake phase begins on a task.
 

@@ -191,7 +191,7 @@ class TestExhaustiveEnumeration(unittest.TestCase):
         defaults = dict(
             beam_width=10, max_generations=5,
             solve_threshold=0.001, seed=42, energy_beta=0.002,
-            exhaustive_depth=2, exhaustive_top_k=10,
+            exhaustive_depth=2, exhaustive_pair_top_k=10,
         )
         defaults.update(kwargs)
         return Learner(
@@ -231,7 +231,7 @@ class TestExhaustiveEnumeration(unittest.TestCase):
         task = make_sample_tasks()[6]  # rot_mirror — needs depth 2
         prims = learner.grammar.base_primitives()
 
-        scored, n_evals = learner._exhaustive_enumerate(prims, task, max_depth=2, top_k=5)
+        scored, n_evals = learner._exhaustive_enumerate(prims, task, max_depth=2)
         # Should have found a solution (early exit possible)
         best = min(scored, key=lambda s: s.prediction_error)
         self.assertLessEqual(best.prediction_error, 0.001)
@@ -246,7 +246,7 @@ class TestExhaustiveEnumeration(unittest.TestCase):
 
     def test_exhaustive_solves_composition(self):
         """Exhaustive depth-2 should find rot90+mirror as a 2-step program."""
-        learner = self._make_arc_learner(exhaustive_depth=2, exhaustive_top_k=20)
+        learner = self._make_arc_learner(exhaustive_depth=2, exhaustive_pair_top_k=40)
         task = make_sample_tasks()[6]  # rot_mirror task
         result = learner.wake_on_task(task)
         self.assertTrue(result.solved)
@@ -285,7 +285,7 @@ class TestSequentialCompounding(unittest.TestCase):
             search_config=SearchConfig(
                 beam_width=30, max_generations=10,
                 solve_threshold=0.001, seed=42,
-                exhaustive_depth=2, exhaustive_top_k=10,
+                exhaustive_depth=2, exhaustive_pair_top_k=10,
             ),
         )
         results = learner.run_curriculum(
@@ -539,7 +539,8 @@ class TestNewConfigFields(unittest.TestCase):
     def test_search_config_exhaustive_defaults(self):
         cfg = SearchConfig()
         self.assertEqual(cfg.exhaustive_depth, 3)
-        self.assertEqual(cfg.exhaustive_top_k, 20)
+        self.assertEqual(cfg.exhaustive_pair_top_k, 40)
+        self.assertEqual(cfg.exhaustive_triple_top_k, 15)
 
     def test_curriculum_sequential_default(self):
         cfg = CurriculumConfig()

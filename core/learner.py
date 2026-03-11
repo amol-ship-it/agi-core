@@ -88,7 +88,9 @@ def _wake_worker(args: tuple) -> WakeResult:
         semantic_dedup=search_cfg.semantic_dedup,
         dedup_precision=search_cfg.dedup_precision,
         exhaustive_depth=search_cfg.exhaustive_depth,
-        exhaustive_top_k=search_cfg.exhaustive_top_k,
+        exhaustive_pair_top_k=search_cfg.exhaustive_pair_top_k,
+        exhaustive_triple_top_k=search_cfg.exhaustive_triple_top_k,
+        near_miss_threshold=search_cfg.near_miss_threshold,
     )
 
     learner = Learner(
@@ -197,7 +199,7 @@ class Learner:
         # --- Phase 1: Exhaustive enumeration ---
         if cfg.exhaustive_depth >= 1:
             enum_candidates, n_enum_evals = self._exhaustive_enumerate(
-                all_prims, task, cfg.exhaustive_depth, cfg.exhaustive_top_k)
+                all_prims, task, cfg.exhaustive_depth)
             n_evals += n_enum_evals
             for sp in enum_candidates:
                 self._update_pareto_front(pareto, sp)
@@ -812,23 +814,26 @@ class Learner:
         Enumerate ALL programs up to max_depth and evaluate them.
 
         Depth 1: try every single primitive (N programs).
-        Depth 2: try every pair outer(inner(x)) for top-K inner prims (N×K).
-        Depth 3: try outer(top-K-depth2-programs) for all outers (N×K).
+        Depth 2: top-K singles + essential concepts → K² pair combos.
+        Depth 3: top-K singles + essential concepts → K³ triple combos.
 
-        Key optimization for depth 3: instead of K³ triples (which tests
-        many redundant combos), we take the top-K depth-2 programs as
-        complete subtrees and wrap each with every outer. This is N×K
-        evaluations instead of K³, but covers much better compositions
-        because depth-2 subtrees are pre-filtered by quality.
+        Adapted from agi-mvp-general's try_all_pairs / try_all_triples:
+        both steps in a pair (and all three in a triple) are drawn from
+        the same pool of top-scoring + structurally essential concepts.
+        This catches solutions where the first step scores low individually
+        but is critical as a structural setup (e.g. crop, fill, compress).
 
         Returns (scored_programs, num_evaluations).
         """
         scored: list[ScoredProgram] = []
         n_evals = 0
         solve_thresh = self.search_cfg.solve_threshold
+        pair_top_k = self.search_cfg.exhaustive_pair_top_k
+        triple_top_k = self.search_cfg.exhaustive_triple_top_k
 
         # --- Depth 1: all single primitives ---
         unary_prims = [p for p in primitives if p.arity <= 1]
+        prim_by_name: dict[str, Primitive] = {p.name: p for p in unary_prims}
         for prim in unary_prims:
             prog = Program(root=prim.name)
             sp = self._evaluate_program(prog, task)
@@ -840,23 +845,32 @@ class Learner:
         if max_depth < 2:
             return scored, n_evals
 
-        # --- Depth 2: all pairs outer(inner(x)) ---
-        # Use semantic dedup to pick top-K *distinct* inners
+        # --- Build pair pool: top-K singles + essential concepts ---
         depth1_ranked = sorted(scored, key=lambda s: s.prediction_error)
-        seen_outputs: set[str] = set()
-        top_inner: list[ScoredProgram] = []
+        essential_names = self.grammar.essential_pair_concepts()
+
+        # Top-K distinct singles by prediction error
+        seen_names: set[str] = set()
+        pair_pool: list[str] = []
         for sp in depth1_ranked:
-            key = repr(sp.prediction_error)  # rough dedup
-            if key not in seen_outputs or len(top_inner) < top_k:
-                top_inner.append(sp)
-                seen_outputs.add(key)
-            if len(top_inner) >= top_k:
+            name = sp.program.root
+            if name not in seen_names:
+                pair_pool.append(name)
+                seen_names.add(name)
+            if len(pair_pool) >= pair_top_k:
                 break
 
-        for outer in unary_prims:
-            for inner_sp in top_inner:
-                prog = Program(root=outer.name, children=[
-                    Program(root=inner_sp.program.root)])
+        # Add essential concepts not already in pool
+        for name in essential_names:
+            if name not in seen_names and name in prim_by_name:
+                pair_pool.append(name)
+                seen_names.add(name)
+
+        # --- Depth 2: exhaustive K² pairs ---
+        for outer_name in pair_pool:
+            for inner_name in pair_pool:
+                prog = Program(root=outer_name, children=[
+                    Program(root=inner_name)])
                 sp = self._evaluate_program(prog, task)
                 scored.append(sp)
                 n_evals += 1
@@ -866,28 +880,37 @@ class Learner:
         if max_depth < 3:
             return scored, n_evals
 
-        # --- Depth 3: outer(best-depth2-subtree) ---
-        # Take top-K depth-2 programs (semantically distinct) and wrap each
-        # with every unary outer. Cost: N × K evaluations.
-        all_ranked = sorted(scored, key=lambda s: s.prediction_error)
-        seen_d2: set[str] = set()
-        top_d2: list[Program] = []
-        for sp in all_ranked:
-            prog_repr = repr(sp.program)
-            if prog_repr not in seen_d2:
-                seen_d2.add(prog_repr)
-                top_d2.append(sp.program)
-            if len(top_d2) >= top_k:
+        # --- Build triple pool: top-K singles + essential (smaller K) ---
+        triple_seen: set[str] = set()
+        triple_pool: list[str] = []
+        for sp in depth1_ranked:
+            name = sp.program.root
+            if name not in triple_seen:
+                triple_pool.append(name)
+                triple_seen.add(name)
+            if len(triple_pool) >= triple_top_k:
                 break
 
-        for outer in unary_prims:
-            for subtree in top_d2:
-                prog = Program(root=outer.name, children=[copy.deepcopy(subtree)])
-                sp = self._evaluate_program(prog, task)
-                scored.append(sp)
-                n_evals += 1
-                if sp.prediction_error <= solve_thresh:
-                    return scored, n_evals
+        for name in essential_names:
+            if name not in triple_seen and name in prim_by_name:
+                triple_pool.append(name)
+                triple_seen.add(name)
+
+        # --- Depth 3: exhaustive K³ triples ---
+        for a in triple_pool:
+            for b in triple_pool:
+                for c in triple_pool:
+                    # Skip degenerate a(a(a(x))) — already tested as single
+                    if a == b == c:
+                        continue
+                    prog = Program(root=a, children=[
+                        Program(root=b, children=[
+                            Program(root=c)])])
+                    sp = self._evaluate_program(prog, task)
+                    scored.append(sp)
+                    n_evals += 1
+                    if sp.prediction_error <= solve_thresh:
+                        return scored, n_evals
 
         return scored, n_evals
 
