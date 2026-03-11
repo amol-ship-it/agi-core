@@ -46,7 +46,7 @@ cd data/ARC-AGI && git pull && cd ../..
 # Full pipeline: train → save culture → eval (default, recommended)
 python -m experiments.phase1_arc
 
-# Quick subset for development (fast iteration, still runs full pipeline)
+# Quick subset for development (50 tasks, fast iteration, ~2 min)
 python -m experiments.phase1_arc --mode quick
 
 # Train only, save culture for later
@@ -59,6 +59,26 @@ python -m experiments.phase1_arc --eval-only --culture runs/20260311_120000_phas
 # Single-process for debugging
 python -m experiments.phase1_arc --workers 1
 ```
+
+### Running a subset of tasks
+
+Tasks are **shuffled by default** using a deterministic seed (`--seed 42`), so any subset is a representative random sample. This means you can run fewer tasks and extrapolate to the full dataset:
+
+```bash
+# Quick mode already uses 50 tasks — fastest way to iterate (~2 min)
+python -m experiments.phase1_arc --mode quick
+
+# Custom subset: 100 tasks with default search depth (~8 min)
+python -m experiments.phase1_arc --max-tasks 100
+
+# Tiny smoke test: 10 tasks (~20 sec)
+python -m experiments.phase1_arc --mode quick --max-tasks 10
+
+# Full 400-task benchmark with quick search settings
+python -m experiments.phase1_arc --mode quick --max-tasks 0
+```
+
+**Extrapolation:** If you solve 12/50 tasks (24%) in quick mode, you can expect roughly 96/400 (24%) on the full dataset. The seeded shuffle ensures the subset is unbiased. Variance decreases with larger subsets — 50 tasks gives a reasonable estimate, 100 tasks gives a tight one.
 
 ### Other demos (no dataset needed)
 
@@ -122,11 +142,11 @@ Each task record (JSONL and JSON) includes: `task_id`, `solved`, `test_solved`, 
 
 Three modes. Pick one. That's the only knob most users need.
 
-| Mode | Rounds | Beam | Gens | ~Evals/task | Use case |
-|------|--------|------|------|-------------|----------|
-| `quick` | 1 | 30 | 15 | ~450 | Fast iteration |
-| `default` | 1 | 80 | 40 | ~3,200 | Balanced speed/accuracy |
-| `contest` | 1 | 250 | 100 | ~25,000 | Maximum accuracy |
+| Mode | Rounds | Beam | Gens | Tasks | ~Evals/task | Use case |
+|------|--------|------|------|-------|-------------|----------|
+| `quick` | 1 | 30 | 15 | 50 | ~450 | Fast iteration (~2 min) |
+| `default` | 1 | 80 | 40 | all | ~3,200 | Balanced speed/accuracy |
+| `contest` | 1 | 250 | 100 | all | ~25,000 | Maximum accuracy |
 
 Compute budget = beam × gens. Early stopping saves unused compute on easy tasks.
 
@@ -134,11 +154,11 @@ Compute budget = beam × gens. Early stopping saves unused compute on easy tasks
 
 Benchmarked with 4 parallel workers (x86_64). Times scale inversely with workers.
 
-| Mode | 400 training tasks | 400 eval tasks (culture transfer) |
-|------|-------------------|----------------------------------|
-| `quick` | **95/400 (23.8%)**, median 3.1s/task, ~32 min total | **33/400 (8.2%)** |
-| `default` | ~25-28%, ~1 hr | ~10% |
-| `contest` | higher, ~3-4 hr | TBD |
+| Mode | Training | Eval (culture transfer) | Wall time |
+|------|----------|------------------------|-----------|
+| `quick` | ~12/50 (~24%), median 3.1s/task | ~4/50 (~8%) | **~2 min** |
+| `default` | **95/400 (23.8%)**, median 3.1s/task | **33/400 (8.2%)** | ~32 min |
+| `contest` | higher | TBD | ~3-4 hr |
 
 **317 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, and per-object conditional recoloring.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
