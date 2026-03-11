@@ -1,5 +1,5 @@
 """
-Tests for grammars/symbolic_math.py — the symbolic regression domain plugin.
+Tests for the symbolic regression domain plugin.
 
 Verifies:
 1. All primitives compute correctly
@@ -13,7 +13,7 @@ import math
 import unittest
 
 from core.types import Program, Task, LibraryEntry
-from grammars.symbolic_math import (
+from domains.symbolic_math import (
     MATH_PRIMITIVES,
     SymbolicMathEnv,
     SymbolicMathGrammar,
@@ -91,7 +91,7 @@ class TestSafeExpOverflow(unittest.TestCase):
 
     def test_safe_exp_triggers_overflow(self):
         """Monkey-patch math.exp to simulate an OverflowError."""
-        import grammars.symbolic_math as sm
+        import domains.symbolic_math as sm
         original_exp = math.exp
         def mock_exp(x):
             raise OverflowError("mock overflow")
@@ -214,7 +214,7 @@ class TestSymbolicMathGrammar(unittest.TestCase):
         prims = self.grammar.base_primitives()
         mutated = self.grammar.mutate(prog, prims)
         # The mutated program root should also be arity 0
-        from grammars.symbolic_math import _PRIM_MAP
+        from domains.symbolic_math import _PRIM_MAP
         if mutated.root in _PRIM_MAP:
             self.assertEqual(_PRIM_MAP[mutated.root].arity, 0)
 
@@ -285,7 +285,7 @@ class TestConstantOptimization(unittest.TestCase):
 
     def test_optimize_constants_linear(self):
         """optimize_constants should find c≈2.0 for f(x) = c*x with data from y=2x."""
-        from grammars.symbolic_math import optimize_constants, _collect_const_nodes
+        from domains.symbolic_math import optimize_constants, _collect_const_nodes
         # Tree: mul(const, x) — should discover const ≈ 2.0
         prog = Program(root="mul", children=[
             Program(root="const", params={"c": 0.5}),  # initial guess far from 2
@@ -299,7 +299,7 @@ class TestConstantOptimization(unittest.TestCase):
 
     def test_optimize_no_constants(self):
         """Program with no constants should be returned unchanged."""
-        from grammars.symbolic_math import optimize_constants
+        from domains.symbolic_math import optimize_constants
         prog = Program(root="x")
         data = [(1.0, 1.0), (2.0, 2.0)]
         result = optimize_constants(prog, data)
@@ -307,14 +307,14 @@ class TestConstantOptimization(unittest.TestCase):
 
     def test_optimize_does_not_mutate_original(self):
         """optimize_constants should deep-copy, not modify the input."""
-        from grammars.symbolic_math import optimize_constants
+        from domains.symbolic_math import optimize_constants
         prog = Program(root="const", params={"c": 5.0})
         data = [(1.0, 0.0)]  # target is 0, so c should move toward 0
         optimize_constants(prog, data)
         self.assertAlmostEqual(prog.params["c"], 5.0)  # original unchanged
 
     def test_collect_const_nodes(self):
-        from grammars.symbolic_math import _collect_const_nodes
+        from domains.symbolic_math import _collect_const_nodes
         prog = Program(root="add", children=[
             Program(root="const", params={"c": 1.0}),
             Program(root="mul", children=[
@@ -345,7 +345,7 @@ class TestConstantOptimization(unittest.TestCase):
 
     def test_eval_tree_raw(self):
         """_eval_tree_raw should evaluate without an Environment."""
-        from grammars.symbolic_math import _eval_tree_raw
+        from domains.symbolic_math import _eval_tree_raw
         prog = Program(root="add", children=[
             Program(root="x"),
             Program(root="const", params={"c": 3.0}),

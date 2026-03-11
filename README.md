@@ -63,11 +63,11 @@ These demonstrate the **same invariant core algorithm** on different domains:
 ```bash
 # Symbolic regression — discover mathematical formulas (y=2x+1, y=x², y=sin(x)+x, ...)
 # Shows per-task progress: which formulas were found, which weren't
-python -m grammars.symbolic_math
+python -m domains.symbolic_math
 
-# ARC grid puzzles — 8 sample tasks (rotate, mirror, crop, gravity, fill, ...)
-# Shows per-task progress: which grid transforms were synthesized
-python -m grammars.arc
+# ARC with built-in sample tasks (rotate, mirror, crop, gravity, fill, ...)
+# Uses 8 sample tasks when no ARC dataset is present
+python -m experiments.phase1_arc --mode quick
 ```
 
 Both demos print live per-task progress, a compounding curve, and a library summary.
@@ -227,15 +227,23 @@ agi-core/
 │   ├── memory.py            # Default in-memory store
 │   └── metrics.py           # Compounding curve measurement
 │
-├── grammars/                # PLUGGABLE — one file per domain (all 4 interfaces)
-│   ├── symbolic_math.py     # Domain: 1D symbolic regression (15 math primitives)
-│   └── arc.py               # Domain: ARC-AGI grid transformations (89 primitives)
-│
 ├── experiments/             # Thin domain-specific wrappers over core/runner.py
 │   └── phase1_arc.py        # ARC curriculum training (dataset loading + ARC wiring)
 │
-├── tests/                   # Test suite (205 tests)
+├── domains/                 # Domain implementations (all 4 interfaces)
+│   ├── arc/                 # ARC-AGI grid transformations (89 primitives)
+│   │   ├── primitives.py    # Grid→Grid transform functions + registry
+│   │   ├── objects.py       # Connected component detection
+│   │   ├── environment.py   # ARCEnv
+│   │   ├── grammar.py       # ARCGrammar
+│   │   ├── drive.py         # ARCDrive
+│   │   └── dataset.py       # Task loading + sample tasks
+│   └── symbolic_math/       # 1D symbolic regression (15 math primitives)
+│       └── __init__.py      # All 4 interfaces in one file
+│
+├── tests/                   # Test suite (323 tests)
 │   ├── test_arc.py
+│   ├── test_exhaustive_enum.py
 │   ├── test_interfaces.py
 │   ├── test_learner.py
 │   ├── test_memory.py

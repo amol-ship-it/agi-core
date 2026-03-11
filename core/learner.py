@@ -156,6 +156,18 @@ class Learner:
         program in disguise. So exhaustive depth-1 search over a rich
         vocabulary reaches further than deep search over a small one.
         """
+        return self._wake_core(task, record=True)
+
+    def _wake_on_task_no_record(self, task: Task) -> WakeResult:
+        """
+        Same as wake_on_task but does NOT write to memory.
+
+        Used by parallel workers — the main process merges results.
+        """
+        return self._wake_core(task, record=False)
+
+    def _wake_core(self, task: Task, record: bool) -> WakeResult:
+        """Shared wake logic. When record=True, writes solutions to memory."""
         t0 = time.time()
         cfg = self.search_cfg
 
@@ -173,6 +185,15 @@ class Learner:
         pareto: dict[int, ParetoEntry] = {}
         enum_candidates: list[ScoredProgram] = []
 
+        def _record_solve():
+            """Record solution in memory if record=True."""
+            if record and best_so_far:
+                self.memory.record_episode(
+                    task.task_id, task.train_examples,
+                    best_so_far.program, best_so_far.energy)
+                self.memory.store_solution(task.task_id, best_so_far)
+                self._credit_library_usage(best_so_far.program)
+
         # --- Phase 1: Exhaustive enumeration ---
         if cfg.exhaustive_depth >= 1:
             enum_candidates, n_enum_evals = self._exhaustive_enumerate(
@@ -186,11 +207,8 @@ class Learner:
             # Early exit if enumeration found a perfect solve
             if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
                 best_so_far.task_id = task.task_id
-                self.memory.record_episode(
-                    task.task_id, task.train_examples,
-                    best_so_far.program, best_so_far.energy)
-                self.memory.store_solution(task.task_id, best_so_far)
-                self._credit_library_usage(best_so_far.program)
+                _record_solve()
+                test_error, test_solved = self._evaluate_on_test(best_so_far, task)
                 front = self._extract_pareto_front(pareto)
                 wall = time.time() - t0
                 logger.info(
@@ -199,7 +217,8 @@ class Learner:
                 return WakeResult(
                     task_id=task.task_id, solved=True, best=best_so_far,
                     generations_used=0, evaluations=n_evals, wall_time=wall,
-                    pareto_front=front, dedup_count=0)
+                    pareto_front=front, dedup_count=0,
+                    test_error=test_error, test_solved=test_solved)
 
         # --- Phase 1.5: Near-miss refinement ---
         # Try appending/prepending primitives to near-miss programs.
@@ -217,11 +236,8 @@ class Learner:
             # Check if refinement found a perfect solve
             if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
                 best_so_far.task_id = task.task_id
-                self.memory.record_episode(
-                    task.task_id, task.train_examples,
-                    best_so_far.program, best_so_far.energy)
-                self.memory.store_solution(task.task_id, best_so_far)
-                self._credit_library_usage(best_so_far.program)
+                _record_solve()
+                test_error, test_solved = self._evaluate_on_test(best_so_far, task)
                 front = self._extract_pareto_front(pareto)
                 wall = time.time() - t0
                 logger.info(
@@ -230,7 +246,8 @@ class Learner:
                 return WakeResult(
                     task_id=task.task_id, solved=True, best=best_so_far,
                     generations_used=0, evaluations=n_evals, wall_time=wall,
-                    pareto_front=front, dedup_count=0)
+                    pareto_front=front, dedup_count=0,
+                    test_error=test_error, test_solved=test_solved)
 
         # --- Phase 2: Beam search (seeded with top enumeration results) ---
         seed_progs = [sp.program for sp in sorted(
@@ -291,16 +308,19 @@ class Learner:
         solved = best_so_far is not None and best_so_far.prediction_error <= self.search_cfg.solve_threshold
         if best_so_far:
             best_so_far.task_id = task.task_id
-            self.memory.record_episode(
-                task.task_id,
-                task.train_examples,
-                best_so_far.program,
-                best_so_far.energy,
-            )
-            if solved:
-                self.memory.store_solution(task.task_id, best_so_far)
-                # Credit library entries that were used
-                self._credit_library_usage(best_so_far.program)
+            if record:
+                self.memory.record_episode(
+                    task.task_id,
+                    task.train_examples,
+                    best_so_far.program,
+                    best_so_far.energy,
+                )
+                if solved:
+                    self.memory.store_solution(task.task_id, best_so_far)
+                    self._credit_library_usage(best_so_far.program)
+
+        # Evaluate on held-out test examples if available
+        test_error, test_solved = self._evaluate_on_test(best_so_far, task)
 
         front = self._extract_pareto_front(pareto)
         wall = time.time() - t0
@@ -319,138 +339,35 @@ class Learner:
             wall_time=wall,
             pareto_front=front,
             dedup_count=total_deduped,
+            test_error=test_error,
+            test_solved=test_solved,
         )
 
-    def _wake_on_task_no_record(self, task: Task) -> WakeResult:
+    def _evaluate_on_test(
+        self, best: Optional[ScoredProgram], task: Task
+    ) -> tuple[Optional[float], Optional[bool]]:
+        """Evaluate the best program on held-out test examples.
+
+        Returns (avg_test_error, test_solved) or (None, None) if no test data.
         """
-        Same as wake_on_task but does NOT write to memory.
+        if best is None or not task.test_inputs or not task.test_outputs:
+            return None, None
+        if len(task.test_inputs) != len(task.test_outputs):
+            return None, None
 
-        Used by parallel workers — the main process merges results.
-        """
-        t0 = time.time()
-        cfg = self.search_cfg
+        total_error = 0.0
+        n = len(task.test_inputs)
+        for inp, expected in zip(task.test_inputs, task.test_outputs):
+            try:
+                predicted = self.env.execute(best.program, inp)
+                err = self.drive.prediction_error(predicted, expected)
+            except Exception:
+                err = 1e6
+            total_error += err
 
-        self.grammar.prepare_for_task(task)
-        base_prims = self.grammar.base_primitives()
-        library_prims = self.grammar.inject_library(self.memory.get_library())
-        all_prims = base_prims + library_prims
-
-        best_so_far: Optional[ScoredProgram] = None
-        n_evals = 0
-        total_deduped = 0
-        pareto: dict[int, ParetoEntry] = {}
-        enum_candidates: list[ScoredProgram] = []
-
-        # --- Phase 1: Exhaustive enumeration ---
-        if cfg.exhaustive_depth >= 1:
-            enum_candidates, n_enum_evals = self._exhaustive_enumerate(
-                all_prims, task, cfg.exhaustive_depth, cfg.exhaustive_top_k)
-            n_evals += n_enum_evals
-            for sp in enum_candidates:
-                self._update_pareto_front(pareto, sp)
-                if best_so_far is None or sp.energy < best_so_far.energy:
-                    best_so_far = sp
-
-            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                best_so_far.task_id = task.task_id
-                front = self._extract_pareto_front(pareto)
-                wall = time.time() - t0
-                logger.info(
-                    f"  [wake] Task {task.task_id}: SOLVED by enumeration, "
-                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
-                return WakeResult(
-                    task_id=task.task_id, solved=True, best=best_so_far,
-                    generations_used=0, evaluations=n_evals, wall_time=wall,
-                    pareto_front=front, dedup_count=0)
-
-        # --- Phase 1.5: Near-miss refinement ---
-        if cfg.near_miss_threshold > 0 and enum_candidates:
-            refine_candidates, n_refine_evals = self._near_miss_refine(
-                enum_candidates, all_prims, task, cfg.near_miss_threshold)
-            n_evals += n_refine_evals
-            for sp in refine_candidates:
-                self._update_pareto_front(pareto, sp)
-                if best_so_far is None or sp.energy < best_so_far.energy:
-                    best_so_far = sp
-            enum_candidates.extend(refine_candidates)
-
-            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                best_so_far.task_id = task.task_id
-                front = self._extract_pareto_front(pareto)
-                wall = time.time() - t0
-                logger.info(
-                    f"  [wake] Task {task.task_id}: SOLVED by near-miss refinement, "
-                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
-                return WakeResult(
-                    task_id=task.task_id, solved=True, best=best_so_far,
-                    generations_used=0, evaluations=n_evals, wall_time=wall,
-                    pareto_front=front, dedup_count=0)
-
-        # --- Phase 2: Beam search ---
-        seed_progs = [sp.program for sp in sorted(
-            enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
-        n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
-        beam = seed_progs + self._init_beam(all_prims, n_random)
-        gens_used = 0
-
-        for gen in range(cfg.max_generations):
-            gens_used = gen + 1
-
-            scored = []
-            for prog in beam:
-                sp = self._evaluate_program(prog, task)
-                n_evals += 1
-                scored.append(sp)
-                self._update_pareto_front(pareto, sp)
-                if best_so_far is None or sp.energy < best_so_far.energy:
-                    best_so_far = sp
-
-            if best_so_far and best_so_far.energy <= cfg.early_stop_energy:
-                break
-
-            if cfg.semantic_dedup:
-                scored, n_removed = self._semantic_dedup(scored, task)
-                total_deduped += n_removed
-
-            scored.sort(key=lambda s: s.energy)
-            survivors = [s.program for s in scored[: cfg.beam_width]]
-
-            next_gen = list(survivors)
-            for prog in survivors:
-                for _ in range(cfg.mutations_per_candidate):
-                    next_gen.append(self.grammar.mutate(prog, all_prims))
-
-            n_cross = int(len(survivors) * cfg.crossover_fraction)
-            for _ in range(n_cross):
-                a = self._rng.choice(survivors)
-                b = self._rng.choice(survivors)
-                next_gen.append(self.grammar.crossover(a, b))
-
-            beam = next_gen
-
-        solved = (best_so_far is not None and
-                  best_so_far.prediction_error <= self.search_cfg.solve_threshold)
-        if best_so_far:
-            best_so_far.task_id = task.task_id
-
-        front = self._extract_pareto_front(pareto)
-        wall = time.time() - t0
-        logger.info(
-            f"  [wake] Task {task.task_id}: solved={solved}, "
-            f"energy={best_so_far.energy:.6f}, gens={gens_used}, "
-            f"evals={n_evals}, deduped={total_deduped}, "
-            f"pareto={len(front)}, time={wall:.1f}s"
-        )
-        return WakeResult(
-            task_id=task.task_id,
-            solved=solved,
-            best=best_so_far,
-            generations_used=gens_used,
-            evaluations=n_evals,
-            wall_time=wall,
-            pareto_front=front,
-            dedup_count=total_deduped,
-        )
+        avg_error = total_error / n if n > 0 else total_error
+        test_solved = avg_error <= self.search_cfg.solve_threshold
+        return avg_error, test_solved
 
     # -------------------------------------------------------------------------
     # SLEEP PHASE: analyze → extract → compress → add to library
@@ -868,14 +785,14 @@ class Learner:
                 # Try prepending: insert prim as the innermost step.
                 # For f(g(x)), prepend h gives f(g(h(x))).
                 prog_prepend = copy.deepcopy(nm.program)
-                # Walk to the deepest leaf and wrap it
+                # Walk to the deepest leaf and wrap it: leaf → prim(leaf)
                 node = prog_prepend
                 while node.children:
                     node = node.children[0]
-                # node is now the deepest leaf — wrap it with prim
+                # node is the deepest leaf — wrap: old_leaf → prim(old_leaf)
                 old_root = node.root
-                node.root = old_root
-                node.children = [Program(root=prim.name)]
+                node.root = prim.name
+                node.children = [Program(root=old_root)]
                 sp = self._evaluate_program(prog_prepend, task)
                 refined.append(sp)
                 n_evals += 1
@@ -1042,20 +959,13 @@ class Learner:
             total_error += err
 
         avg_error = total_error / n if n > 0 else total_error
-        energy, pred_err, comp_cost = self.drive.energy(
-            program, None, None,
-            alpha=self.search_cfg.energy_alpha,
-            beta=self.search_cfg.energy_beta,
-        )
-        # Override with actual averaged error
-        pred_err = avg_error
         comp_cost = self.drive.complexity_cost(program)
-        energy = self.search_cfg.energy_alpha * pred_err + self.search_cfg.energy_beta * comp_cost
+        energy = self.search_cfg.energy_alpha * avg_error + self.search_cfg.energy_beta * comp_cost
 
         return ScoredProgram(
             program=program,
             energy=energy,
-            prediction_error=pred_err,
+            prediction_error=avg_error,
             complexity_cost=comp_cost,
         )
 

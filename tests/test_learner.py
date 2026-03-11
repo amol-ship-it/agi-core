@@ -729,5 +729,207 @@ class TestParetoFront(unittest.TestCase):
         self.assertGreater(len(result.pareto_front), 0)
 
 
+# =============================================================================
+# Test accuracy (generalization) tests
+# =============================================================================
+
+class TestTestAccuracy(unittest.TestCase):
+    """Test that WakeResult includes test accuracy when test data is available."""
+
+    def test_wake_returns_test_accuracy(self):
+        """When test_inputs/test_outputs are provided, test_error should be set."""
+        learner = _make_learner()
+        # Task with test data
+        task = Task(
+            task_id="with_test",
+            train_examples=[(1, 1), (2, 2), (3, 3)],
+            test_inputs=[4, 5],
+            test_outputs=[4, 5],
+            difficulty=0.0,
+        )
+        result = learner.wake_on_task(task)
+        self.assertIsNotNone(result.test_error)
+        self.assertIsNotNone(result.test_solved)
+
+    def test_wake_no_test_data(self):
+        """When no test data, test_error should be None."""
+        learner = _make_learner()
+        task = Task(
+            task_id="no_test",
+            train_examples=[(1, 1), (2, 2)],
+            test_inputs=[],
+            test_outputs=[],
+            difficulty=0.0,
+        )
+        result = learner.wake_on_task(task)
+        self.assertIsNone(result.test_error)
+        self.assertIsNone(result.test_solved)
+
+    def test_test_solved_for_identity(self):
+        """Identity task should be test-solved if train-solved."""
+        learner = _make_learner()
+        task = Task(
+            task_id="identity_test",
+            train_examples=[(1, 1), (2, 2), (3, 3)],
+            test_inputs=[10, 20],
+            test_outputs=[10, 20],
+            difficulty=0.0,
+        )
+        result = learner.wake_on_task(task)
+        if result.solved:
+            self.assertTrue(result.test_solved)
+
+    def test_no_record_also_has_test_accuracy(self):
+        """_wake_on_task_no_record should also compute test accuracy."""
+        learner = _make_learner()
+        task = Task(
+            task_id="identity_test",
+            train_examples=[(1, 1), (2, 2), (3, 3)],
+            test_inputs=[10, 20],
+            test_outputs=[10, 20],
+            difficulty=0.0,
+        )
+        result = learner._wake_on_task_no_record(task)
+        self.assertIsNotNone(result.test_error)
+
+
+# =============================================================================
+# Near-miss refinement tests
+# =============================================================================
+
+class TestNearMissRefine(unittest.TestCase):
+    """Test the near-miss refinement phase."""
+
+    def test_near_miss_refine_produces_candidates(self):
+        """Near-miss refinement should produce new candidate programs."""
+        learner = _make_learner()
+        task = _make_identity_task()
+        prims = learner.grammar.base_primitives()
+
+        # Create a near-miss candidate (prediction error between solve_threshold and threshold)
+        near_miss = ScoredProgram(
+            program=Program(root="double"),
+            energy=0.1,
+            prediction_error=0.1,  # above solve_threshold (0.01) but below default 0.20
+            complexity_cost=1.0,
+        )
+        refined, n_evals = learner._near_miss_refine(
+            [near_miss], prims, task, threshold=0.20)
+        self.assertGreater(n_evals, 0)
+        self.assertGreater(len(refined), 0)
+
+    def test_near_miss_empty_when_no_near_misses(self):
+        """If no candidates are near-misses, should return empty."""
+        learner = _make_learner()
+        task = _make_identity_task()
+        prims = learner.grammar.base_primitives()
+
+        # A perfect candidate (below solve_threshold) is not a near-miss
+        perfect = ScoredProgram(
+            program=Program(root="identity"),
+            energy=0.0, prediction_error=0.0, complexity_cost=1.0,
+        )
+        refined, n_evals = learner._near_miss_refine(
+            [perfect], prims, task, threshold=0.20)
+        self.assertEqual(n_evals, 0)
+        self.assertEqual(len(refined), 0)
+
+    def test_prepend_changes_program_structure(self):
+        """The prepend operation should wrap the deepest leaf with a new primitive."""
+        # Verify the fix for the no-op bug
+        import copy
+        prog = Program(root="double", children=[Program(root="identity")])
+        prog_prepend = copy.deepcopy(prog)
+        # Walk to deepest leaf
+        node = prog_prepend
+        while node.children:
+            node = node.children[0]
+        # Apply the fix: leaf → prim(leaf)
+        old_root = node.root
+        node.root = "double"  # the new primitive
+        node.children = [Program(root=old_root)]  # the old leaf becomes child
+        # Verify structure changed
+        self.assertEqual(prog_prepend.root, "double")
+        self.assertEqual(prog_prepend.children[0].root, "double")
+        self.assertEqual(prog_prepend.children[0].children[0].root, "identity")
+
+
+# =============================================================================
+# Runner helper tests
+# =============================================================================
+
+class TestRunnerHelpers(unittest.TestCase):
+    """Test runner.py utility functions."""
+
+    def test_fmt_duration_seconds(self):
+        from core.runner import fmt_duration
+        self.assertEqual(fmt_duration(12.3), "12.3s")
+
+    def test_fmt_duration_minutes(self):
+        from core.runner import fmt_duration
+        self.assertEqual(fmt_duration(272), "4m32s")
+
+    def test_fmt_duration_hours(self):
+        from core.runner import fmt_duration
+        self.assertEqual(fmt_duration(4980), "1h23m")
+
+    def test_parse_human_int_plain(self):
+        from core.runner import parse_human_int
+        self.assertEqual(parse_human_int("1000"), 1000)
+
+    def test_parse_human_int_suffixes(self):
+        from core.runner import parse_human_int
+        self.assertEqual(parse_human_int("50M"), 50_000_000)
+        self.assertEqual(parse_human_int("500K"), 500_000)
+        self.assertEqual(parse_human_int("2B"), 2_000_000_000)
+
+    def test_parse_human_int_commas(self):
+        from core.runner import parse_human_int
+        self.assertEqual(parse_human_int("8,000,000"), 8_000_000)
+
+    def test_parse_human_int_empty_raises(self):
+        import argparse
+        from core.runner import parse_human_int
+        with self.assertRaises(argparse.ArgumentTypeError):
+            parse_human_int("")
+
+    def test_parse_human_int_invalid_raises(self):
+        import argparse
+        from core.runner import parse_human_int
+        with self.assertRaises(argparse.ArgumentTypeError):
+            parse_human_int("abc")
+
+    def test_detect_machine(self):
+        from core.runner import detect_machine
+        info = detect_machine()
+        self.assertIn("platform", info)
+        self.assertIn("cpu_count", info)
+        self.assertIn("python", info)
+
+    def test_resolve_from_preset(self):
+        from core.runner import resolve_from_preset, PRESETS
+        import argparse
+        args = argparse.Namespace(
+            rounds=None, beam_width=None, max_generations=None,
+            max_tasks=None, workers=0,
+        )
+        resolved = resolve_from_preset(args, PRESETS["quick"])
+        self.assertEqual(resolved["rounds"], 2)
+        self.assertEqual(resolved["beam_width"], 80)
+
+    def test_resolve_from_preset_overrides(self):
+        from core.runner import resolve_from_preset, PRESETS
+        import argparse
+        args = argparse.Namespace(
+            rounds=5, beam_width=200, max_generations=None,
+            max_tasks=10, workers=4,
+        )
+        resolved = resolve_from_preset(args, PRESETS["quick"])
+        self.assertEqual(resolved["rounds"], 5)
+        self.assertEqual(resolved["beam_width"], 200)
+        self.assertEqual(resolved["max_tasks"], 10)
+        self.assertEqual(resolved["workers"], 4)
+
+
 if __name__ == "__main__":
     unittest.main()

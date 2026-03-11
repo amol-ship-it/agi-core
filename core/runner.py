@@ -285,6 +285,11 @@ class ProgressTracker:
         energy_str = f"{wr.best.energy:.4f}" if wr.best else "    N/A"
         program_str = repr(wr.best.program) if wr.best else ""
 
+        # Test accuracy tag
+        test_tag = ""
+        if wr.test_solved is not None:
+            test_tag = " [test:✓]" if wr.test_solved else " [test:✗]"
+
         slow_tag = ""
         if len(self.times) >= 5:
             med = statistics.median(self.times)
@@ -296,7 +301,7 @@ class ProgressTracker:
             f"{wr.task_id:<20s} "
             f"E={energy_str}  gens={wr.generations_used:<4d} "
             f"evals={wr.evaluations:<6d} {wr.wall_time:.1f}s"
-            f"{slow_tag}",
+            f"{test_tag}{slow_tag}",
             flush=True,
         )
         if wr.solved and program_str:
@@ -313,6 +318,8 @@ class ProgressTracker:
             "task_index": task_index,
             "task_id": wr.task_id,
             "solved": wr.solved,
+            "test_solved": wr.test_solved,
+            "test_error": round(wr.test_error, 6) if wr.test_error is not None else None,
             "energy": wr.best.energy if wr.best else None,
             "prediction_error": wr.best.prediction_error if wr.best else None,
             "generations": wr.generations_used,
@@ -602,8 +609,26 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print("  FINAL RESULTS")
     hline("═")
 
+    # Train accuracy
     print(f"  Tasks:             {tracker.done}")
-    print(f"  Solved:            {tracker.solved}/{tracker.done}")
+    print(f"  Train solved:      {tracker.solved}/{tracker.done} "
+          f"({tracker.solved / max(tracker.done, 1):.1%})")
+
+    # Test accuracy (generalization)
+    all_wake = [wr for rr in results for wr in rr.wake_results]
+    test_evaluated = [wr for wr in all_wake if wr.test_solved is not None]
+    if test_evaluated:
+        test_solved = sum(1 for wr in test_evaluated if wr.test_solved)
+        # Deduplicate by task_id (last round's result counts)
+        test_by_task: dict[str, bool] = {}
+        for wr in all_wake:
+            if wr.test_solved is not None:
+                test_by_task[wr.task_id] = wr.test_solved
+        unique_test_solved = sum(1 for v in test_by_task.values() if v)
+        unique_test_total = len(test_by_task)
+        print(f"  Test solved:       {unique_test_solved}/{unique_test_total} "
+              f"({unique_test_solved / max(unique_test_total, 1):.1%})")
+
     if tracker.scores:
         print(f"  Mean energy:       {statistics.mean(tracker.scores):.4f}")
     print(f"  Total evaluations: {total_evals:,}")
