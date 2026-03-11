@@ -35,9 +35,9 @@ The default command runs all 400 training tasks, saves the learned culture, then
 ### Syncing an existing clone
 
 ```bash
-cd agi-core && git pull origin main
+git pull origin main
 pip install -r requirements.txt
-cd data/ARC-AGI && git pull && cd ../..
+git -C data/ARC-AGI pull
 ```
 
 ## Usage
