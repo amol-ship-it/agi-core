@@ -4373,6 +4373,551 @@ def fill_convex_hull(grid: Grid) -> Grid:
 
 
 # =============================================================================
+# Batch 5: Targeted primitives from near-miss analysis
+# =============================================================================
+
+
+def complete_sym_180(grid: Grid) -> Grid:
+    """Complete 180° rotational symmetry around the center of non-zero content.
+
+    For each zero cell that has a non-zero 180°-symmetric counterpart
+    (relative to the bounding box center of non-zero pixels), fill it
+    with that counterpart's color. Also applies H and V mirror symmetry
+    iteratively until stable.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    # Find bounding box of non-zero content
+    nz_rows = [r for r in range(h) if any(grid[r][c] != 0 for c in range(w))]
+    nz_cols = [c for c in range(w) if any(grid[r][c] != 0 for r in range(h))]
+    if not nz_rows or not nz_cols:
+        return grid
+
+    r0, r1 = min(nz_rows), max(nz_rows)
+    c0, c1 = min(nz_cols), max(nz_cols)
+
+    result = [row[:] for row in grid]
+    # Iterate: apply 180°, H-mirror, V-mirror until no changes
+    for _ in range(3):
+        changed = False
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                if result[r][c] != 0:
+                    continue
+                # 180° rotation
+                sr, sc = r0 + r1 - r, c0 + c1 - c
+                if r0 <= sr <= r1 and c0 <= sc <= c1 and result[sr][sc] != 0:
+                    result[r][c] = result[sr][sc]
+                    changed = True
+                    continue
+                # H-mirror (flip across horizontal center)
+                sr2 = r0 + r1 - r
+                if r0 <= sr2 <= r1 and result[sr2][c] != 0:
+                    result[r][c] = result[sr2][c]
+                    changed = True
+                    continue
+                # V-mirror (flip across vertical center)
+                sc2 = c0 + c1 - c
+                if c0 <= sc2 <= c1 and result[r][sc2] != 0:
+                    result[r][c] = result[r][sc2]
+                    changed = True
+        if not changed:
+            break
+    return result
+
+
+def remove_small_components(grid: Grid, max_size: int = 2) -> Grid:
+    """Remove connected components with size <= max_size (set to 0).
+
+    Uses 4-connectivity. Removes noise clusters larger than single pixels
+    (which remove_color_noise handles) but smaller than real objects.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    visited: set[tuple[int, int]] = set()
+    result = [row[:] for row in grid]
+
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0 or (r, c) in visited:
+                continue
+            # BFS to find component
+            color = grid[r][c]
+            component: list[tuple[int, int]] = []
+            stack = [(r, c)]
+            visited.add((r, c))
+            while stack:
+                cr, cc = stack.pop()
+                component.append((cr, cc))
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = cr + dr, cc + dc
+                    if (0 <= nr < h and 0 <= nc < w
+                            and (nr, nc) not in visited
+                            and grid[nr][nc] == color):
+                        visited.add((nr, nc))
+                        stack.append((nr, nc))
+            if len(component) <= max_size:
+                for cr, cc in component:
+                    result[cr][cc] = 0
+    return result
+
+
+def remove_components_lte3(grid: Grid) -> Grid:
+    """Remove connected components with size <= 3."""
+    return remove_small_components(grid, max_size=3)
+
+
+def keep_solid_rectangle(grid: Grid) -> Grid:
+    """Keep only the largest solid monochromatic rectangle, zero the rest.
+
+    Finds all axis-aligned rectangles of uniform non-zero color and keeps
+    only the largest one. Useful for extracting signal from noise.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    best_rect = None
+    best_area = 0
+
+    # For each possible top-left corner and color
+    for r0 in range(h):
+        for c0 in range(w):
+            if grid[r0][c0] == 0:
+                continue
+            color = grid[r0][c0]
+            # Extend right as far as possible
+            max_c = c0
+            while max_c + 1 < w and grid[r0][max_c + 1] == color:
+                max_c += 1
+            # Extend down, narrowing width as needed
+            for r1 in range(r0, h):
+                if grid[r1][c0] != color:
+                    break
+                # Find rightmost extent in this row
+                row_max = c0
+                while row_max + 1 <= max_c and grid[r1][row_max + 1] == color:
+                    row_max += 1
+                max_c = row_max
+                area = (r1 - r0 + 1) * (max_c - c0 + 1)
+                if area > best_area:
+                    best_area = area
+                    best_rect = (r0, c0, r1, max_c, color)
+
+    if best_rect is None:
+        return grid
+
+    r0, c0, r1, c1, color = best_rect
+    result = [[0] * w for _ in range(h)]
+    for r in range(r0, r1 + 1):
+        for c in range(c0, c1 + 1):
+            result[r][c] = color
+    return result
+
+
+def propagate_in_subcells(grid: Grid) -> Grid:
+    """Detect sub-grid structure and propagate markers across sub-cells.
+
+    Identifies separator lines (full rows/cols of 0) that divide the grid
+    into a regular arrangement of sub-cells. In each sub-cell, finds
+    the dominant (most common) non-zero color and treats other non-zero
+    colors as markers. Propagates markers across sub-cells in the same
+    sub-grid row and column.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    # Find separator rows (all 0) and separator cols (all 0)
+    sep_rows = [r for r in range(h) if all(grid[r][c] == 0 for c in range(w))]
+    sep_cols = [c for c in range(w) if all(grid[r][c] == 0 for r in range(h))]
+
+    if not sep_rows or not sep_cols:
+        return grid
+
+    # Find cell boundaries
+    def _find_ranges(seps, total):
+        ranges = []
+        prev = 0
+        for s in seps:
+            if s > prev:
+                ranges.append((prev, s))
+            prev = s + 1
+        if prev < total:
+            ranges.append((prev, total))
+        return ranges
+
+    row_ranges = _find_ranges(sep_rows, h)
+    col_ranges = _find_ranges(sep_cols, w)
+
+    if len(row_ranges) < 2 or len(col_ranges) < 2:
+        return grid
+
+    # Check all sub-cells have the same size
+    cell_h = row_ranges[0][1] - row_ranges[0][0]
+    cell_w = col_ranges[0][1] - col_ranges[0][0]
+    if not all(r1 - r0 == cell_h for r0, r1 in row_ranges):
+        return grid
+    if not all(c1 - c0 == cell_w for c0, c1 in col_ranges):
+        return grid
+
+    n_rows = len(row_ranges)
+    n_cols = len(col_ranges)
+
+    # Extract sub-cell content
+    cells = [[None] * n_cols for _ in range(n_rows)]
+    for ri, (r0, r1) in enumerate(row_ranges):
+        for ci, (c0, c1) in enumerate(col_ranges):
+            cell = []
+            for r in range(r0, r1):
+                row = []
+                for c in range(c0, c1):
+                    row.append(grid[r][c])
+                cell.append(row)
+            cells[ri][ci] = cell
+
+    # Find the dominant non-zero color across all sub-cells
+    from collections import Counter
+    all_nz = [v for ri in range(n_rows) for ci in range(n_cols)
+              for row in cells[ri][ci] for v in row if v != 0]
+    if not all_nz:
+        return grid
+    dominant = Counter(all_nz).most_common(1)[0][0]
+
+    # A marker is any non-zero, non-dominant pixel in a sub-cell
+    def _get_markers(cell):
+        markers = []
+        for dr in range(cell_h):
+            for dc in range(cell_w):
+                if cell[dr][dc] != 0 and cell[dr][dc] != dominant:
+                    markers.append((dr, dc, cell[dr][dc]))
+        return markers
+
+    result = [row[:] for row in grid]
+
+    # Propagate: if a cell has markers, copy those markers to all cells
+    # in the same sub-grid row
+    for ri in range(n_rows):
+        for ci in range(n_cols):
+            markers = _get_markers(cells[ri][ci])
+            if not markers:
+                continue
+            for ci2 in range(n_cols):
+                if ci2 == ci:
+                    continue
+                r0, _ = row_ranges[ri]
+                c0, _ = col_ranges[ci2]
+                for dr, dc, color in markers:
+                    result[r0 + dr][c0 + dc] = color
+
+    return result
+
+
+def mark_intersections_exclude_axis(grid: Grid) -> Grid:
+    """Mark row/col intersections with color 2, excluding the axes' own crossing.
+
+    Finds non-bg pixels, splits them into a "row group" (sharing one row)
+    and a "col group" (sharing one column). Fills bg cells at cross-product
+    intersections, but skips the cell where the row-axis and col-axis cross.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    from collections import Counter
+    flat = [v for row in grid for v in row]
+    bg = Counter(flat).most_common(1)[0][0]
+
+    non_bg = [(r, c) for r in range(h) for c in range(w) if grid[r][c] != bg]
+    if not non_bg:
+        return grid
+
+    # Find rows/cols that contain non-bg pixels
+    row_counts = Counter(r for r, c in non_bg)
+    col_counts = Counter(c for r, c in non_bg)
+
+    # Identify "header" rows (rows with many non-bg pixels) and
+    # "side" cols (cols with many non-bg pixels)
+    header_rows = {r for r, cnt in row_counts.items() if cnt >= 2}
+    side_cols = {c for c, cnt in col_counts.items() if cnt >= 2}
+
+    # Get the columns from header rows and rows from side cols
+    header_cols = {c for r, c in non_bg if r in header_rows}
+    side_rows = {r for r, c in non_bg if c in side_cols}
+
+    result = [row[:] for row in grid]
+    for r in side_rows:
+        for c in header_cols:
+            # Skip positions where both axes overlap (the crossing point)
+            if r in header_rows and c in side_cols:
+                continue
+            if grid[r][c] == bg:
+                result[r][c] = 2
+    return result
+
+
+def flood_fill_enclosed_with_accent(grid: Grid) -> Grid:
+    """Fill enclosed 0-regions with the accent (2nd most common) color.
+
+    Finds 0-cells not reachable from the grid border (treating non-zero as
+    walls). Fills those with the second most common non-zero color.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    # Find border-reachable zeros
+    border_reachable: set[tuple[int, int]] = set()
+    stack: list[tuple[int, int]] = []
+    for r in range(h):
+        for c in range(w):
+            if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and grid[r][c] == 0:
+                stack.append((r, c))
+    while stack:
+        r, c = stack.pop()
+        if (r, c) in border_reachable:
+            continue
+        border_reachable.add((r, c))
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] == 0 and (nr, nc) not in border_reachable:
+                stack.append((nr, nc))
+
+    # Find accent color (2nd most common non-zero)
+    from collections import Counter
+    color_counts = Counter(grid[r][c] for r in range(h) for c in range(w) if grid[r][c] != 0)
+    if len(color_counts) < 2:
+        # If only 1 color, use it
+        fill_color = color_counts.most_common(1)[0][0] if color_counts else 0
+    else:
+        fill_color = color_counts.most_common(2)[1][0]
+
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0 and (r, c) not in border_reachable:
+                result[r][c] = fill_color
+    return result
+
+
+def draw_diagonal_nearest(grid: Grid) -> Grid:
+    """Draw diagonal lines from non-zero pixels, nearest pixel wins ties.
+
+    Unlike draw_diagonal_from_pixels which processes in arbitrary order,
+    this uses BFS-like propagation so closer sources always win.
+    """
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+    dist = np.full((h, w), np.inf)
+
+    # Initialize distances: non-zero cells have distance 0
+    from collections import deque
+    queue: deque[tuple[int, int, int]] = deque()
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                dist[r, c] = 0
+
+    # BFS from all non-zero pixels along diagonals
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                color = arr[r, c]
+                for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                    nr, nc = r + dr, c + dc
+                    d = 1
+                    while 0 <= nr < h and 0 <= nc < w:
+                        if result[nr, nc] == 0 and d < dist[nr, nc]:
+                            result[nr, nc] = color
+                            dist[nr, nc] = d
+                        elif result[nr, nc] != 0:
+                            break  # stop at existing pixels
+                        d += 1
+                        nr += dr
+                        nc += dc
+    return from_np(result)
+
+
+def keep_minority_color_only(grid: Grid) -> Grid:
+    """Keep only objects of the least common non-zero color, zero rest."""
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    h, w = len(grid), len(grid[0])
+    color_counts = Counter(grid[r][c] for r in range(h) for c in range(w) if grid[r][c] != 0)
+    if not color_counts:
+        return [row[:] for row in grid]
+    minority_color = color_counts.most_common()[-1][0]
+    return [[grid[r][c] if grid[r][c] == minority_color else 0
+             for c in range(w)] for r in range(h)]
+
+
+def keep_majority_color_only(grid: Grid) -> Grid:
+    """Keep only objects of the most common non-zero color, zero rest."""
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    h, w = len(grid), len(grid[0])
+    color_counts = Counter(grid[r][c] for r in range(h) for c in range(w) if grid[r][c] != 0)
+    if not color_counts:
+        return [row[:] for row in grid]
+    majority_color = color_counts.most_common(1)[0][0]
+    return [[grid[r][c] if grid[r][c] == majority_color else 0
+             for c in range(w)] for r in range(h)]
+
+
+def gravity_to_nearest_pixel(grid: Grid) -> Grid:
+    """Move each isolated pixel toward its nearest same-color pixel."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = np.zeros_like(arr)
+
+    # Find connected components
+    comps = _find_connected_components(grid)
+    placed = set()
+
+    for comp in comps:
+        pixels = comp["pixels"]
+        color = comp["color"]
+        if len(pixels) > 1:
+            # Keep multi-pixel objects in place
+            for r, c in pixels:
+                result[r, c] = color
+                placed.add((r, c))
+        else:
+            # Single pixel: find nearest same-color component
+            r0, c0 = next(iter(pixels))
+            best_dist = float("inf")
+            best_target = (r0, c0)
+            for other in comps:
+                if other is comp or other["color"] != color:
+                    continue
+                for r2, c2 in other["pixels"]:
+                    d = abs(r0 - r2) + abs(c0 - c2)
+                    if d < best_dist:
+                        best_dist = d
+                        # Move toward this target
+                        best_target = (r2, c2)
+            if best_dist < float("inf"):
+                # Move one step toward target
+                tr, tc = best_target
+                dr = (1 if tr > r0 else -1 if tr < r0 else 0)
+                dc = (1 if tc > c0 else -1 if tc < c0 else 0)
+                nr, nc = r0 + dr, c0 + dc
+                if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in placed:
+                    result[nr, nc] = color
+                    placed.add((nr, nc))
+                else:
+                    result[r0, c0] = color
+                    placed.add((r0, c0))
+            else:
+                result[r0, c0] = color
+                placed.add((r0, c0))
+    return from_np(result)
+
+
+def recolor_by_enclosed_count(grid: Grid) -> Grid:
+    """Recolor each object based on how many cells it encloses.
+
+    Objects enclosing 0 cells get recolored to color 2, those enclosing
+    nonzero cells keep their color. Useful for classification tasks.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    comps = _find_connected_components(grid)
+    result = [row[:] for row in grid]
+
+    for comp in comps:
+        pixels = set(comp["pixels"])
+        if len(pixels) < 4:
+            continue
+        # Find bounding box
+        rs = [r for r, c in pixels]
+        cs = [c for r, c in pixels]
+        r0, r1, c0, c1 = min(rs), max(rs), min(cs), max(cs)
+        # Count enclosed zeros (zeros inside bbox not reachable from outside)
+        bbox_zeros = []
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                if grid[r][c] == 0 and (r, c) not in pixels:
+                    bbox_zeros.append((r, c))
+        if bbox_zeros:
+            # This object encloses some zeros - recolor to 2
+            for r, c in comp["pixels"]:
+                result[r][c] = 2
+    return result
+
+
+def shift_nonzero_to_gravity_center(grid: Grid) -> Grid:
+    """Move all non-zero pixels 1 step toward the grid center."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    cr, cc = h / 2, w / 2
+    result = [[0] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                dr = (1 if r < cr - 0.5 else -1 if r > cr + 0.5 else 0)
+                dc = (1 if c < cc - 0.5 else -1 if c > cc + 0.5 else 0)
+                nr, nc = r + dr, c + dc
+                nr = max(0, min(h - 1, nr))
+                nc = max(0, min(w - 1, nc))
+                if result[nr][nc] == 0:
+                    result[nr][nc] = grid[r][c]
+                else:
+                    result[r][c] = grid[r][c]  # keep in place if blocked
+    return result
+
+
+def fill_zero_regions_with_neighbor_color(grid: Grid) -> Grid:
+    """Fill each enclosed 0-region with the color that borders it most."""
+    if not grid or not grid[0]:
+        return grid
+    from collections import deque, Counter
+    h, w = len(grid), len(grid[0])
+
+    # Find connected 0-regions
+    visited: set[tuple[int, int]] = set()
+    result = [row[:] for row in grid]
+
+    for sr in range(h):
+        for sc in range(w):
+            if grid[sr][sc] != 0 or (sr, sc) in visited:
+                continue
+            # BFS to find this 0-region
+            region: list[tuple[int, int]] = []
+            border_colors: list[int] = []
+            touches_edge = False
+            queue = deque([(sr, sc)])
+            visited.add((sr, sc))
+            while queue:
+                r, c = queue.popleft()
+                region.append((r, c))
+                if r == 0 or r == h - 1 or c == 0 or c == w - 1:
+                    touches_edge = True
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w:
+                        if grid[nr][nc] == 0 and (nr, nc) not in visited:
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                        elif grid[nr][nc] != 0:
+                            border_colors.append(grid[nr][nc])
+
+            # Only fill enclosed regions (not touching edge)
+            if not touches_edge and border_colors:
+                fill_c = Counter(border_colors).most_common(1)[0][0]
+                for r, c in region:
+                    result[r][c] = fill_c
+    return result
+
+
+# =============================================================================
 # Build the ARC primitive registry
 # =============================================================================
 
@@ -4599,6 +5144,20 @@ def _build_arc_primitives() -> list[Primitive]:
         ("fill_between_v",          fill_between_objects_v),
         ("fill_bbox_objs",          fill_bbox_per_object),
         ("rect_around_objs",        draw_rect_around_objects),
+        # --- Batch 5: targeted near-miss improvements ---
+        ("complete_sym_180",        complete_sym_180),
+        ("remove_small_2",          remove_small_components),
+        ("remove_small_3",          remove_components_lte3),
+        ("keep_solid_rect",         keep_solid_rectangle),
+        ("propagate_subcells",      propagate_in_subcells),
+        ("mark_inters_excl_axis",   mark_intersections_exclude_axis),
+        ("flood_fill_accent",       flood_fill_enclosed_with_accent),
+        ("draw_diag_nearest",       draw_diagonal_nearest),
+        ("keep_minority_c",         keep_minority_color_only),
+        ("keep_majority_c",         keep_majority_color_only),
+        ("gravity_nearest",         gravity_to_nearest_pixel),
+        ("shift_to_center",         shift_nonzero_to_gravity_center),
+        ("fill_enclosed_neighbor",  fill_zero_regions_with_neighbor_color),
     ]
 
     for name, fn in unary_ops:

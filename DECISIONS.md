@@ -664,4 +664,28 @@ Net +7 train tasks (+8 new, -1 regression). The 8 newly solved tasks:
 
 ---
 
+### Decision 30: Fix pool selection to guarantee essential concepts (Session 5)
+
+**Date:** 2026-03-11
+**Context:** Investigating why near-miss tasks weren't being solved despite having relevant essential concepts like `fill_enclosed`, `crop_to_nonzero`, `complete_diag` in the grammar.
+
+**Problem:** The pair/triple pool building in `_exhaustive_enumerate()` filled all slots with top-scoring singles first, then added essentials only if room remained. With 324 primitives, top-scoring singles always filled all 40 pair slots and 15 triple slots, leaving **zero room for essential concepts**. Essentials — structural building blocks that score poorly alone but are critical in compositions — were never explored in depth-2 or depth-3 programs.
+
+**Fix:** Changed pool building to add essential concepts first (up to half the pool), then fill remaining slots with top-scoring singles. This guarantees essentials are always explored while keeping the total pool size (and compute cost) unchanged.
+
+**Result:** Quick mode went from 11/50 (22%) to 13/50 (26%). Task 23581191 (previously a near-miss at err=0.065) now solved by `dom_touch_accent_2(draw_cross)` — a composition only possible because `draw_cross` was now included in the pair pool as an essential concept.
+
+---
+
+### Decision 31: Add mark_intersections_exclude_axis primitive (Session 5)
+
+**Date:** 2026-03-11
+**Context:** Near-miss analysis showed task 2281f1f4 was 1 pixel off with `mark_intersections_2`. The error was always at the crossing point of the two perpendicular marker axes.
+
+**Solution:** Created `mark_inters_excl_axis` that identifies header rows and side columns separately, fills their cross-product intersections, but excludes the cell where the axes themselves cross.
+
+**Result:** 0 errors on all 3 training examples AND the test example. Confirmed +1 solve.
+
+---
+
 *This document will be updated with each new session and major decision.*
