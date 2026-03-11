@@ -1240,16 +1240,25 @@ class Learner:
             return scored, n_evals
 
         # --- Build pair pool: top-K singles + essential concepts ---
-        # Reserve half the slots for top-scoring singles, half for essentials.
-        # This prevents essential concepts from bloating the pool (29 essentials
-        # were adding on top of pair_top_k, giving pool sizes of 50-69 → K²
-        # blowup). Now total pool is capped at pair_top_k.
+        # Always include essentials (structural building blocks that score
+        # poorly alone but are critical in compositions). Fill remaining
+        # slots with top-scoring singles. Total pool = pair_top_k, with
+        # essentials guaranteed inclusion (up to half the slots).
         depth1_ranked = sorted(scored, key=lambda s: s.prediction_error)
         essential_names = self.grammar.essential_pair_concepts()
 
-        # Phase 1: fill with top-scoring singles (up to pair_top_k)
+        # Phase 1: add essential concepts first (guaranteed inclusion)
         seen_names: set[str] = set()
         pair_pool: list[str] = []
+        essential_cap = pair_top_k // 2  # max half the pool for essentials
+        for name in essential_names:
+            if len(pair_pool) >= essential_cap:
+                break
+            if name in prim_by_name:
+                pair_pool.append(name)
+                seen_names.add(name)
+
+        # Phase 2: fill remaining slots with top-scoring singles
         for sp in depth1_ranked:
             name = sp.program.root
             if name not in seen_names:
@@ -1257,14 +1266,6 @@ class Learner:
                 seen_names.add(name)
             if len(pair_pool) >= pair_top_k:
                 break
-
-        # Phase 2: add essential concepts, but cap total at pair_top_k
-        for name in essential_names:
-            if len(pair_pool) >= pair_top_k:
-                break
-            if name not in seen_names and name in prim_by_name:
-                pair_pool.append(name)
-                seen_names.add(name)
 
         # --- Depth 2: exhaustive K² pairs ---
         for outer_name in pair_pool:
@@ -1280,12 +1281,19 @@ class Learner:
         if max_depth < 3:
             return scored, n_evals
 
-        # --- Build triple pool: top-K singles + essential (smaller K) ---
-        # CRITICAL: cap total pool at triple_top_k. Previously essentials
-        # were added on top (15 + 29 = 44 entries → 44³ = 85K evals!).
-        # Now total pool is hard-capped, so cost stays at K³ ≈ 3.4K evals.
+        # --- Build triple pool: essentials first, then top-K singles ---
+        # Same strategy as pairs: guarantee essential concepts get included.
+        # Total pool is hard-capped at triple_top_k (cost = K³).
         triple_seen: set[str] = set()
         triple_pool: list[str] = []
+        triple_essential_cap = triple_top_k // 2
+        for name in essential_names:
+            if len(triple_pool) >= triple_essential_cap:
+                break
+            if name in prim_by_name:
+                triple_pool.append(name)
+                triple_seen.add(name)
+
         for sp in depth1_ranked:
             name = sp.program.root
             if name not in triple_seen:
@@ -1293,13 +1301,6 @@ class Learner:
                 triple_seen.add(name)
             if len(triple_pool) >= triple_top_k:
                 break
-
-        for name in essential_names:
-            if len(triple_pool) >= triple_top_k:
-                break
-            if name not in triple_seen and name in prim_by_name:
-                triple_pool.append(name)
-                triple_seen.add(name)
 
         # --- Depth 3: exhaustive K³ triples ---
         for a in triple_pool:

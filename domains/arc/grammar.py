@@ -58,6 +58,10 @@ _ARC_ESSENTIAL_PAIR_CONCEPTS: frozenset = frozenset([
     "connect_v",
     "surround_3x3",
     "fill_convex_hull",
+    # Batch 5 additions
+    "draw_diag_nearest",
+    "flood_fill_accent",
+    "fill_enclosed_neighbor",
 ])
 
 
