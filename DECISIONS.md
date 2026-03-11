@@ -552,6 +552,100 @@ agi-mvp-general uses targeted numpy (scoring) and numba @njit (flood fill). Our 
 
 Running 400-task quick benchmark with all optimizations, shuffled order, 4 workers.
 
+## Session 9 — Performance Fixes & Compute Budget (March 2026)
+
+### Triple pool bloat fix — root cause of slowness
+
+**Context:** Quick mode became very slow after porting 281 primitives + 29 essential pair concepts.
+**Root cause:** `_exhaustive_enumerate` depth-3 triple pool was built as `top_k (15) + ALL essential concepts (29)`, giving pool sizes of 30-44 entries. Cost: K³ = 27,000-85,000 evals per task just for triple enumeration!
+**Fix:** Cap triple pool at `triple_top_k` total entries. Essentials compete for slots instead of being added on top. Same fix applied to pair pool.
+**Result:** Triple cost drops from ~27K-85K to ~3,375 evals (15³). 50-task benchmark: median 3.84s/task, down from 15-30s/task.
+
+### Cell-normalized per-task compute budget
+
+**Context:** `--compute-cap` flag was reducing max_generations globally, treating all tasks equally regardless of grid size. agi-mvp-general uses cell-normalized budgets.
+**Decision:** Adopt agi-mvp-general's formula: `min(max(cap/cells, 500), cap/DEFAULT_CELLS)` where DEFAULT_CELLS=800 (median ARC grid size). Small grids get more evals (cheap), large grids get fewer. Budget enforced per-task via `_budget_ok()` gating on expensive phases (near-miss, beam search).
+**Result:** `eval_budget` field added to `SearchConfig`, phases gated with `_budget_ok()`.
+
+### Ctrl-C worker cleanup
+
+**Context:** User reported ^C doesn't kill the job completely — CPU stays high.
+**Root cause:** `ProcessPoolExecutor.shutdown(wait=False, cancel_futures=True)` only cancels pending futures; running workers continue as orphan processes.
+**Fix:** On KeyboardInterrupt, explicitly `os.kill(pid, SIGTERM)` all worker processes before calling `shutdown()`.
+
+### Semantic dedup was broken for grids
+
+**Context:** `_semantic_hash` used `round(float(val), precision)` on grid outputs (list of lists), which throws TypeError. Every program hashed to `str([None, None, None])`, so dedup kept only ONE program per generation — beam_width was effectively 1.
+**Fix:** Handle grid outputs via tuple conversion: `tuple(tuple(row) for row in val)`. Numeric outputs still use float rounding.
+**Impact:** Beam search can now maintain actual diversity. This should improve solve rate on tasks where beam search matters (harder tasks that enumeration doesn't catch).
+
+### Benchmark results after fixes
+
+Quick preset, 281 primitives, 2 workers, shuffled order:
+- **84/400 = 21.0% train accuracy** (up from 13% with 101 prims in Session 7)
+- Median task time: 2.3s (~7x faster than before pool cap fix)
+- Total wall time: ~19 minutes (1,140s sum of task times)
+- Total evaluations: 2,290,000+ across all tasks
+
+Comparison across sessions:
+| Session | Primitives | Preset  | Train acc | Median/task | Notes |
+|---------|-----------|---------|-----------|-------------|-------|
+| 7       | 101       | quick   | 52/400 = 13.0% | 2.30s | Baseline |
+| 8       | 281       | default | 18/400 = 4.5%  | 15-30s | Regression (bloated pool) |
+| 9a      | 281       | quick   | 84/400 = 21.0% | 2.3s  | Pool fix, broken dedup |
+| 9b      | 281       | quick   | 86/400 = 21.5% | 2.8s  | Pool fix + dedup fix + reduced beam |
+
+The 281 primitives now help (21.5% vs 13%) instead of hurting (4.5%). Semantic dedup fix adds 2 more solves with ~0.5s/task overhead. Presets reduced (beam 80→30, gens 40→15) to compensate for proper beam diversity.
+
+**Key insight:** Beam search contributes minimally to solve rate (~2 tasks out of 86). The exhaustive enumeration (depth 1-3) does the heavy lifting. This suggests future work should focus on better enumeration (richer primitives, smarter pool selection) rather than deeper beam search.
+
+## Session 10 — Batch 4 Primitives: Grid Partition, Annotation, Scaling
+
+### Analysis of Unsolved Tasks
+
+Systematic analysis of 314 unsolved tasks from session 9 revealed:
+
+| Pattern | Count | Description |
+|---------|-------|-------------|
+| Object annotation | 96 | Modify pixels around/between objects |
+| Grid-partitioned | 51 | Input split by separator lines into regions |
+| Same-size small diff | 99 | Few cells changed (filling, recoloring) |
+| Subgrid selection | 26 | Extract one subgrid from structured input |
+| Scaling | 27 | Up/downscale by various factors |
+| Recoloring only | 29 | Same positions, different colors |
+
+Most unsolved tasks (210/314) have same-size input/output. The dominant change type is filling background cells (138 tasks).
+
+### New Primitives Added (302 total, up from 281)
+
+**Grid partition (7):** `select_odd_cell`, `overlay_cells`, `majority_cells`, `xor_cells`, `most_colorful_cell`, `most_filled_cell`, `least_filled_cell`. Also improved separator detection to handle zero-valued grid lines (many ARC tasks use bg=0 as separator).
+
+**Pixel annotation (5):** `surround_3x3`, `draw_cross`, `draw_cross_contact`, `draw_diag`, `fill_convex_hull`.
+
+**Line connection (2):** `connect_h`, `connect_v`.
+
+**Scaling (7):** `scale_4x`, `scale_5x`, `downscale_4x`, `downscale_5x`, `downscale_7x`, `downscale_maj_2x`, `downscale_maj_3x`.
+
+**Other (1):** `recolor_objects_by_neighbor_count`.
+
+### Benchmark Results
+
+| Session | Primitives | Train acc | Eval acc | Median/task | Notes |
+|---------|-----------|-----------|----------|-------------|-------|
+| 9b | 281 | 86/400 = 21.5% | 7/122 = 5.7% | 2.8s | Baseline |
+| 10 | 302 | 93/400 = 23.2% | 33/400 = 8.2% | 6.4s | +21 new prims |
+
+Net +7 train tasks (+8 new, -1 regression). The 8 newly solved tasks:
+- `select_odd_cell`: directly solved 2 partition tasks
+- `downscale_7x`: solved 1 task
+- `connect_h(connect_v)`: composition solved 1 task
+- `binarize(surround_3x3)`: composition solved 1 task
+- `downscale_4x(keep_smallest_only)`, `crop_nonzero(select_odd_cell(left_half))`: deeper compositions solved 2 tasks
+
+**Speed tradeoff:** Median time doubled (2.8s → 6.4s) due to 302 primitives in exhaustive search. The depth-2 search space grew from 281² ≈ 79K to 302² ≈ 91K programs per task.
+
+**Eval improvement:** From 5.7% to 8.2% on the evaluation set (400 tasks with culture transfer).
+
 ---
 
 *This document will be updated with each new session and major decision.*

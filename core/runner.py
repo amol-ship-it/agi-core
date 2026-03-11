@@ -42,20 +42,20 @@ from .metrics import extract_metrics, print_compounding_table, save_metrics_json
 PRESETS = {
     "quick": {
         "rounds": 1,
-        "beam_width": 80,
-        "max_generations": 40,
+        "beam_width": 30,
+        "max_generations": 15,
         "max_tasks": 0,
     },
     "default": {
         "rounds": 1,
-        "beam_width": 150,
-        "max_generations": 80,
+        "beam_width": 80,
+        "max_generations": 40,
         "max_tasks": 0,
     },
     "contest": {
         "rounds": 1,
-        "beam_width": 500,
-        "max_generations": 200,
+        "beam_width": 250,
+        "max_generations": 100,
         "max_tasks": 0,
     },
 }
@@ -532,7 +532,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
           f"({machine.get('chip', machine['arch'])})")
     print(f"  Seed:       {cfg.seed}")
     if compute_cap > 0:
-        print(f"  Compute cap: {compute_cap:,} total evals")
+        print(f"  Compute cap: {compute_cap:,} ops (cell-normalized)")
     else:
         print(f"  Compute cap: unlimited")
 
@@ -558,13 +558,21 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     evals_per_task = beam_width * max_gens
     total_budget = evals_per_task * len(tasks) * rounds
 
-    if compute_cap > 0 and total_budget > compute_cap:
-        capped_gens = max(1, compute_cap // (beam_width * len(tasks) * rounds))
-        print(f"\n  Compute cap active: reducing gens {max_gens} → {capped_gens} "
-              f"(budget {total_budget:,} → {beam_width * capped_gens * len(tasks) * rounds:,})")
-        max_gens = capped_gens
-        evals_per_task = beam_width * max_gens
-        total_budget = evals_per_task * len(tasks) * rounds
+    # Cell-normalized compute cap (from agi-mvp-general).
+    # Instead of globally reducing max_gens, compute a per-task eval budget
+    # proportional to grid size. Small grids get more evals (they're cheap),
+    # large grids get fewer. Budget is enforced per-task in wake_on_task.
+    #
+    # Formula: min(max(compute_cap / avg_cells, 500), compute_cap / DEFAULT_CELLS)
+    #   DEFAULT_CELLS = 800 (median ARC grid size)
+    #   Floor of 500 evals ensures even huge grids get basic search.
+    eval_budget = 0  # 0 = unlimited (passed per-task via SearchConfig)
+    DEFAULT_CELLS = 800
+    if compute_cap > 0:
+        # Per-task budget uses median grid size as baseline
+        max_evals = max(compute_cap // DEFAULT_CELLS, 500)
+        eval_budget = max_evals  # default for tasks without grid info
+        print(f"\n  Compute cap: {compute_cap:,} ops → ~{max_evals:,} evals/task (cell-normalized)")
 
     # Load culture file if specified (cross-run knowledge transfer)
     if cfg.culture_path and os.path.isfile(cfg.culture_path):
@@ -589,6 +597,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             exhaustive_depth=cfg.exhaustive_depth,
             exhaustive_pair_top_k=cfg.exhaustive_pair_top_k,
             exhaustive_triple_top_k=cfg.exhaustive_triple_top_k,
+            eval_budget=eval_budget,
         ),
         sleep_config=SleepConfig(
             min_occurrences=cfg.min_occurrences,
@@ -696,6 +705,42 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             print(f"    {icon} {r['task_id']}  {r['wall_time']:.1f}s  "
                   f"evals={r['evaluations']:,}  E={r['energy']}")
 
+    # --- Solved tasks summary (for verification) ---
+    solved_records = [r for r in tracker.all_records if r["solved"]]
+    if solved_records:
+        print()
+        hline("─")
+        print(f"  SOLVED TASKS ({len(solved_records)} total)")
+        hline("─")
+        for r in sorted(solved_records, key=lambda r: r["task_id"]):
+            test_tag = ""
+            if r.get("test_solved") is True:
+                test_tag = " [test:✓]"
+            elif r.get("test_solved") is False:
+                test_tag = f" [test:✗ err={r.get('test_error', '?')}]"
+            print(f"    ✓ {r['task_id']:<24s} program: {r['program']}{test_tag}")
+
+    # --- Near misses (for debugging unsolved tasks) ---
+    near_misses = [r for r in tracker.all_records
+                   if not r["solved"] and r.get("prediction_error") is not None
+                   and r["prediction_error"] < 0.1]
+    if near_misses:
+        near_misses.sort(key=lambda r: r["prediction_error"])
+        print()
+        hline("─")
+        print(f"  NEAR MISSES ({len(near_misses)} tasks with error < 0.1)")
+        hline("─")
+        for r in near_misses[:20]:
+            test_tag = ""
+            if r.get("test_solved") is True:
+                test_tag = " [test:✓]"
+            elif r.get("test_solved") is False:
+                test_tag = " [test:✗]"
+            print(f"    ✗ {r['task_id']:<24s} err={r['prediction_error']:.4f}  "
+                  f"program: {r['program']}{test_tag}")
+        if len(near_misses) > 20:
+            print(f"    ... and {len(near_misses) - 20} more")
+
     # --- Save artifacts ---
     results_data = {
         "meta": {
@@ -749,6 +794,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             r["task_id"]: {
                 "round": r["round"],
                 "solved": r["solved"],
+                "test_solved": r.get("test_solved"),
+                "test_error": r.get("test_error"),
                 "energy": r["energy"],
                 "prediction_error": r["prediction_error"],
                 "generations": r["generations"],

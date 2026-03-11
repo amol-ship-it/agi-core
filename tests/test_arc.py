@@ -46,6 +46,11 @@ from domains.arc.primitives import (
     overlay_split_halves_h, overlay_split_halves_v,
     erode, spread_colors,
     rotate_colors_up, rotate_colors_down,
+    select_odd_one_out, overlay_grid_cells, majority_vote_cells,
+    surround_pixels_3x3, draw_cross_from_pixels, draw_cross_to_contact,
+    connect_same_color_h, connect_same_color_v,
+    scale_4x, scale_5x, downscale_4x, downscale_5x,
+    _detect_any_separator_lines, _split_grid_cells,
 )
 
 
@@ -995,6 +1000,150 @@ class TestARCFullLoop(unittest.TestCase):
         )
         self.assertEqual(len(results), 1)
         self.assertGreater(results[0].tasks_solved, 0)
+
+
+class TestBatch4Primitives(unittest.TestCase):
+    """Test batch 4: grid partition, annotation, and scaling primitives."""
+
+    def test_detect_zero_separator(self):
+        grid = [
+            [1, 1, 0, 2, 2],
+            [1, 1, 0, 2, 2],
+            [0, 0, 0, 0, 0],
+            [3, 3, 0, 4, 4],
+            [3, 3, 0, 4, 4],
+        ]
+        h_lines, v_lines = _detect_any_separator_lines(grid)
+        self.assertIn(2, h_lines)
+        self.assertIn(2, v_lines)
+
+    def test_split_grid_cells_2d(self):
+        grid = [
+            [1, 1, 5, 2, 2],
+            [1, 1, 5, 2, 2],
+            [5, 5, 5, 5, 5],
+            [3, 3, 5, 4, 4],
+            [3, 3, 5, 4, 4],
+        ]
+        cells = _split_grid_cells(grid)
+        self.assertEqual(len(cells), 4)
+        self.assertEqual(cells[0], [[1, 1], [1, 1]])
+        self.assertEqual(cells[1], [[2, 2], [2, 2]])
+
+    def test_select_odd_one_out(self):
+        # 3x3 grid with separator, one quadrant different
+        grid = [
+            [1, 1, 5, 1, 1],
+            [1, 1, 5, 1, 1],
+            [5, 5, 5, 5, 5],
+            [1, 1, 5, 2, 2],
+            [1, 1, 5, 2, 2],
+        ]
+        result = select_odd_one_out(grid)
+        self.assertEqual(result, [[2, 2], [2, 2]])
+
+    def test_overlay_grid_cells(self):
+        grid = [
+            [0, 1, 5, 0, 0],
+            [0, 0, 5, 0, 0],
+            [5, 5, 5, 5, 5],
+            [0, 0, 5, 3, 0],
+            [0, 0, 5, 0, 0],
+        ]
+        result = overlay_grid_cells(grid)
+        self.assertEqual(result, [[3, 1], [0, 0]])  # later cells overwrite earlier
+
+    def test_majority_vote_cells(self):
+        grid = [
+            [1, 0, 5, 1, 0],
+            [0, 2, 5, 0, 2],
+            [5, 5, 5, 5, 5],
+            [1, 0, 5, 1, 0],
+            [0, 2, 5, 0, 3],
+        ]
+        result = majority_vote_cells(grid)
+        self.assertEqual(result, [[1, 0], [0, 2]])
+
+    def test_surround_pixels_3x3(self):
+        grid = [
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+        ]
+        result = surround_pixels_3x3(grid)
+        # Center pixel should be surrounded by ring_color=2
+        self.assertEqual(result[2][2], 1)  # original
+        self.assertEqual(result[1][1], 2)  # ring
+        self.assertEqual(result[1][2], 2)
+        self.assertEqual(result[1][3], 2)
+        self.assertEqual(result[3][1], 2)
+
+    def test_draw_cross(self):
+        grid = [
+            [0, 0, 0],
+            [0, 3, 0],
+            [0, 0, 0],
+        ]
+        result = draw_cross_from_pixels(grid)
+        self.assertEqual(result[0][1], 3)  # up
+        self.assertEqual(result[2][1], 3)  # down
+        self.assertEqual(result[1][0], 3)  # left
+        self.assertEqual(result[1][2], 3)  # right
+        self.assertEqual(result[0][0], 0)  # diagonal stays 0
+
+    def test_draw_cross_to_contact(self):
+        grid = [
+            [0, 0, 0, 0, 0],
+            [0, 2, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 3, 0],
+            [0, 0, 0, 0, 0],
+        ]
+        result = draw_cross_to_contact(grid)
+        self.assertEqual(result[0][1], 2)  # up from (1,1)
+        self.assertEqual(result[1][0], 2)  # left from (1,1)
+        self.assertEqual(result[2][1], 2)  # down from (1,1) stops before hitting nothing
+
+    def test_connect_same_color_h(self):
+        grid = [
+            [3, 0, 0, 0, 3],
+            [0, 0, 0, 0, 0],
+        ]
+        result = connect_same_color_h(grid)
+        self.assertEqual(result[0], [3, 3, 3, 3, 3])
+        self.assertEqual(result[1], [0, 0, 0, 0, 0])
+
+    def test_connect_same_color_v(self):
+        grid = [
+            [2, 0],
+            [0, 0],
+            [0, 0],
+            [2, 0],
+        ]
+        result = connect_same_color_v(grid)
+        expected = [
+            [2, 0],
+            [2, 0],
+            [2, 0],
+            [2, 0],
+        ]
+        self.assertEqual(result, expected)
+
+    def test_scale_4x(self):
+        grid = [[1, 2], [3, 4]]
+        result = scale_4x(grid)
+        self.assertEqual(len(result), 8)
+        self.assertEqual(len(result[0]), 8)
+        self.assertEqual(result[0][0], 1)
+        self.assertEqual(result[0][4], 2)
+
+    def test_downscale_4x(self):
+        # 4x4 grid where each 4x4 block has a dominant color
+        grid = [[1]*4 + [2]*4 for _ in range(4)] + [[3]*4 + [4]*4 for _ in range(4)]
+        result = downscale_4x(grid)
+        self.assertEqual(result, [[1, 2], [3, 4]])
 
 
 if __name__ == "__main__":

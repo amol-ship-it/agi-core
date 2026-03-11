@@ -3691,6 +3691,688 @@ def extend_nonzero_fill_col(grid: Grid) -> Grid:
 
 
 # =============================================================================
+# Batch 4: Grid partition, annotation, and scaling primitives
+# =============================================================================
+
+import functools
+
+@functools.lru_cache(maxsize=64)
+def _detect_any_separator_lines_cached(grid_key: tuple) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Cached separator line detection. Takes hashable grid tuple."""
+    h = len(grid_key)
+    w = len(grid_key[0]) if h > 0 else 0
+    h_lines: list[int] = []
+    v_lines: list[int] = []
+
+    # First try non-zero separators (standard)
+    for r in range(h):
+        row = grid_key[r]
+        vals = set(row)
+        if len(vals) == 1 and 0 not in vals:
+            h_lines.append(r)
+
+    for c in range(w):
+        col = tuple(grid_key[r][c] for r in range(h))
+        vals = set(col)
+        if len(vals) == 1 and 0 not in vals:
+            v_lines.append(c)
+
+    if h_lines or v_lines:
+        return tuple(h_lines), tuple(v_lines)
+
+    # Fall back: try zero-valued separators
+    for r in range(h):
+        if all(v == 0 for v in grid_key[r]):
+            has_above = r > 0 and any(v != 0 for rr in range(r) for v in grid_key[rr])
+            has_below = r < h - 1 and any(v != 0 for rr in range(r+1, h) for v in grid_key[rr])
+            if has_above and has_below:
+                h_lines.append(r)
+
+    for c in range(w):
+        col = [grid_key[r][c] for r in range(h)]
+        if all(v == 0 for v in col):
+            has_left = c > 0 and any(grid_key[r][cc] != 0 for r in range(h) for cc in range(c))
+            has_right = c < w - 1 and any(grid_key[r][cc] != 0 for r in range(h) for cc in range(c+1, w))
+            if has_left and has_right:
+                v_lines.append(c)
+
+    return tuple(h_lines), tuple(v_lines)
+
+
+def _detect_any_separator_lines(grid: Grid) -> tuple[list[int], list[int]]:
+    """Detect separator lines including zero-valued (background) separators."""
+    grid_key = tuple(tuple(row) for row in grid)
+    h_lines, v_lines = _detect_any_separator_lines_cached(grid_key)
+    return list(h_lines), list(v_lines)
+
+
+@functools.lru_cache(maxsize=64)
+def _split_grid_cells_cached(grid_key: tuple) -> tuple:
+    """Cached grid cell splitting. Returns tuple of cell tuples."""
+    grid = [list(row) for row in grid_key]
+    cells = _split_grid_cells_impl(grid)
+    return tuple(tuple(tuple(row) for row in cell) for cell in cells)
+
+
+def _split_grid_cells(grid: Grid) -> list[Grid]:
+    """Split grid into cells (cached)."""
+    grid_key = tuple(tuple(row) for row in grid)
+    cached = _split_grid_cells_cached(grid_key)
+    return [[list(row) for row in cell] for cell in cached]
+
+
+def _split_grid_cells_impl(grid: Grid) -> list[Grid]:
+    """Split grid into cells using both horizontal and vertical separator lines.
+
+    Returns list of sub-grids (cells) extracted from the partition.
+    Falls back to equal division if no separators found.
+    """
+    arr = to_np(grid)
+    h, w = arr.shape
+
+    h_lines, v_lines = _detect_any_separator_lines(grid)
+
+    # Build row boundaries
+    if h_lines:
+        row_bounds = []
+        prev = 0
+        for rl in h_lines:
+            if rl > prev:
+                row_bounds.append((prev, rl))
+            prev = rl + 1
+        if prev < h:
+            row_bounds.append((prev, h))
+    else:
+        # Try equal division
+        for n in [2, 3, 4, 5]:
+            if h % n == 0:
+                bh = h // n
+                row_bounds = [(i * bh, (i + 1) * bh) for i in range(n)]
+                break
+        else:
+            row_bounds = [(0, h)]
+
+    # Build col boundaries
+    if v_lines:
+        col_bounds = []
+        prev = 0
+        for cl in v_lines:
+            if cl > prev:
+                col_bounds.append((prev, cl))
+            prev = cl + 1
+        if prev < w:
+            col_bounds.append((prev, w))
+    else:
+        for n in [2, 3, 4, 5]:
+            if w % n == 0:
+                bw = w // n
+                col_bounds = [(i * bw, (i + 1) * bw) for i in range(n)]
+                break
+        else:
+            col_bounds = [(0, w)]
+
+    cells = []
+    for r_start, r_end in row_bounds:
+        for c_start, c_end in col_bounds:
+            cell = arr[r_start:r_end, c_start:c_end]
+            if cell.size > 0:
+                cells.append(from_np(cell))
+    return cells
+
+
+def select_odd_one_out(grid: Grid) -> Grid:
+    """Split grid by separators, return the cell that differs from the majority."""
+    cells = _split_grid_cells(grid)
+    if len(cells) < 2:
+        return [row[:] for row in grid]
+
+    # Convert to hashable tuples for comparison
+    cell_tuples = [tuple(tuple(r) for r in c) for c in cells]
+    counts: dict = {}
+    for ct in cell_tuples:
+        counts[ct] = counts.get(ct, 0) + 1
+
+    if len(counts) == 1:
+        return [row[:] for row in grid]
+
+    # Return least common cell
+    least = min(counts, key=lambda k: counts[k])
+    return [list(r) for r in least]
+
+
+def overlay_grid_cells(grid: Grid) -> Grid:
+    """Split grid by separators, overlay all cells (non-zero takes priority)."""
+    cells = _split_grid_cells(grid)
+    if len(cells) < 2:
+        return [row[:] for row in grid]
+
+    # All cells must be same shape
+    shapes = set((len(c), len(c[0])) for c in cells)
+    if len(shapes) != 1:
+        return cells[0] if cells else [row[:] for row in grid]
+
+    ch, cw = shapes.pop()
+    result = np.zeros((ch, cw), dtype=np.int32)
+    for cell in cells:
+        a = to_np(cell)
+        mask = a != 0
+        result[mask] = a[mask]
+    return from_np(result)
+
+
+def majority_vote_cells(grid: Grid) -> Grid:
+    """Split grid by separators, take majority vote per pixel across cells."""
+    cells = _split_grid_cells(grid)
+    if len(cells) < 2:
+        return [row[:] for row in grid]
+
+    shapes = set((len(c), len(c[0])) for c in cells)
+    if len(shapes) != 1:
+        return cells[0] if cells else [row[:] for row in grid]
+
+    ch, cw = shapes.pop()
+    result = np.zeros((ch, cw), dtype=np.int32)
+    stack = np.stack([to_np(c) for c in cells], axis=0)
+
+    for r in range(ch):
+        for c in range(cw):
+            vals = stack[:, r, c]
+            nonzero = [int(v) for v in vals if v != 0]
+            if nonzero:
+                result[r, c] = max(set(nonzero), key=nonzero.count)
+    return from_np(result)
+
+
+def xor_grid_cells(grid: Grid) -> Grid:
+    """Split grid by separators, XOR cells: keep pixels that differ from majority."""
+    cells = _split_grid_cells(grid)
+    if len(cells) < 2:
+        return [row[:] for row in grid]
+
+    shapes = set((len(c), len(c[0])) for c in cells)
+    if len(shapes) != 1:
+        return cells[0] if cells else [row[:] for row in grid]
+
+    ch, cw = shapes.pop()
+    majority = np.zeros((ch, cw), dtype=np.int32)
+    stack = np.stack([to_np(c) for c in cells], axis=0)
+
+    for r in range(ch):
+        for c in range(cw):
+            vals = stack[:, r, c]
+            nonzero = [int(v) for v in vals if v != 0]
+            if nonzero:
+                majority[r, c] = max(set(nonzero), key=nonzero.count)
+
+    # For the odd-one-out cell, show where it differs
+    cell_tuples = [tuple(tuple(r) for r in c) for c in cells]
+    counts: dict = {}
+    for ct in cell_tuples:
+        counts[ct] = counts.get(ct, 0) + 1
+
+    if len(counts) <= 1:
+        return from_np(np.zeros((ch, cw), dtype=np.int32))
+
+    least = min(counts, key=lambda k: counts[k])
+    odd = np.array(least, dtype=np.int32)
+
+    result = np.zeros((ch, cw), dtype=np.int32)
+    diff_mask = odd != majority
+    result[diff_mask] = odd[diff_mask]
+    return from_np(result)
+
+
+def extract_top_left_cell_2d(grid: Grid) -> Grid:
+    """Extract the top-left cell from 2D grid partition (split by both h and v lines)."""
+    cells = _split_grid_cells(grid)
+    return cells[0] if cells else [row[:] for row in grid]
+
+
+def select_most_colorful_cell(grid: Grid) -> Grid:
+    """Split grid by separators, return cell with most distinct non-zero colors."""
+    cells = _split_grid_cells(grid)
+    if not cells:
+        return [row[:] for row in grid]
+
+    best = max(cells, key=lambda c: len(set(v for row in c for v in row if v != 0)))
+    return best
+
+
+def select_most_filled_cell(grid: Grid) -> Grid:
+    """Split grid by separators, return cell with most non-zero pixels."""
+    cells = _split_grid_cells(grid)
+    if not cells:
+        return [row[:] for row in grid]
+
+    best = max(cells, key=lambda c: sum(1 for row in c for v in row if v != 0))
+    return best
+
+
+def select_least_filled_cell(grid: Grid) -> Grid:
+    """Split grid by separators, return cell with fewest non-zero pixels (but > 0)."""
+    cells = _split_grid_cells(grid)
+    if not cells:
+        return [row[:] for row in grid]
+
+    nonempty = [c for c in cells if any(v != 0 for row in c for v in row)]
+    if not nonempty:
+        return cells[0]
+    return min(nonempty, key=lambda c: sum(1 for row in c for v in row if v != 0))
+
+
+# --- Pixel annotation primitives ---
+
+def surround_pixels_3x3(grid: Grid) -> Grid:
+    """Draw a 3x3 ring around each non-zero pixel using the next available color."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+
+    # Find the ring color: most common nonzero, or 1
+    colors = set(arr[arr != 0].tolist())
+    ring_color = max(colors) + 1 if colors else 1
+    if ring_color > 9:
+        ring_color = 1
+
+    nz_positions = list(zip(*np.where(arr != 0)))
+    for r, c in nz_positions:
+        for dr in range(-1, 2):
+            for dc in range(-1, 2):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and result[nr, nc] == 0:
+                    result[nr, nc] = ring_color
+    return from_np(result)
+
+
+def draw_cross_from_pixels(grid: Grid) -> Grid:
+    """From each non-zero pixel, draw cross lines (up/down/left/right) to grid edge."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+
+    nz_positions = list(zip(*np.where(arr != 0)))
+    for r, c in nz_positions:
+        color = arr[r, c]
+        # Extend in 4 cardinal directions
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            while 0 <= nr < h and 0 <= nc < w:
+                if result[nr, nc] == 0:
+                    result[nr, nc] = color
+                nr += dr
+                nc += dc
+    return from_np(result)
+
+
+def draw_cross_to_contact(grid: Grid) -> Grid:
+    """From each non-zero pixel, draw cross lines until hitting another non-zero pixel."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+
+    nz_positions = list(zip(*np.where(arr != 0)))
+    for r, c in nz_positions:
+        color = arr[r, c]
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            while 0 <= nr < h and 0 <= nc < w:
+                if arr[nr, nc] != 0:
+                    break
+                result[nr, nc] = color
+                nr += dr
+                nc += dc
+    return from_np(result)
+
+
+def draw_diagonal_from_pixels(grid: Grid) -> Grid:
+    """From each non-zero pixel, draw diagonal lines to grid edge."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+
+    nz_positions = list(zip(*np.where(arr != 0)))
+    for r, c in nz_positions:
+        color = arr[r, c]
+        for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+            nr, nc = r + dr, c + dc
+            while 0 <= nr < h and 0 <= nc < w:
+                if result[nr, nc] == 0:
+                    result[nr, nc] = color
+                nr += dr
+                nc += dc
+    return from_np(result)
+
+
+def connect_same_color_h(grid: Grid) -> Grid:
+    """Draw horizontal lines between same-colored pixels in each row."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+
+    for r in range(h):
+        # Find colored pixels in this row
+        colored = [(c, arr[r, c]) for c in range(w) if arr[r, c] != 0]
+        for i in range(len(colored)):
+            for j in range(i + 1, len(colored)):
+                if colored[i][1] == colored[j][1]:
+                    c1, c2 = colored[i][0], colored[j][0]
+                    color = colored[i][1]
+                    for c in range(c1 + 1, c2):
+                        if result[r, c] == 0:
+                            result[r, c] = color
+    return from_np(result)
+
+
+def connect_same_color_v(grid: Grid) -> Grid:
+    """Draw vertical lines between same-colored pixels in each column."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+
+    for c in range(w):
+        colored = [(r, arr[r, c]) for r in range(h) if arr[r, c] != 0]
+        for i in range(len(colored)):
+            for j in range(i + 1, len(colored)):
+                if colored[i][1] == colored[j][1]:
+                    r1, r2 = colored[i][0], colored[j][0]
+                    color = colored[i][1]
+                    for r in range(r1 + 1, r2):
+                        if result[r, c] == 0:
+                            result[r, c] = color
+    return from_np(result)
+
+
+# --- Additional scaling primitives ---
+
+def fill_between_objects_h(grid: Grid) -> Grid:
+    """Fill horizontal gaps between same-colored objects in each row."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+    for r in range(h):
+        # Find spans of colored pixels
+        color_ranges: dict[int, list[int]] = {}
+        for c in range(w):
+            v = arr[r, c]
+            if v != 0:
+                if v not in color_ranges:
+                    color_ranges[v] = []
+                color_ranges[v].append(c)
+        # Fill between first and last occurrence of each color
+        for color, cols in color_ranges.items():
+            if len(cols) >= 2:
+                for c in range(min(cols), max(cols) + 1):
+                    if result[r, c] == 0:
+                        result[r, c] = color
+    return from_np(result)
+
+
+def fill_between_objects_v(grid: Grid) -> Grid:
+    """Fill vertical gaps between same-colored objects in each column."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+    for c in range(w):
+        color_ranges: dict[int, list[int]] = {}
+        for r in range(h):
+            v = arr[r, c]
+            if v != 0:
+                if v not in color_ranges:
+                    color_ranges[v] = []
+                color_ranges[v].append(r)
+        for color, rows in color_ranges.items():
+            if len(rows) >= 2:
+                for r in range(min(rows), max(rows) + 1):
+                    if result[r, c] == 0:
+                        result[r, c] = color
+    return from_np(result)
+
+
+def fill_bbox_per_object(grid: Grid) -> Grid:
+    """Fill the bounding box of each object with its color (solid rectangles)."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = np.zeros_like(arr)
+
+    visited = np.zeros((h, w), dtype=bool)
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and not visited[r, c]:
+                color = arr[r, c]
+                # BFS to find component
+                queue = [(r, c)]
+                visited[r, c] = True
+                pixels = []
+                while queue:
+                    cr, cc = queue.pop(0)
+                    pixels.append((cr, cc))
+                    for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                        nr, nc = cr+dr, cc+dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr, nc] and arr[nr, nc] == color:
+                            visited[nr, nc] = True
+                            queue.append((nr, nc))
+                # Fill bounding box
+                min_r = min(p[0] for p in pixels)
+                max_r = max(p[0] for p in pixels)
+                min_c = min(p[1] for p in pixels)
+                max_c = max(p[1] for p in pixels)
+                result[min_r:max_r+1, min_c:max_c+1] = color
+    return from_np(result)
+
+
+def draw_rect_around_objects(grid: Grid) -> Grid:
+    """Draw a rectangle outline around each connected component."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    result = arr.copy()
+
+    visited = np.zeros((h, w), dtype=bool)
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and not visited[r, c]:
+                color = arr[r, c]
+                queue = [(r, c)]
+                visited[r, c] = True
+                pixels = []
+                while queue:
+                    cr, cc = queue.pop(0)
+                    pixels.append((cr, cc))
+                    for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                        nr, nc = cr+dr, cc+dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr, nc] and arr[nr, nc] == color:
+                            visited[nr, nc] = True
+                            queue.append((nr, nc))
+                min_r = min(p[0] for p in pixels)
+                max_r = max(p[0] for p in pixels)
+                min_c = min(p[1] for p in pixels)
+                max_c = max(p[1] for p in pixels)
+                # Draw rectangle outline
+                for rr in range(min_r, max_r + 1):
+                    if rr in (min_r, max_r):
+                        for cc in range(min_c, max_c + 1):
+                            result[rr, cc] = color
+                    else:
+                        result[rr, min_c] = color
+                        result[rr, max_c] = color
+    return from_np(result)
+
+
+def scale_4x(grid: Grid) -> Grid:
+    """Scale grid up by 4x (each pixel becomes 4x4 block)."""
+    arr = to_np(grid)
+    return from_np(np.repeat(np.repeat(arr, 4, axis=0), 4, axis=1))
+
+
+def scale_5x(grid: Grid) -> Grid:
+    """Scale grid up by 5x."""
+    arr = to_np(grid)
+    return from_np(np.repeat(np.repeat(arr, 5, axis=0), 5, axis=1))
+
+
+def _downscale_nx(grid: Grid, n: int) -> Grid:
+    """Generic downscale by n, taking most common non-zero in each nxn block."""
+    a = to_np(grid)
+    h, w = a.shape
+    nh, nw = h // n, w // n
+    if nh == 0 or nw == 0:
+        return grid
+    result = np.zeros((nh, nw), dtype=np.int32)
+    for r in range(nh):
+        for c in range(nw):
+            block = a[r*n:r*n+n, c*n:c*n+n].flatten()
+            nonzero = [v for v in block if v != 0]
+            if nonzero:
+                result[r, c] = max(set(nonzero), key=nonzero.count)
+    return result.tolist()
+
+
+def downscale_4x(grid: Grid) -> Grid:
+    """Downscale by 4x, majority non-zero per block."""
+    return _downscale_nx(grid, 4)
+
+
+def downscale_5x(grid: Grid) -> Grid:
+    """Downscale by 5x, majority non-zero per block."""
+    return _downscale_nx(grid, 5)
+
+
+def downscale_7x(grid: Grid) -> Grid:
+    """Downscale by 7x, majority non-zero per block."""
+    return _downscale_nx(grid, 7)
+
+
+# --- Majority/minority downscale (all values including 0) ---
+
+def downscale_majority_2x(grid: Grid) -> Grid:
+    """Downscale by 2x, taking majority vote including zeros."""
+    a = to_np(grid)
+    h, w = a.shape
+    nh, nw = h // 2, w // 2
+    if nh == 0 or nw == 0:
+        return grid
+    result = np.zeros((nh, nw), dtype=np.int32)
+    for r in range(nh):
+        for c in range(nw):
+            block = a[r*2:r*2+2, c*2:c*2+2].flatten().tolist()
+            result[r, c] = max(set(block), key=block.count)
+    return result.tolist()
+
+
+def downscale_majority_3x(grid: Grid) -> Grid:
+    """Downscale by 3x, taking majority vote including zeros."""
+    a = to_np(grid)
+    h, w = a.shape
+    nh, nw = h // 3, w // 3
+    if nh == 0 or nw == 0:
+        return grid
+    result = np.zeros((nh, nw), dtype=np.int32)
+    for r in range(nh):
+        for c in range(nw):
+            block = a[r*3:r*3+3, c*3:c*3+3].flatten().tolist()
+            result[r, c] = max(set(block), key=block.count)
+    return result.tolist()
+
+
+# --- Conditional per-object operations ---
+
+def recolor_objects_by_neighbor_count(grid: Grid) -> Grid:
+    """Recolor each connected component based on how many distinct neighbor colors it touches."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    if h == 0 or w == 0:
+        return grid
+
+    # Find connected components
+    visited = np.zeros((h, w), dtype=bool)
+    components = []
+
+    def bfs(start_r, start_c):
+        color = arr[start_r, start_c]
+        queue = [(start_r, start_c)]
+        visited[start_r, start_c] = True
+        cells = []
+        while queue:
+            r, c = queue.pop(0)
+            cells.append((r, c))
+            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                nr, nc = r+dr, c+dc
+                if 0 <= nr < h and 0 <= nc < w and not visited[nr, nc] and arr[nr, nc] == color:
+                    visited[nr, nc] = True
+                    queue.append((nr, nc))
+        return cells, color
+
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and not visited[r, c]:
+                cells, color = bfs(r, c)
+                components.append((cells, color))
+
+    result = arr.copy()
+    for cells, color in components:
+        # Count distinct neighbor colors
+        neighbor_colors = set()
+        for r, c in cells:
+            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                nr, nc = r+dr, c+dc
+                if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in set(cells):
+                    v = arr[nr, nc]
+                    if v != color:
+                        neighbor_colors.add(v)
+        # Recolor: new color = number of distinct neighbor colors (1-indexed)
+        new_c = len(neighbor_colors)
+        if new_c > 0 and new_c <= 9:
+            for r, c in cells:
+                result[r, c] = new_c
+    return from_np(result)
+
+
+def fill_convex_hull(grid: Grid) -> Grid:
+    """Fill the convex hull of all non-zero pixels with the most common color."""
+    arr = to_np(grid)
+    h, w = arr.shape
+    nz = list(zip(*np.where(arr != 0)))
+    if len(nz) < 3:
+        return [row[:] for row in grid]
+
+    mc = _most_common_overall(grid)
+    if mc == 0:
+        mc = 1
+
+    result = arr.copy()
+
+    # Simple convex hull via bounding rows
+    rows_with_nz = {}
+    for r, c in nz:
+        if r not in rows_with_nz:
+            rows_with_nz[r] = (c, c)
+        else:
+            rows_with_nz[r] = (min(rows_with_nz[r][0], c), max(rows_with_nz[r][1], c))
+
+    min_r = min(rows_with_nz.keys())
+    max_r = max(rows_with_nz.keys())
+
+    for r in range(min_r, max_r + 1):
+        if r in rows_with_nz:
+            c_min, c_max = rows_with_nz[r]
+        else:
+            # Interpolate from neighbors
+            above = max(rr for rr in rows_with_nz if rr < r) if any(rr < r for rr in rows_with_nz) else min_r
+            below = min(rr for rr in rows_with_nz if rr > r) if any(rr > r for rr in rows_with_nz) else max_r
+            if above in rows_with_nz and below in rows_with_nz:
+                t = (r - above) / max(1, below - above)
+                c_min = int(rows_with_nz[above][0] + t * (rows_with_nz[below][0] - rows_with_nz[above][0]))
+                c_max = int(rows_with_nz[above][1] + t * (rows_with_nz[below][1] - rows_with_nz[above][1]))
+            else:
+                continue
+        for c in range(c_min, c_max + 1):
+            if result[r, c] == 0:
+                result[r, c] = mc
+    return from_np(result)
+
+
+# =============================================================================
 # Build the ARC primitive registry
 # =============================================================================
 
@@ -3891,6 +4573,32 @@ def _build_arc_primitives() -> list[Primitive]:
         ("downscale_3x",            downscale_3x),
         ("extend_fill_row",         extend_nonzero_fill_row),
         ("extend_fill_col",         extend_nonzero_fill_col),
+        # --- Port batch 4: grid partition + annotation ---
+        ("select_odd_cell",         select_odd_one_out),
+        ("overlay_cells",           overlay_grid_cells),
+        ("majority_cells",          majority_vote_cells),
+        ("xor_cells",               xor_grid_cells),
+        ("most_colorful_cell",      select_most_colorful_cell),
+        ("most_filled_cell",        select_most_filled_cell),
+        ("least_filled_cell",       select_least_filled_cell),
+        ("surround_3x3",            surround_pixels_3x3),
+        ("draw_cross",              draw_cross_from_pixels),
+        ("draw_cross_contact",      draw_cross_to_contact),
+        ("draw_diag",               draw_diagonal_from_pixels),
+        ("connect_h",               connect_same_color_h),
+        ("connect_v",               connect_same_color_v),
+        ("scale_4x",                scale_4x),
+        ("scale_5x",                scale_5x),
+        ("downscale_4x",            downscale_4x),
+        ("downscale_5x",            downscale_5x),
+        ("downscale_7x",            downscale_7x),
+        ("downscale_maj_2x",        downscale_majority_2x),
+        ("downscale_maj_3x",        downscale_majority_3x),
+        ("fill_convex_hull",        fill_convex_hull),
+        ("fill_between_h",          fill_between_objects_h),
+        ("fill_between_v",          fill_between_objects_v),
+        ("fill_bbox_objs",          fill_bbox_per_object),
+        ("rect_around_objs",        draw_rect_around_objects),
     ]
 
     for name, fn in unary_ops:
@@ -3963,7 +4671,7 @@ def _build_arc_primitives() -> list[Primitive]:
                 ))
 
     # Fill rect interiors with specific colors
-    for color in [1, 2, 3, 4]:
+    for color in range(1, 10):
         prims.append(Primitive(
             name=f"fill_rect_interior_{color}",
             arity=1, fn=lambda g, c=color: _fill_rect_interiors(g, c), domain="arc",
@@ -3984,7 +4692,7 @@ def _build_arc_primitives() -> list[Primitive]:
         ))
 
     # Fill smallest rect hole with specific colors
-    for color in [1, 4, 8]:
+    for color in range(1, 10):
         prims.append(Primitive(
             name=f"fill_hole_{color}",
             arity=1, fn=_make_fill_smallest_hole(color), domain="arc",
