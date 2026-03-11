@@ -150,7 +150,7 @@ Three modes. Pick one. That's the only knob most users need.
 
 | Mode | Tasks | Beam | Gens | Compute Cap | Use case |
 |------|-------|------|------|-------------|----------|
-| `quick` | 50 | 30 | 15 | 5M | Fast dev loop (~2 min) |
+| `quick` | 50 | 30 | 15 | 8M | Fast dev loop (~2 min) |
 | `default` | all (400) | 80 | 40 | 50M | Balanced speed/accuracy |
 | `contest` | all (400) | 250 | 100 | 200M | Maximum accuracy |
 
@@ -180,7 +180,7 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 | `--max-generations` | from preset | Generations per task. Quick: 15, default: 40, contest: 100 |
 | `--workers` | perf cores | Parallel workers (0 = auto-detect performance cores) |
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
-| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick: 5M, default: 50M, contest: 200M |
+| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick: 8M, default: 50M, contest: 200M |
 | `--exhaustive-depth` | `3` | Exhaustive enumeration depth (0=off, 2=pairs, 3=triples) |
 | `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
 | `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |

@@ -45,7 +45,7 @@ PRESETS = {
         "beam_width": 30,
         "max_generations": 15,
         "max_tasks": 50,
-        "compute_cap": 5_000_000,   # 5M ops → ~6K evals/task, caps large grids (~2 min)
+        "compute_cap": 8_000_000,   # 8M ops → ~10K evals/task ceiling (matches agi-mvp-general)
     },
     "default": {
         "rounds": 1,
@@ -196,7 +196,7 @@ def make_parser(description: str, domain_name: str = "experiment") -> argparse.A
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=f"""
 Presets (the only knob most users need):
-  quick     Fast dev loop (~2 min, 50 tasks, 5M compute cap)
+  quick     Fast dev loop (~2 min, 50 tasks, 8M compute cap)
   default   Balanced (all tasks, 50M compute cap)
   contest   Maximum accuracy (all tasks, wide beam, 200M compute cap)
 
