@@ -573,6 +573,29 @@ Running 400-task quick benchmark with all optimizations, shuffled order, 4 worke
 **Root cause:** `ProcessPoolExecutor.shutdown(wait=False, cancel_futures=True)` only cancels pending futures; running workers continue as orphan processes.
 **Fix:** On KeyboardInterrupt, explicitly `os.kill(pid, SIGTERM)` all worker processes before calling `shutdown()`.
 
+### Semantic dedup was broken for grids
+
+**Context:** `_semantic_hash` used `round(float(val), precision)` on grid outputs (list of lists), which throws TypeError. Every program hashed to `str([None, None, None])`, so dedup kept only ONE program per generation — beam_width was effectively 1.
+**Fix:** Handle grid outputs via tuple conversion: `tuple(tuple(row) for row in val)`. Numeric outputs still use float rounding.
+**Impact:** Beam search can now maintain actual diversity. This should improve solve rate on tasks where beam search matters (harder tasks that enumeration doesn't catch).
+
+### Benchmark results after fixes
+
+Quick preset, 281 primitives, 2 workers, shuffled order:
+- **84/400 = 21.0% train accuracy** (up from 13% with 101 prims in Session 7)
+- Median task time: 2.3s (~7x faster than before pool cap fix)
+- Total wall time: ~19 minutes (1,140s sum of task times)
+- Total evaluations: 2,290,000+ across all tasks
+
+Comparison across sessions:
+| Session | Primitives | Preset  | Train acc | Median/task | Notes |
+|---------|-----------|---------|-----------|-------------|-------|
+| 7       | 101       | quick   | 52/400 = 13.0% | 2.30s | Baseline |
+| 8       | 281       | default | 18/400 = 4.5%  | 15-30s | Regression (bloated pool) |
+| 9       | 281       | quick   | 84/400 = 21.0% | 2.3s  | **Pool fix + optimizations** |
+
+The 281 primitives now help (21% vs 13%) instead of hurting (4.5%). The semantic dedup fix (beam diversity) was NOT active during this benchmark — should improve further.
+
 ---
 
 *This document will be updated with each new session and major decision.*
