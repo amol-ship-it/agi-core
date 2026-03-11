@@ -532,7 +532,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
           f"({machine.get('chip', machine['arch'])})")
     print(f"  Seed:       {cfg.seed}")
     if compute_cap > 0:
-        print(f"  Compute cap: {compute_cap:,} total evals")
+        print(f"  Compute cap: {compute_cap:,} ops (cell-normalized)")
     else:
         print(f"  Compute cap: unlimited")
 
@@ -558,13 +558,21 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     evals_per_task = beam_width * max_gens
     total_budget = evals_per_task * len(tasks) * rounds
 
-    if compute_cap > 0 and total_budget > compute_cap:
-        capped_gens = max(1, compute_cap // (beam_width * len(tasks) * rounds))
-        print(f"\n  Compute cap active: reducing gens {max_gens} → {capped_gens} "
-              f"(budget {total_budget:,} → {beam_width * capped_gens * len(tasks) * rounds:,})")
-        max_gens = capped_gens
-        evals_per_task = beam_width * max_gens
-        total_budget = evals_per_task * len(tasks) * rounds
+    # Cell-normalized compute cap (from agi-mvp-general).
+    # Instead of globally reducing max_gens, compute a per-task eval budget
+    # proportional to grid size. Small grids get more evals (they're cheap),
+    # large grids get fewer. Budget is enforced per-task in wake_on_task.
+    #
+    # Formula: min(max(compute_cap / avg_cells, 500), compute_cap / DEFAULT_CELLS)
+    #   DEFAULT_CELLS = 800 (median ARC grid size)
+    #   Floor of 500 evals ensures even huge grids get basic search.
+    eval_budget = 0  # 0 = unlimited (passed per-task via SearchConfig)
+    DEFAULT_CELLS = 800
+    if compute_cap > 0:
+        # Per-task budget uses median grid size as baseline
+        max_evals = max(compute_cap // DEFAULT_CELLS, 500)
+        eval_budget = max_evals  # default for tasks without grid info
+        print(f"\n  Compute cap: {compute_cap:,} ops → ~{max_evals:,} evals/task (cell-normalized)")
 
     # Load culture file if specified (cross-run knowledge transfer)
     if cfg.culture_path and os.path.isfile(cfg.culture_path):
@@ -589,6 +597,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             exhaustive_depth=cfg.exhaustive_depth,
             exhaustive_pair_top_k=cfg.exhaustive_pair_top_k,
             exhaustive_triple_top_k=cfg.exhaustive_triple_top_k,
+            eval_budget=eval_budget,
         ),
         sleep_config=SleepConfig(
             min_occurrences=cfg.min_occurrences,

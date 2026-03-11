@@ -39,6 +39,11 @@ class SearchConfig:
     # Smaller K (15) keeps cost manageable: ~15% of ARC needs exactly 3 steps.
     exhaustive_triple_top_k: int = 15
 
+    # Per-task eval budget (0 = unlimited). When > 0, expensive phases
+    # (beam search, near-miss refinement) are skipped once n_evals exceeds
+    # this. Set by runner.py using cell-normalized compute cap.
+    eval_budget: int = 0
+
 
 @dataclass
 class SleepConfig:

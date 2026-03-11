@@ -187,6 +187,24 @@ class Learner:
         pareto: dict[int, ParetoEntry] = {}
         enum_candidates: list[ScoredProgram] = []
 
+        # Cell-normalized eval budget: scale budget by grid size.
+        # Small grids are cheap to evaluate → more evals allowed.
+        # Large grids are expensive → fewer evals.
+        # Formula from agi-mvp-general: min(max(cap/cells, 500), max_evals)
+        DEFAULT_CELLS = 800
+        if cfg.eval_budget > 0:
+            cells = self._avg_cells(task)
+            # Scale: if cells < DEFAULT_CELLS, allow more evals (cheaper)
+            # If cells > DEFAULT_CELLS, allow fewer evals
+            scaled = max(cfg.eval_budget * DEFAULT_CELLS // max(cells, 1), 500)
+            eval_budget = min(scaled, cfg.eval_budget * 4)  # cap at 4x base
+        else:
+            eval_budget = 0  # unlimited
+
+        def _budget_ok() -> bool:
+            """Check whether we've exceeded the per-task eval budget."""
+            return eval_budget <= 0 or n_evals < eval_budget
+
         def _record_solve():
             """Record solution in memory if record=True."""
             if record and best_so_far:
@@ -294,7 +312,7 @@ class Learner:
         # Try appending/prepending primitives to near-miss programs.
         # High-ROI: catches "almost right" programs that need one more step.
         t_phase = time.time()
-        if cfg.near_miss_threshold > 0 and enum_candidates:
+        if cfg.near_miss_threshold > 0 and enum_candidates and _budget_ok():
             refine_candidates, n_refine_evals = self._near_miss_refine(
                 enum_candidates, all_prims, task, cfg.near_miss_threshold)
             n_evals += n_refine_evals
@@ -356,68 +374,78 @@ class Learner:
         # Adaptive: reduce beam effort when enumeration found nothing promising.
         # If best error > 0.3, beam search rarely recovers — cap at 25% gens.
         # If best error > 0.15, moderate reduction — cap at 50% gens.
+        # Skipped entirely if eval budget is exceeded.
         t_phase = time.time()
-        best_enum_error = best_so_far.prediction_error if best_so_far else 1.0
-        if best_enum_error > 0.3:
-            effective_gens = max(5, cfg.max_generations // 4)
-        elif best_enum_error > 0.15:
-            effective_gens = max(10, cfg.max_generations // 2)
-        else:
-            effective_gens = cfg.max_generations
-
-        seed_progs = [sp.program for sp in sorted(
-            enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
-        n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
-        beam = seed_progs + self._init_beam(all_prims, n_random)
         gens_used = 0
+        scored = []  # beam search results (may be empty if skipped)
+        best_enum_error = best_so_far.prediction_error if best_so_far else 1.0
+        if not _budget_ok():
+            logger.debug(f"  [wake] Phase 2 beam search: SKIPPED (budget exceeded, {n_evals} evals)")
+        else:
+            if best_enum_error > 0.3:
+                effective_gens = max(5, cfg.max_generations // 4)
+            elif best_enum_error > 0.15:
+                effective_gens = max(10, cfg.max_generations // 2)
+            else:
+                effective_gens = cfg.max_generations
 
-        for gen in range(effective_gens):
-            gens_used = gen + 1
+            seed_progs = [sp.program for sp in sorted(
+                enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
+            n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
+            beam = seed_progs + self._init_beam(all_prims, n_random)
 
-            # Evaluate every candidate on all training examples
-            scored = []
-            for prog in beam:
-                sp = self._evaluate_program(prog, task)
-                n_evals += 1
-                scored.append(sp)
-                self._update_pareto_front(pareto, sp)
+            for gen in range(effective_gens):
+                gens_used = gen + 1
 
-                # Track global best
-                if best_so_far is None or sp.energy < best_so_far.energy:
-                    best_so_far = sp
+                # Budget check: stop beam search if eval budget exceeded
+                if not _budget_ok():
+                    logger.debug(f"  [wake] Beam budget exceeded at gen {gen}, {n_evals} evals")
+                    break
 
-            # Early stopping on perfect solve
-            if best_so_far and best_so_far.energy <= cfg.early_stop_energy:
-                logger.info(f"  [wake] Task {task.task_id}: perfect solve at gen {gen}")
-                break
+                # Evaluate every candidate on all training examples
+                scored = []
+                for prog in beam:
+                    sp = self._evaluate_program(prog, task)
+                    n_evals += 1
+                    scored.append(sp)
+                    self._update_pareto_front(pareto, sp)
 
-            # Semantic dedup: remove programs with identical output vectors
-            if cfg.semantic_dedup:
-                scored, n_removed = self._semantic_dedup(scored, task)
-                total_deduped += n_removed
+                    # Track global best
+                    if best_so_far is None or sp.energy < best_so_far.energy:
+                        best_so_far = sp
 
-            # Keep the best
-            scored.sort(key=lambda s: s.energy)
-            survivors = [s.program for s in scored[: cfg.beam_width]]
+                # Early stopping on perfect solve
+                if best_so_far and best_so_far.energy <= cfg.early_stop_energy:
+                    logger.info(f"  [wake] Task {task.task_id}: perfect solve at gen {gen}")
+                    break
 
-            # Produce next generation
-            next_gen = list(survivors)  # elitism: survivors carry over
+                # Semantic dedup: remove programs with identical output vectors
+                if cfg.semantic_dedup:
+                    scored, n_removed = self._semantic_dedup(scored, task)
+                    total_deduped += n_removed
 
-            # Mutations
-            for prog in survivors:
-                for _ in range(cfg.mutations_per_candidate):
-                    mutant = self.grammar.mutate(prog, all_prims)
-                    next_gen.append(mutant)
+                # Keep the best
+                scored.sort(key=lambda s: s.energy)
+                survivors = [s.program for s in scored[: cfg.beam_width]]
 
-            # Crossovers
-            n_cross = int(len(survivors) * cfg.crossover_fraction)
-            for _ in range(n_cross):
-                a = self._rng.choice(survivors)
-                b = self._rng.choice(survivors)
-                child = self.grammar.crossover(a, b)
-                next_gen.append(child)
+                # Produce next generation
+                next_gen = list(survivors)  # elitism: survivors carry over
 
-            beam = next_gen
+                # Mutations
+                for prog in survivors:
+                    for _ in range(cfg.mutations_per_candidate):
+                        mutant = self.grammar.mutate(prog, all_prims)
+                        next_gen.append(mutant)
+
+                # Crossovers
+                n_cross = int(len(survivors) * cfg.crossover_fraction)
+                for _ in range(n_cross):
+                    a = self._rng.choice(survivors)
+                    b = self._rng.choice(survivors)
+                    child = self.grammar.crossover(a, b)
+                    next_gen.append(child)
+
+                beam = next_gen
 
         logger.debug(f"  [wake] Phase 2 beam search: {time.time()-t_phase:.2f}s, gens={gens_used}")
 
@@ -429,7 +457,7 @@ class Learner:
         if best_so_far and best_so_far.prediction_error > cfg.solve_threshold:
             # Build pool from beam + enumeration for color fix only
             all_candidates = list(enum_candidates)
-            if 'scored' in dir() and scored:
+            if scored:
                 all_candidates.extend(scored)
 
             # Phase 3: Color fix on all candidates
@@ -784,7 +812,16 @@ class Learner:
                     on_task_done(round_num, completed_count, total_tasks, wr)
             pool.shutdown(wait=True)
         except KeyboardInterrupt:
-            # Kill workers immediately — don't wait for them to finish
+            # Kill workers immediately — don't wait for them to finish.
+            # shutdown(wait=False, cancel_futures=True) only cancels pending
+            # futures; running workers keep going as orphan processes.
+            # Explicitly terminate all child processes for clean exit.
+            import signal as _sig
+            for pid in pool._processes:
+                try:
+                    os.kill(pid, _sig.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
             pool.shutdown(wait=False, cancel_futures=True)
             raise
         except (OSError, RuntimeError) as e:
@@ -1202,10 +1239,14 @@ class Learner:
             return scored, n_evals
 
         # --- Build pair pool: top-K singles + essential concepts ---
+        # Reserve half the slots for top-scoring singles, half for essentials.
+        # This prevents essential concepts from bloating the pool (29 essentials
+        # were adding on top of pair_top_k, giving pool sizes of 50-69 → K²
+        # blowup). Now total pool is capped at pair_top_k.
         depth1_ranked = sorted(scored, key=lambda s: s.prediction_error)
         essential_names = self.grammar.essential_pair_concepts()
 
-        # Top-K distinct singles by prediction error
+        # Phase 1: fill with top-scoring singles (up to pair_top_k)
         seen_names: set[str] = set()
         pair_pool: list[str] = []
         for sp in depth1_ranked:
@@ -1216,8 +1257,10 @@ class Learner:
             if len(pair_pool) >= pair_top_k:
                 break
 
-        # Add essential concepts not already in pool
+        # Phase 2: add essential concepts, but cap total at pair_top_k
         for name in essential_names:
+            if len(pair_pool) >= pair_top_k:
+                break
             if name not in seen_names and name in prim_by_name:
                 pair_pool.append(name)
                 seen_names.add(name)
@@ -1237,6 +1280,9 @@ class Learner:
             return scored, n_evals
 
         # --- Build triple pool: top-K singles + essential (smaller K) ---
+        # CRITICAL: cap total pool at triple_top_k. Previously essentials
+        # were added on top (15 + 29 = 44 entries → 44³ = 85K evals!).
+        # Now total pool is hard-capped, so cost stays at K³ ≈ 3.4K evals.
         triple_seen: set[str] = set()
         triple_pool: list[str] = []
         for sp in depth1_ranked:
@@ -1248,6 +1294,8 @@ class Learner:
                 break
 
         for name in essential_names:
+            if len(triple_pool) >= triple_top_k:
+                break
             if name not in triple_seen and name in prim_by_name:
                 triple_pool.append(name)
                 triple_seen.add(name)
@@ -1273,6 +1321,15 @@ class Learner:
     # -------------------------------------------------------------------------
     # Private helpers
     # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _avg_cells(task: Task) -> int:
+        """Average cell count across training input grids."""
+        grids = [inp for inp, _ in task.train_examples]
+        if not grids:
+            return 1
+        total = sum(len(g) * len(g[0]) for g in grids if g and len(g) > 0 and len(g[0]) > 0)
+        return max(1, total // len(grids))
 
     def _init_beam(self, primitives: list[Primitive], n: int) -> list[Program]:
         """

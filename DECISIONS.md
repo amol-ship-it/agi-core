@@ -552,6 +552,27 @@ agi-mvp-general uses targeted numpy (scoring) and numba @njit (flood fill). Our 
 
 Running 400-task quick benchmark with all optimizations, shuffled order, 4 workers.
 
+## Session 9 — Performance Fixes & Compute Budget (March 2026)
+
+### Triple pool bloat fix — root cause of slowness
+
+**Context:** Quick mode became very slow after porting 281 primitives + 29 essential pair concepts.
+**Root cause:** `_exhaustive_enumerate` depth-3 triple pool was built as `top_k (15) + ALL essential concepts (29)`, giving pool sizes of 30-44 entries. Cost: K³ = 27,000-85,000 evals per task just for triple enumeration!
+**Fix:** Cap triple pool at `triple_top_k` total entries. Essentials compete for slots instead of being added on top. Same fix applied to pair pool.
+**Result:** Triple cost drops from ~27K-85K to ~3,375 evals (15³). 50-task benchmark: median 3.84s/task, down from 15-30s/task.
+
+### Cell-normalized per-task compute budget
+
+**Context:** `--compute-cap` flag was reducing max_generations globally, treating all tasks equally regardless of grid size. agi-mvp-general uses cell-normalized budgets.
+**Decision:** Adopt agi-mvp-general's formula: `min(max(cap/cells, 500), cap/DEFAULT_CELLS)` where DEFAULT_CELLS=800 (median ARC grid size). Small grids get more evals (cheap), large grids get fewer. Budget enforced per-task via `_budget_ok()` gating on expensive phases (near-miss, beam search).
+**Result:** `eval_budget` field added to `SearchConfig`, phases gated with `_budget_ok()`.
+
+### Ctrl-C worker cleanup
+
+**Context:** User reported ^C doesn't kill the job completely — CPU stays high.
+**Root cause:** `ProcessPoolExecutor.shutdown(wait=False, cancel_futures=True)` only cancels pending futures; running workers continue as orphan processes.
+**Fix:** On KeyboardInterrupt, explicitly `os.kill(pid, SIGTERM)` all worker processes before calling `shutdown()`.
+
 ---
 
 *This document will be updated with each new session and major decision.*
