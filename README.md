@@ -284,8 +284,6 @@ agi-core/
 │   │   └── dataset.py       # Task loading + sample tasks
 │   ├── symbolic_math/       # 1D symbolic regression (15 math primitives)
 │   │   └── __init__.py      # All 4 interfaces in one file
-│   ├── list_ops/            # List transformations (22 primitives, compounding testbed)
-│   │   └── __init__.py      # All 4 interfaces + task generator
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │

@@ -780,27 +780,4 @@ Key evidence of compounding:
 
 ---
 
-### Decision 37: Batch 6-7 ARC Primitives + Overfit Fixes
-
-**Date:** 2026-03-12
-
-**Context:** After analyzing near-miss tasks (error < 10%) and overfit tasks (pass train, fail test), we identified specific missing capabilities and bugs.
-
-**Batch 6 (5 primitives):** move_objects_toward_each_other, stamp_pattern_at_markers, fill_between_diagonal, complete_border_pattern, replicate_small_object_to_large. `fill_between_diag` immediately solved task 1f876c06.
-
-**Batch 7 (6 primitives):** Targeted at specific near-miss tasks:
-- `fill_grid_cells_between_markers` → solves 06df4c85 (fill between same-colored cells in grid structure, both rows AND columns)
-- `absorb_noise_to_nearest_line` → solves 1a07d186 (remove noise, extend nearest same-color line toward noise)
-- `project_color_to_object_face` → solves 1f642eb9 (project marker colors onto nearest edge of main object)
-- `move_objects_to_contact`, `align_objects_vertically`, `compact_shape`
-
-**Overfit fixes:**
-- `extend_lines_to_contact`: now handles each color independently per row/column (was failing on rows with multiple non-bg colors). Fixes 22168020.
-- `complete_sym_90`: new primitive for 4-fold rotational symmetry (was only doing 180° + mirrors). Fixes 11852cab.
-- `project_color_to_object_face`: treats each pixel from non-main objects as individual marker (was merging adjacent different-colored markers). Fixes 1f642eb9.
-
-**Result:** 335 → 342 primitives. Quick mode (50 tasks): 13/50 (26%) → 16/50 (32%). Three overfit tasks fixed to pass test examples.
-
----
-
 *This document will be updated with each new session and major decision.*
