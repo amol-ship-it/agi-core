@@ -995,7 +995,7 @@ class TestRunnerHelpers(unittest.TestCase):
         resolved = resolve_from_preset(args, PRESETS["quick"])
         self.assertEqual(resolved["rounds"], 1)
         self.assertEqual(resolved["beam_width"], 1)
-        self.assertEqual(resolved["compute_cap"], 0)
+        self.assertEqual(resolved["compute_cap"], 3_500_000)
 
     def test_resolve_from_preset_overrides(self):
         from core.runner import resolve_from_preset, PRESETS
@@ -1009,6 +1009,59 @@ class TestRunnerHelpers(unittest.TestCase):
         self.assertEqual(resolved["beam_width"], 200)
         self.assertEqual(resolved["max_tasks"], 10)
         self.assertEqual(resolved["workers"], 4)
+
+
+    def test_task_ids_filtering(self):
+        """Task ID filtering works with exact and prefix match."""
+        from core.runner import ExperimentConfig
+        from core.types import Task
+
+        tasks = [
+            Task("0dfd9992", [], [], []),
+            Task("1190e5a7", [], [], []),
+            Task("045e512c", [], [], []),
+        ]
+
+        # Exact match
+        cfg = ExperimentConfig(
+            title="test", domain_tag="test", tasks=tasks,
+            environment=None, grammar=None, drive=None,
+            task_ids="0dfd9992",
+        )
+        id_prefixes = [t.strip() for t in cfg.task_ids.split(",") if t.strip()]
+        filtered = [t for t in cfg.tasks
+                    if any(t.task_id.startswith(p) for p in id_prefixes)]
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].task_id, "0dfd9992")
+
+        # Prefix match
+        cfg2 = ExperimentConfig(
+            title="test", domain_tag="test", tasks=tasks,
+            environment=None, grammar=None, drive=None,
+            task_ids="0",
+        )
+        id_prefixes2 = [t.strip() for t in cfg2.task_ids.split(",") if t.strip()]
+        filtered2 = [t for t in cfg2.tasks
+                     if any(t.task_id.startswith(p) for p in id_prefixes2)]
+        self.assertEqual(len(filtered2), 2)  # 0dfd9992 and 045e512c
+
+        # Multiple IDs
+        cfg3 = ExperimentConfig(
+            title="test", domain_tag="test", tasks=tasks,
+            environment=None, grammar=None, drive=None,
+            task_ids="0dfd9992,1190e5a7",
+        )
+        id_prefixes3 = [t.strip() for t in cfg3.task_ids.split(",") if t.strip()]
+        filtered3 = [t for t in cfg3.tasks
+                     if any(t.task_id.startswith(p) for p in id_prefixes3)]
+        self.assertEqual(len(filtered3), 2)
+
+    def test_compute_cap_presets(self):
+        """All presets have expected compute_cap values."""
+        from core.runner import PRESETS
+        self.assertEqual(PRESETS["quick"]["compute_cap"], 3_500_000)
+        self.assertEqual(PRESETS["default"]["compute_cap"], 3_500_000)
+        self.assertEqual(PRESETS["contest"]["compute_cap"], 50_000_000)
 
 
 if __name__ == "__main__":

@@ -42,13 +42,15 @@ PRESETS = {
     # Quick: fast dev loop. Beam search adds 0 solves (verified A/B test on
     # 49 tasks: 17/49 with beam=20 vs 17/49 with beam=1, same tasks solved,
     # beam adds +13% wall time). Exhaustive enumeration is self-limiting
-    # (~7.5K evals/task max), so no compute cap needed.
+    # (~7.5K evals/task max) but large grids (21x21=441 cells) waste compute.
+    # Cell-normalized compute cap: 3.5M ops = evals * cells. Verified on
+    # 400-task training set: 0 solves lost, 8.5% wall-time reduction.
     "quick": {
         "rounds": 1,
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 50,
-        "compute_cap": 0,           # unlimited — exhaustive enum self-limits at ~7.5K evals
+        "compute_cap": 3_500_000,   # cell-normalized: 0 solves lost, ~8.5% faster
     },
     # Default: full dataset. Exhaustive enumeration does ~100% of solves.
     # Beam=1 avoids wasting compute on a phase that contributes nothing.
@@ -57,7 +59,7 @@ PRESETS = {
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 0,
-        "compute_cap": 0,           # unlimited — exhaustive enum self-limits at ~7.5K evals
+        "compute_cap": 3_500_000,   # cell-normalized: 0 solves lost, ~8.5% faster
     },
     # Contest: maximum effort. Keeps modest beam in case deeper search
     # helps on the hardest tasks. Still mainly exhaustive.
@@ -253,6 +255,9 @@ Examples:
                         help="Path to culture file to load (cross-run knowledge transfer)")
     parser.add_argument("--save-culture", type=str, default="",
                         help="Override auto culture save path (e.g. culture_train.json)")
+    parser.add_argument("--task-ids", type=str, default="",
+                        help="Comma-separated task IDs to run (e.g. '0dfd9992,1190e5a7'). "
+                             "Overrides --max-tasks. Prefix match supported.")
     return parser
 
 
@@ -468,6 +473,9 @@ class ExperimentConfig:
     verbose: bool = False
     mode: str = "default"
 
+    # Task filtering
+    task_ids: str = ""  # comma-separated task IDs (prefix match supported)
+
     # Shared timestamp (for pipeline mode — reuse across train+eval)
     timestamp: str = ""
 
@@ -549,6 +557,15 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     max_gens = cfg.max_generations
     tasks = cfg.tasks
     compute_cap = cfg.compute_cap
+
+    # Filter by task IDs if specified (prefix match)
+    if cfg.task_ids:
+        id_prefixes = [t.strip() for t in cfg.task_ids.split(",") if t.strip()]
+        tasks = [t for t in tasks
+                 if any(t.task_id.startswith(p) for p in id_prefixes)]
+        if not tasks:
+            print(f"  ERROR: No tasks matched --task-ids '{cfg.task_ids}'")
+            sys.exit(1)
 
     # --- Header ---
     hline("═")

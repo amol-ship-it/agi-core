@@ -811,4 +811,25 @@ Key evidence of compounding:
 
 ---
 
+## Session — Cell-Normalized Compute Cap (2026-03-12)
+
+### Decision: Enable compute_cap=3.5M for quick/default presets
+
+**Problem:** Task `0dfd9992` (21×21=441 cells) consumed 69s and 6,580 evals — pure waste on an unsolved task. Large-grid tasks dominated wall time while contributing zero solves.
+
+**Analysis (400-task training set):**
+- Solved tasks: max 3.25M ops (`evals × max_cells`), median 22K ops
+- Unsolved tasks: up to 4.9M ops, median 662K ops
+- Cap at 3.5M ops: **0 solves lost**, 15 tasks capped, ~8.5% wall-time reduction
+
+**Implementation:** Set `compute_cap=3_500_000` in quick/default presets. The existing cell-normalization code in `learner.py` already scales eval budgets inversely with grid size. For 441-cell grids, this gives ~7,936 evals (vs ~6K self-limited by exhaustive depth).
+
+**Result:** Safety net for pathologically large grids. For most tasks the exhaustive depth limit bites first. Can be overridden with `--compute-cap 0` for unlimited.
+
+### Decision: Add --task-ids flag for targeted runs
+
+**Rationale:** Debugging specific tasks required running the full dataset. Added `--task-ids` to `make_parser()` (all experiments inherit it) with prefix-match support (e.g., `--task-ids 0dfd` matches `0dfd9992`). Filtering happens in `run_experiment()` so it's domain-agnostic.
+
+---
+
 *This document will be updated with each new session and major decision.*

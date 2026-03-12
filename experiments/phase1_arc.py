@@ -120,6 +120,7 @@ def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
         runs_dir=args.runs_dir,
         no_log=args.no_log,
         verbose=args.verbose,
+        task_ids=getattr(args, "task_ids", ""),
         mode=args.mode,
         timestamp=timestamp,
     )
