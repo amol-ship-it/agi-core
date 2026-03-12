@@ -840,4 +840,67 @@ Key evidence of compounding:
 
 ---
 
+## Session — JIT Compilation, Compute Budget, Smart Search (March 2026)
+
+### Decision: Numba JIT compilation for ARC primitives
+
+**Problem:** Primitive cost variance was 1000x+ (0.03ms to 37ms/call). Dense grids caused O(n×p²) blowup in drawing/connecting primitives. Task `1190e5a7` took 600s; `0dfd9992` took 35s.
+
+**Solution:** JIT-compile 18 hot primitives with `@nb.njit(cache=True)`. For dict-based color operations, replaced with fixed `int[10]` arrays (ARC has 10 colors). For BFS, replaced deque with pre-allocated numpy arrays.
+
+**Results:**
+| Task | Before | After | Speedup |
+|---|---|---|---|
+| 1190e5a7 | 600s | 2.4s | **250x** |
+| 0dfd9992 | 35s | 3.1s | **11x** |
+| 400-task full | ~40min+ | 7m32s | **~5x** |
+| Median task | ~5-6s | 2.3s | **~2.5x** |
+
+No solves lost: 85/400 (21.2%) before and after.
+
+### Decision: Depth-weighted compute cost proxy
+
+**Problem:** `evals × cells` treats all programs equally, but depth-3 programs apply 3 primitives while depth-1 applies 1. Budget was not a true proxy for compute.
+
+**Solution:** Count depth-weighted ops in exhaustive enumeration: depth-1 = 1 op, depth-2 = 2 ops, depth-3 = 3 ops. Budget is now in "ops" not raw eval count. This makes budget enforcement proportional to actual work.
+
+**Adjusted presets:** quick/default: 2M → 3M ops, contest: 50M → 100M ops (accounts for ~2.6x depth multiplier).
+
+### Decision: Compute cap = 3M ops (ROI-optimized)
+
+**ROI sweep on 50-task training set:**
+| Cap | Solved | Time | ROI |
+|---|---|---|---|
+| 1M | 18/50 | 30s | Best efficiency (1.66s/solve) |
+| **3M** | **19/50** | **80s** | **Best absolute solves** |
+| 5M+ | 19/50 | 91-107s | Zero additional solves |
+
+**Judgement:** Beyond 3M, exhaustive search hits hard diminishing returns. The path to more solves is smarter search, not more compute.
+
+### Decision: Smart search pruning (inner-step filter + adaptive depth skip)
+
+**Problem:** Most depth-2/3 combinations are wasteful. Exhaustive K² pairs enumerate many useless inner steps.
+
+**Two pruning strategies (deterministic, no solve loss):**
+1. **Inner-step quality filter**: Only use depth-1 primitives with error < 0.70 as inner steps. Programs that produce garbage alone rarely improve as intermediate steps.
+2. **Adaptive depth-3 skip**: If best depth-2 error > 0.50, skip depth-3 entirely.
+
+**Impact:** 13% fewer ops, slowest task 10.8s → 6.1s, median 2.3s → 1.6s, same 19/50 solves.
+
+### Analysis: Path to higher solve rates
+
+Near-miss analysis of unsolved tasks (50-task set):
+- 3 tasks with <5% error (almost solved — need color fix or small adjustment)
+- 15 tasks with 5-15% error (found partial structure)
+- 9 tasks with 15-30% error
+- 4 tasks with >30% error
+
+**Next steps for increasing solves:**
+1. **Per-example error vectors**: Track which examples each program solves. Compose programs that solve complementary examples.
+2. **Wider near-miss refinement**: Current refinement tries ±1 step on top-5 near misses. Could try deeper refinement chains.
+3. **More primitives**: The 3 almost-solved tasks likely need a specific primitive we don't have.
+4. **Cross-task transfer**: Library learning across tasks (the compounding loop).
+
+---
+
 *This document will be updated with each new session and major decision.*
