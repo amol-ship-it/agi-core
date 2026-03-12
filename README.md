@@ -284,20 +284,24 @@ agi-core/
 │   │   └── dataset.py       # Task loading + sample tasks
 │   ├── symbolic_math/       # 1D symbolic regression (15 math primitives)
 │   │   └── __init__.py      # All 4 interfaces in one file
+│   ├── list_ops/            # List transformations (22 primitives, compounding testbed)
+│   │   └── __init__.py      # All 4 interfaces + task generator
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (380 tests, 10 files)
+├── tests/                   # Test suite (471 tests, 12 files)
 │   ├── test_arc.py
 │   ├── test_color_fix.py
 │   ├── test_conditional_search.py
 │   ├── test_exhaustive_enum.py
 │   ├── test_interfaces.py
 │   ├── test_learner.py
+│   ├── test_list_ops.py
 │   ├── test_memory.py
 │   ├── test_metrics.py
 │   ├── test_object_decomposition.py
-│   └── test_symbolic_math.py
+│   ├── test_symbolic_math.py
+│   └── test_zork.py
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
