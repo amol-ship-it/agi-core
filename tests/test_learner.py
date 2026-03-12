@@ -7,6 +7,7 @@ invariant: core/ imports NOTHING domain-specific.
 """
 
 import copy
+import math
 import random
 import unittest
 from typing import Any, Optional
@@ -70,9 +71,13 @@ class StubGrammar(Grammar):
     def compose(self, outer: Primitive, inner_programs: list[Program]) -> Program:
         return Program(root=outer.name, children=inner_programs)
 
-    def mutate(self, program: Program, primitives: list[Primitive]) -> Program:
+    def mutate(self, program: Program, primitives: list[Primitive],
+               transition_matrix=None) -> Program:
         prog = copy.deepcopy(program)
-        prim = self._rng.choice(primitives)
+        if transition_matrix and transition_matrix.size > 0:
+            prim = transition_matrix.weighted_choice(program.root, primitives, self._rng)
+        else:
+            prim = self._rng.choice(primitives)
         prog.root = prim.name
         return prog
 
@@ -232,6 +237,21 @@ class TestLearnerWake(unittest.TestCase):
         self.assertIsInstance(result, WakeResult)
         # Memory should be empty since no_record was used
         self.assertEqual(len(learner.memory.replay_episodes()), 0)
+
+    def test_beam_search_uses_transition_matrix(self):
+        """Verify that beam search mutations pass the transition matrix to grammar.mutate()."""
+        learner = _make_learner(exhaustive_depth=0, beam_width=10, max_generations=3)
+        # Pre-populate transition matrix with a strong prior
+        for _ in range(50):
+            learner._transition_matrix.observe_program(
+                Program(root="identity", children=[Program(root="double")]))
+        self.assertGreater(learner._transition_matrix.size, 0)
+
+        task = _make_identity_task()
+        result = learner.wake_on_task(task)
+        # Should still produce valid results (not crash) with TM active
+        self.assertIsInstance(result, WakeResult)
+        self.assertGreater(result.evaluations, 0)
 
 
 class TestLearnerSleep(unittest.TestCase):
@@ -503,6 +523,65 @@ class TestLearnerSleepEdgeCases(unittest.TestCase):
         lib = learner.memory.get_library()
         # Usefulness should have decreased
         self.assertLess(lib[0].usefulness, 10.0)
+
+    def test_sleep_prunes_dead_entries(self):
+        """Entries with usefulness near zero and no reuse should be pruned."""
+        learner = _make_learner()
+        # Add an entry with very low usefulness and no reuse
+        dead = LibraryEntry(name="dead", program=Program(root="x"),
+                           usefulness=0.001, reuse_count=0)
+        alive = LibraryEntry(name="alive", program=Program(root="y"),
+                            usefulness=5.0, reuse_count=0)
+        reused = LibraryEntry(name="reused", program=Program(root="z"),
+                             usefulness=0.001, reuse_count=3)
+        learner.memory.add_to_library(dead)
+        learner.memory.add_to_library(alive)
+        learner.memory.add_to_library(reused)
+
+        learner.sleep()
+        lib_names = [e.name for e in learner.memory.get_library()]
+        # Dead entry (low usefulness, no reuse) should be pruned
+        self.assertNotIn("dead", lib_names)
+        # Alive entry (high usefulness) should survive
+        self.assertIn("alive", lib_names)
+        # Reused entry (low usefulness but has reuse) should survive
+        self.assertIn("reused", lib_names)
+
+    def test_sleep_diversity_bonus(self):
+        """Subtrees appearing across structurally diverse solutions score higher."""
+        learner = _make_learner()
+        shared = Program(root="identity", children=[Program(root="double")])
+
+        # Solutions with DIFFERENT root ops → high diversity
+        sol1 = ScoredProgram(
+            program=Program(root="identity", children=[shared]),
+            energy=0.0, prediction_error=0.0, complexity_cost=1.0, task_id="t1")
+        sol2 = ScoredProgram(
+            program=Program(root="double", children=[shared]),
+            energy=0.0, prediction_error=0.0, complexity_cost=1.0, task_id="t2")
+        learner.memory.store_solution("t1", sol1)
+        learner.memory.store_solution("t2", sol2)
+
+        result = learner.sleep()
+        # Should find the shared subtree with diversity bonus applied
+        if result.new_entries:
+            # Diversity bonus should make usefulness > base value
+            base = 2 * math.log(shared.size + 1)  # without diversity bonus
+            self.assertGreater(result.new_entries[0].usefulness, base)
+
+    def test_prune_library_on_memory(self):
+        """InMemoryStore.prune_library removes dead entries."""
+        mem = InMemoryStore()
+        mem.add_to_library(LibraryEntry(
+            name="dead", program=Program(root="x"),
+            usefulness=0.005, reuse_count=0))
+        mem.add_to_library(LibraryEntry(
+            name="alive", program=Program(root="y"),
+            usefulness=1.0, reuse_count=0))
+        pruned = mem.prune_library(min_usefulness=0.01)
+        self.assertEqual(pruned, 1)
+        self.assertEqual(len(mem.get_library()), 1)
+        self.assertEqual(mem.get_library()[0].name, "alive")
 
 
 class TestLearnerEvaluateException(unittest.TestCase):

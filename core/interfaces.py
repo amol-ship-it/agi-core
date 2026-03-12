@@ -125,11 +125,15 @@ class Grammar(ABC):
         ...
 
     @abstractmethod
-    def mutate(self, program: Program, primitives: list[Primitive]) -> Program:
+    def mutate(self, program: Program, primitives: list[Primitive],
+               transition_matrix: "Any | None" = None) -> Program:
         """
         Produce a variant of a program by random structural change.
 
         E.g., swap a node, add a node, remove a node, change a constant.
+
+        If transition_matrix is provided, use it to bias primitive choices
+        toward known-good compositions (DreamCoder-style prior).
         """
         ...
 
@@ -278,6 +282,14 @@ class Memory(ABC):
     def update_usefulness(self, name: str, delta: float) -> None:
         """Update the usefulness score of a library entry after reuse."""
         ...
+
+    def prune_library(self, min_usefulness: float = 0.01) -> int:
+        """Remove library entries with usefulness below threshold and no reuse.
+
+        Returns the number of entries pruned.
+        Default: no-op (returns 0).
+        """
+        return 0
 
     # --- Program library (solved tasks) ---
 

@@ -432,10 +432,11 @@ class Learner:
                 # Produce next generation
                 next_gen = list(survivors)  # elitism: survivors carry over
 
-                # Mutations
+                # Mutations (biased by transition matrix when available)
+                tm = self._transition_matrix if self._transition_matrix.size > 0 else None
                 for prog in survivors:
                     for _ in range(cfg.mutations_per_candidate):
-                        mutant = self.grammar.mutate(prog, all_prims)
+                        mutant = self.grammar.mutate(prog, all_prims, transition_matrix=tm)
                         next_gen.append(mutant)
 
                 # Crossovers
@@ -552,8 +553,9 @@ class Learner:
         1. Collect all solved programs
         2. Build transition matrix P(child_op | parent_op) from solutions
         3. Extract sub-trees that recur across multiple solutions
-        4. Score by compression value: tasks_used × log(size)
+        4. Score by compression value with diversity bonus
         5. Add the best as new named primitives to the library
+        6. Decay old entries and prune dead ones
         """
         t0 = time.time()
         cfg = self.sleep_cfg
@@ -580,6 +582,9 @@ class Learner:
                     subtree_counts[key] = []
                 subtree_counts[key].append((subtree, task_id))
 
+        # Build a map of task_id → solution root op for diversity scoring
+        task_roots = {tid: scored.program.root for tid, scored in solutions.items()}
+
         # 3. Filter: must appear in >= min_occurrences different tasks,
         #    must be >= min_size nodes (no trivial single-node entries)
         candidates = []
@@ -587,9 +592,15 @@ class Learner:
             task_ids = sorted(set(tid for _, tid in occurrences))
             subtree = occurrences[0][0]
             if len(task_ids) >= cfg.min_occurrences and subtree.size >= cfg.min_size:
-                # Usefulness = tasks_used_in × log(size+1)
-                # Log scaling prevents huge subtrees from dominating
-                usefulness = len(task_ids) * math.log(subtree.size + 1)
+                # Diversity bonus: reward subtrees that appear across solutions
+                # with different root operations (structurally diverse contexts).
+                # A subtree used in rotate(crop(x)) AND fill(crop(x)) is more
+                # general than one only in rotate(crop(x)) variants.
+                unique_roots = len(set(task_roots.get(tid, "") for tid in task_ids))
+                diversity_bonus = 1.0 + 0.5 * math.log(max(unique_roots, 1))
+
+                # Usefulness = tasks_used × log(size+1) × diversity_bonus
+                usefulness = len(task_ids) * math.log(subtree.size + 1) * diversity_bonus
                 candidates.append((subtree, task_ids, usefulness))
 
         # 4. Sort by usefulness, add top entries to library
@@ -627,11 +638,17 @@ class Learner:
                     entry.usefulness * (cfg.usefulness_decay - 1),  # negative delta
                 )
 
+        # 7. Prune dead entries: remove library entries that have decayed
+        #    below threshold and were never reused. Prevents the library
+        #    from filling with stale abstractions that crowd out better ones.
+        pruned = self.memory.prune_library(min_usefulness=0.01)
+
         lib_after = len(self.memory.get_library())
         wall = time.time() - t0
 
         logger.info(
-            f"  [sleep] Extracted {len(new_entries)} new abstractions. "
+            f"  [sleep] Extracted {len(new_entries)} new abstractions, "
+            f"pruned {pruned} dead entries. "
             f"Library: {lib_before} → {lib_after}. Time: {wall:.1f}s"
         )
         return SleepResult(

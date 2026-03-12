@@ -81,6 +81,18 @@ class InMemoryStore(Memory):
                 entry.reuse_count += 1 if delta > 0 else 0
                 return
 
+    def prune_library(self, min_usefulness: float = 0.01) -> int:
+        """Remove library entries that have decayed below threshold and were never reused."""
+        before = len(self._library)
+        self._library = [
+            e for e in self._library
+            if e.usefulness >= min_usefulness or e.reuse_count > 0
+        ]
+        pruned = before - len(self._library)
+        if pruned > 0:
+            logger.debug(f"Pruned {pruned} dead library entries (usefulness < {min_usefulness})")
+        return pruned
+
     # --- Solutions ---
 
     def store_solution(self, task_id: str, scored: ScoredProgram) -> None:

@@ -136,12 +136,23 @@ class ARCGrammar(Grammar):
     def compose(self, outer: Primitive, inner_programs: list[Program]) -> Program:
         return Program(root=outer.name, children=inner_programs)
 
-    def mutate(self, program: Program, primitives: list[Primitive]) -> Program:
+    def _pick(self, candidates: list[Primitive], parent_op: str,
+              transition_matrix) -> Primitive:
+        """Pick a primitive, biased by transition matrix if available."""
+        if transition_matrix and transition_matrix.size > 0 and parent_op:
+            return transition_matrix.weighted_choice(parent_op, candidates, self._rng)
+        return self._rng.choice(candidates)
+
+    def mutate(self, program: Program, primitives: list[Primitive],
+               transition_matrix=None) -> Program:
         """Mutate a program: point (swap label), grow (leaf→subtree), or shrink (subtree→leaf).
 
         Point-only mutations can never change tree structure, so grow/shrink
         are essential for discovering programs that require different depths
         than the initial random beam provides.
+
+        When transition_matrix is provided, primitive choices are biased toward
+        known-good compositions from the DreamCoder-style prior.
         """
         prog = copy.deepcopy(program)
         nodes = self._collect_nodes(prog)
@@ -156,12 +167,12 @@ class ARCGrammar(Grammar):
                 target = self._rng.choice(leaves)
                 higher = [p for p in primitives if p.arity >= 1]
                 if higher:
-                    new_op = self._rng.choice(higher)
+                    new_op = self._pick(higher, target.root, transition_matrix)
                     leaf_prims = [p for p in primitives if p.arity <= 1]
                     if not leaf_prims:
                         leaf_prims = primitives
                     children = [
-                        Program(root=self._rng.choice(leaf_prims).name)
+                        Program(root=self._pick(leaf_prims, new_op.name, transition_matrix).name)
                         for _ in range(new_op.arity)
                     ]
                     target.root = new_op.name
@@ -175,7 +186,7 @@ class ARCGrammar(Grammar):
                 target = self._rng.choice(internals)
                 leaf_prims = [p for p in primitives if p.arity <= 1]
                 if leaf_prims:
-                    new_leaf = self._rng.choice(leaf_prims)
+                    new_leaf = self._pick(leaf_prims, target.root, transition_matrix)
                     target.root = new_leaf.name
                     target.children = []
                     target.params = {}
@@ -186,9 +197,14 @@ class ARCGrammar(Grammar):
             prim = _PRIM_MAP.get(target.root)
             current_arity = prim.arity if prim else 1
 
+            # For point mutations, use parent context if available
+            parent_op = ""
+            if program.children:
+                # Find parent of target in the tree
+                parent_op = program.root
             same_arity = [p for p in primitives if p.arity == current_arity]
             if same_arity:
-                new_prim = self._rng.choice(same_arity)
+                new_prim = self._pick(same_arity, parent_op, transition_matrix)
                 target.root = new_prim.name
 
             return prog

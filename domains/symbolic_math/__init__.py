@@ -224,7 +224,8 @@ class SymbolicMathGrammar(Grammar):
     def compose(self, outer: Primitive, inner_programs: list[Program]) -> Program:
         return Program(root=outer.name, children=inner_programs)
 
-    def mutate(self, program: Program, primitives: list[Primitive]) -> Program:
+    def mutate(self, program: Program, primitives: list[Primitive],
+               transition_matrix=None) -> Program:
         """Mutate a program: point (swap label), grow (leaf→subtree), or shrink (subtree→leaf).
 
         Point-only mutations can never change tree structure, so grow/shrink

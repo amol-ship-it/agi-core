@@ -688,4 +688,47 @@ Net +7 train tasks (+8 new, -1 regression). The 8 newly solved tasks:
 
 ---
 
+### Decision 32: Wire transition matrix into beam search mutations (Session 6)
+
+**Date:** 2026-03-12
+**Context:** The DreamCoder-style transition matrix was already built and observed from solutions, but beam search mutations used uniform random primitive selection. Free performance was being left on the table.
+
+**Solution:** Added optional `transition_matrix` parameter to `Grammar.mutate()`. When provided, all three mutation types (point, grow, shrink) use `TransitionMatrix.weighted_choice()` to bias primitive selection toward known-good compositions. The Learner passes the transition matrix during beam search when it has observed data.
+
+**Result:** Backward-compatible (default None). All domains updated. 420 tests pass.
+
+---
+
+### Decision 33: Improve sleep phase compounding with diversity bonus and pruning (Session 6)
+
+**Date:** 2026-03-12
+**Context:** Sleep phase was extracting only 1-2 library entries per 400 tasks, and solve rate didn't improve across rounds. Root causes: (1) scoring didn't reward structural diversity, (2) dead entries accumulated and crowded out better abstractions.
+
+**Solution:**
+- **Diversity bonus**: Subtrees appearing across solutions with different root operations score higher. Formula: `usefulness = tasks_used × log(size+1) × (1 + 0.5 × log(unique_roots))`. This rewards general-purpose compositions over task-specific ones.
+- **Library pruning**: After decay, entries with usefulness < 0.01 AND reuse_count == 0 are removed. Added `Memory.prune_library()` method. This prevents the library from filling with stale abstractions.
+
+**Result:** Library now self-cleans. General abstractions preferred over narrow ones. 420 tests pass.
+
+---
+
+### Decision 34: Add Zork text adventure domain (Session 6)
+
+**Date:** 2026-03-12
+**Context:** The architecture claimed domain-agnosticism but only had 2 domains (ARC grids, symbolic math). Both are stateless input→output transforms. Need to prove the core loop handles sequential, stateful, goal-directed domains.
+
+**Solution:** New `domains/zork/` with:
+- **Game engine**: Room graph with items, locked doors, inventory, flags
+- **30 primitives**: 4 movement + 8 items × 3 verbs + wait + look
+- **16 predicates**: has_item, room_has_item for conditional branching
+- **Drive signal**: Weighted composite (40% room match, 30% inventory Jaccard, 15% score, 15% flags)
+- **4 sample tasks**: navigation, take+move, locked door puzzle, simple traverse
+- **36 tests**: Engine, primitives, environment, grammar, drive, integration
+
+**Key insight:** Programs compose as sequential actions: `go_north(take_lamp(state))`. This is the same tree structure as ARC programs, proving the Program representation handles both stateless transforms and stateful action sequences.
+
+**Result:** Core learner runs on Zork tasks without modification. 420 tests pass (380 → 420).
+
+---
+
 *This document will be updated with each new session and major decision.*
