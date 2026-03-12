@@ -24,7 +24,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from io import TextIOBase
-from typing import Optional
 
 from .types import Task
 from .interfaces import Environment, Grammar, DriveSignal
