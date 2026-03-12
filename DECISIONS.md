@@ -903,4 +903,57 @@ Near-miss analysis of unsolved tasks (50-task set):
 
 ---
 
+## Decision 46: Compute Cap Sweet Spot Experiments — 2026-03-12
+
+### Context
+Ran systematic experiments to find the lowest compute cap that preserves solve quality, testing caps from 100 to unlimited on 400 training tasks.
+
+### Experiment Results (400 training tasks, 2 workers)
+
+| Cap | Solved | Rate | Wall Time | Efficiency |
+|-----|--------|------|-----------|------------|
+| 100 | 76/400 | 19.0% | 72s | 1.06 solves/s |
+| 500K | 77/400 | 19.2% | 86s | 0.90 solves/s |
+| 1M | 78/400 | 19.5% | 152s | 0.51 solves/s |
+| 2M | 79/400 | 19.8% | 277s | 0.29 solves/s |
+| 2.5M | 80/400 | 20.0% | 315s | 0.25 solves/s |
+| 2.8M | 85/400 | 21.2% | 362s | 0.23 solves/s |
+| 3M | 85/400 | 21.2% | 379s | 0.22 solves/s |
+| unlimited | 85/400 | 21.2% | ~379s | 0.22 solves/s |
+
+### Key Findings
+1. **Bimodal distribution**: 76 "fast" tasks solve in <500 evals (any cap works). 9 "slow" tasks (mostly per_object_recolor) need ~13K evals.
+2. **500-eval floor dominates**: The `max(..., 500)` floor in cell-normalization means caps from 100 to ~400K all give identical results.
+3. **Sharp threshold at 2.8M**: All 9 slow tasks appear between 2.5M and 2.8M — no gradual progression.
+4. **Cap=100 captures 89% of solves** (76/85) in 19% of the time.
+
+### Decision
+- **Quick preset**: Changed from 3M to 500K. Same solve count as cap=100 but with headroom for future primitives. ~5x faster than 3M.
+- **Default preset**: Keep 3M. Captures all 85 solves including per_object_recolor.
+- **Contest preset**: Keep 100M. Safety net for beam search.
+
+### User's M1 Max Benchmarks (for reference)
+- Quick mode (50 tasks): ~25s, 17/50 train, 2/50 eval
+- Quick mode (400 tasks): 3m09s, 86/400 train, 20/400 eval
+- Default (400 tasks, cap=500M): 4m30s, 87/400 train, 22/400 eval
+
+---
+
+## Decision 47: Pipeline Summary & Combined Output Files — 2026-03-12
+
+### Context
+Users had to scroll up through train+eval output to find key results. No single file captured the full pipeline run.
+
+### Changes
+1. **Pipeline summary**: At the end of a pipeline run, print a comprehensive summary with all parameters, train results, eval results, and total wall time.
+2. **Combined output files**: Save `phase1_pipeline.json` (parameters + train/eval summaries + all task records + library) and `phase1_pipeline.jsonl` (all task records with phase tags).
+3. **ExperimentResult dataclass**: `run_experiment()` now returns an `ExperimentResult` with culture_path, results_path, jsonl_path, and results_data dict.
+
+### Rationale
+- The summary eliminates scrolling — all key information visible at the end.
+- The combined JSON/JSONL files enable single-file analysis of full pipeline runs.
+- The richer return type enables pipeline mode to access results data without re-reading files.
+
+---
+
 *This document will be updated with each new session and major decision.*

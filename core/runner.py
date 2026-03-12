@@ -39,28 +39,30 @@ from .metrics import extract_metrics, print_compounding_table, save_metrics_json
 # =============================================================================
 
 PRESETS = {
-    # Quick: fast dev loop. Cell-normalized compute cap (~3x median ops).
-    # Analysis on 400-task training set:
-    #   - Solved tasks are bimodal: 72 "fast" (depth 0-1, <1K evals) vs
-    #     23 "slow" (depth 1+, >1K evals from per_object_recolor/triples).
-    #   - 30x30 grids solve in 30 evals when we have the right primitive;
-    #     146s on wrong primitive = wasted compute, not useful search.
-    #   - 2M cap: loses 2 depth-3 solves, caps 49 pathological tasks, ~17% faster.
-    #   - Philosophy: if it takes >3x median ops, fix the primitives, don't brute force.
+    # Quick: fast dev loop. Aggressive cap for speed.
+    # Experiments on 400-task training set (this machine, 2 workers):
+    #   - cap=100:  76/400 (19.0%) in 72s  — 89% of all possible solves
+    #   - cap=3M:   85/400 (21.2%) in 379s — all solves, 5.3x slower
+    #   - Solves are bimodal: 76 "fast" (<500 evals, depth 1-2) vs 9 "slow"
+    #     (per_object_recolor, 12-14K evals, need cap ≥ 2.8M).
+    #   - The 500-eval floor means caps below 400K all give identical results.
+    #   - Philosophy: quick mode optimizes for iteration speed, not max solves.
     "quick": {
         "rounds": 1,
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 50,
-        "compute_cap": 3_000_000,   # 3M depth-weighted ops: 19/50 solves, optimal ROI
+        "compute_cap": 500_000,   # 500K: same solves as 100, small headroom, ~5x faster than 3M
     },
-    # Default: full dataset. Same cap — forces primitive quality.
+    # Default: full dataset. Higher cap to capture per_object_recolor solves.
+    # 3M cap (3750 base evals/task, up to 15K for small grids) catches all
+    # current solves including per_object_recolor tasks.
     "default": {
         "rounds": 1,
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 0,
-        "compute_cap": 3_000_000,   # 3M depth-weighted ops: optimal ROI
+        "compute_cap": 3_000_000,   # 3M: captures all 85 solves on 400 tasks
     },
     # Contest: maximum effort. Keeps modest beam in case deeper search
     # helps on the hardest tasks. Still mainly exhaustive.
@@ -206,9 +208,9 @@ def make_parser(description: str, domain_name: str = "experiment") -> argparse.A
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=f"""
 Presets (the only knob most users need):
-  quick     Fast dev loop (~1 min, 50 tasks, no compute cap)
-  default   Full dataset (all tasks, no compute cap)
-  contest   Maximum accuracy (all tasks, 50M compute cap, beam search)
+  quick     Fast dev loop (~25s, 50 tasks, 500K compute cap)
+  default   Full dataset (all tasks, 3M compute cap)
+  contest   Maximum accuracy (all tasks, 100M compute cap, beam search)
 
 Compute cap examples:
   --compute-cap 50M          # 50 million (cell-normalized per task)
@@ -497,10 +499,19 @@ def resolve_from_preset(args, preset: dict) -> dict:
     }
 
 
-def run_experiment(cfg: ExperimentConfig) -> str:
+@dataclass
+class ExperimentResult:
+    """Result returned by run_experiment for pipeline chaining."""
+    culture_path: str
+    results_path: str
+    jsonl_path: str
+    results_data: dict  # the full results dict (meta + summary + tasks + library)
+
+
+def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
     """Run a complete wake-sleep experiment on any domain.
 
-    Returns the path to the saved culture file (for pipeline chaining).
+    Returns an ExperimentResult with culture path, results path, and data.
 
     This is the top-level entry point. It:
     1. Sets up output files (log, jsonl, json, metrics, library)
@@ -532,10 +543,12 @@ def run_experiment(cfg: ExperimentConfig) -> str:
         tee = TeeWriter(log_path, sys.stdout)
         sys.stdout = tee
 
+    results_data = {}
     try:
-        _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
-                        library_path, metrics_json_path, metrics_csv_path,
-                        culture_path)
+        results_data = _run_experiment(cfg, run_timestamp, log_path, jsonl_path,
+                                       results_path, library_path,
+                                       metrics_json_path, metrics_csv_path,
+                                       culture_path)
     except KeyboardInterrupt:
         print("\n\nAborted by user — partial results above.\n")
         raise  # propagate so pipeline mode stops too
@@ -544,7 +557,12 @@ def run_experiment(cfg: ExperimentConfig) -> str:
             sys.stdout = tee._original
             tee.close()
 
-    return culture_path
+    return ExperimentResult(
+        culture_path=culture_path,
+        results_path=results_path,
+        jsonl_path=jsonl_path,
+        results_data=results_data,
+    )
 
 
 def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
@@ -899,3 +917,5 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print("  Done.")
     hline("═")
     print()
+
+    return results_data
