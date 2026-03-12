@@ -5194,6 +5194,453 @@ def replicate_small_object_to_large(grid: Grid) -> Grid:
 
 
 # =============================================================================
+# Batch 7: Near-miss targeted primitives
+# =============================================================================
+
+def move_objects_to_contact(grid: Grid) -> Grid:
+    """Move smaller objects toward the largest until they touch.
+
+    The largest connected component stays anchored. All other objects
+    slide toward it along the dominant axis until adjacent.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+    arr = to_np(grid)
+
+    # Find connected components
+    visited = set()
+    objects = []
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and (r, c) not in visited:
+                obj = []
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop(0)
+                    obj.append((cr, cc, int(arr[cr, cc])))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in visited and arr[nr, nc] != 0:
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                objects.append(obj)
+
+    if len(objects) < 2:
+        return grid
+
+    # Largest object is the anchor
+    objects.sort(key=len, reverse=True)
+    anchor = objects[0]
+    anchor_cells = {(r, c) for r, c, v in anchor}
+    anchor_cr = sum(r for r, c, v in anchor) / len(anchor)
+    anchor_cc = sum(c for r, c, v in anchor) / len(anchor)
+
+    result = np.zeros_like(arr)
+    # Place anchor
+    for r, c, v in anchor:
+        result[r, c] = v
+
+    # Move each non-anchor object toward anchor until contact
+    for obj in objects[1:]:
+        obj_cr = sum(r for r, c, v in obj) / len(obj)
+        obj_cc = sum(c for r, c, v in obj) / len(obj)
+        dr = 1 if anchor_cr > obj_cr else (-1 if anchor_cr < obj_cr else 0)
+        dc = 1 if anchor_cc > obj_cc else (-1 if anchor_cc < obj_cc else 0)
+
+        # Only move in the dominant direction
+        if abs(anchor_cr - obj_cr) >= abs(anchor_cc - obj_cc):
+            dc = 0
+        else:
+            dr = 0
+
+        # Slide until would overlap with anchor or go OOB
+        shift = 0
+        for step in range(1, max(h, w)):
+            would_overlap = False
+            for r, c, v in obj:
+                nr, nc = r + dr * step, c + dc * step
+                if (nr, nc) in anchor_cells:
+                    would_overlap = True
+                    break
+                if not (0 <= nr < h and 0 <= nc < w):
+                    would_overlap = True
+                    break
+            if would_overlap:
+                shift = step - 1
+                break
+            shift = step
+
+        for r, c, v in obj:
+            nr, nc = r + dr * shift, c + dc * shift
+            if 0 <= nr < h and 0 <= nc < w:
+                result[nr, nc] = v
+
+    return from_np(result)
+
+
+def project_color_to_object_face(grid: Grid) -> Grid:
+    """Project isolated pixels' colors onto the nearest face of the main object.
+
+    Single-pixel markers shoot their color onto the closest edge cell
+    of the largest connected component.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+    arr = to_np(grid)
+
+    # Find connected components
+    visited = set()
+    objects = []
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and (r, c) not in visited:
+                obj = []
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop(0)
+                    obj.append((cr, cc, int(arr[cr, cc])))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in visited and arr[nr, nc] != 0:
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                objects.append(obj)
+
+    if len(objects) < 2:
+        return grid
+
+    # Find the largest object and single-pixel markers
+    objects.sort(key=len, reverse=True)
+    main_obj = objects[0]
+    main_cells = {(r, c) for r, c, v in main_obj}
+    markers = [(r, c, v) for obj in objects[1:] if len(obj) == 1 for r, c, v in obj]
+
+    if not markers:
+        return grid
+
+    result = arr.copy()
+
+    # Find edge cells of main object (cells adjacent to empty space)
+    edge_cells = set()
+    for r, c, v in main_obj:
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in main_cells:
+                edge_cells.add((r, c))
+                break
+
+    # For each marker, find the nearest edge cell in same row or column
+    for mr, mc, mv in markers:
+        best_r, best_c = -1, -1
+        best_dist = float('inf')
+        for er, ec in edge_cells:
+            # Prefer same row or same column alignment
+            if er == mr or ec == mc:
+                dist = abs(er - mr) + abs(ec - mc)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_r, best_c = er, ec
+        if best_r >= 0:
+            result[best_r, best_c] = mv
+
+    return from_np(result)
+
+
+def align_objects_vertically(grid: Grid) -> Grid:
+    """Align all objects to the vertical center of the grid.
+
+    Move each connected component so its vertical center matches
+    the grid's vertical center, keeping horizontal positions.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+    arr = to_np(grid)
+
+    # Find connected components
+    visited = set()
+    objects = []
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and (r, c) not in visited:
+                obj = []
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop(0)
+                    obj.append((cr, cc, int(arr[cr, cc])))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in visited and arr[nr, nc] != 0:
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                objects.append(obj)
+
+    if len(objects) < 1:
+        return grid
+
+    result = np.zeros_like(arr)
+    grid_center_r = h / 2.0
+
+    for obj in objects:
+        obj_center_r = sum(r for r, c, v in obj) / len(obj)
+        obj_h = max(r for r, c, v in obj) - min(r for r, c, v in obj) + 1
+        # Move to center vertically
+        shift_r = int(round(grid_center_r - obj_center_r))
+
+        for r, c, v in obj:
+            nr = r + shift_r
+            if 0 <= nr < h:
+                result[nr, c] = v
+
+    return from_np(result)
+
+
+def fill_grid_cells_between_markers(grid: Grid) -> Grid:
+    """In a grid divided by lines, fill cells between same-colored markers.
+
+    Detects grid structure (rows of a repeating color), identifies colored
+    markers in cells, and fills all cells between same-colored markers
+    in the same row with that color.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+    arr = to_np(grid)
+
+    # Detect grid lines: find the most common non-zero color on rows/cols
+    # that span the full width or height
+    line_color = 0
+    for c_val in range(1, 10):
+        # Check if any full row is this color
+        for r in range(h):
+            if all(arr[r, c] == c_val for c in range(w)):
+                line_color = c_val
+                break
+        if line_color:
+            break
+
+    if line_color == 0:
+        # Try full columns
+        for c_val in range(1, 10):
+            for c in range(w):
+                if all(arr[r, c] == c_val for r in range(h)):
+                    line_color = c_val
+                    break
+            if line_color:
+                break
+
+    if line_color == 0:
+        return grid
+
+    # Find grid line rows
+    line_rows = [r for r in range(h) if all(arr[r, c] == line_color for c in range(w))]
+    line_cols = [c for c in range(w) if all(arr[r, c] == line_color for r in range(h))]
+
+    if not line_rows or not line_cols:
+        return grid
+
+    # Identify cell boundaries
+    row_bands = []
+    prev = 0
+    for lr in line_rows:
+        if lr > prev:
+            row_bands.append((prev, lr))
+        prev = lr + 1
+    if prev < h:
+        row_bands.append((prev, h))
+
+    col_bands = []
+    prev = 0
+    for lc in line_cols:
+        if lc > prev:
+            col_bands.append((prev, lc))
+        prev = lc + 1
+    if prev < w:
+        col_bands.append((prev, w))
+
+    # For each cell, determine its color (majority non-zero, non-line color)
+    cell_colors = {}  # (ri, ci) -> color
+    for ri, (r0, r1) in enumerate(row_bands):
+        for ci, (c0, c1) in enumerate(col_bands):
+            colors = []
+            for r in range(r0, r1):
+                for c in range(c0, c1):
+                    if arr[r, c] != 0 and arr[r, c] != line_color:
+                        colors.append(int(arr[r, c]))
+            if colors:
+                cell_colors[(ri, ci)] = Counter(colors).most_common(1)[0][0]
+
+    # Fill between same-colored cells in the same row
+    result = arr.copy()
+    for ri, (r0, r1) in enumerate(row_bands):
+        by_color: dict[int, list[int]] = {}
+        for ci in range(len(col_bands)):
+            if (ri, ci) in cell_colors:
+                color = cell_colors[(ri, ci)]
+                if color not in by_color:
+                    by_color[color] = []
+                by_color[color].append(ci)
+
+        for color, cols in by_color.items():
+            if len(cols) < 2:
+                continue
+            min_ci, max_ci = min(cols), max(cols)
+            for ci in range(min_ci, max_ci + 1):
+                if (ri, ci) not in cell_colors:
+                    c0, c1 = col_bands[ci]
+                    for r in range(r0, r1):
+                        for c in range(c0, c1):
+                            if result[r, c] != line_color:
+                                result[r, c] = color
+
+    # Also fill between same-colored cells in the same column
+    for ci, (c0, c1) in enumerate(col_bands):
+        by_color2: dict[int, list[int]] = {}
+        for ri in range(len(row_bands)):
+            if (ri, ci) in cell_colors:
+                color = cell_colors[(ri, ci)]
+                if color not in by_color2:
+                    by_color2[color] = []
+                by_color2[color].append(ri)
+
+        for color, rows in by_color2.items():
+            if len(rows) < 2:
+                continue
+            min_ri, max_ri = min(rows), max(rows)
+            for ri in range(min_ri, max_ri + 1):
+                if (ri, ci) not in cell_colors:
+                    r0, r1 = row_bands[ri]
+                    for r in range(r0, r1):
+                        for c in range(c0, c1):
+                            if result[r, c] != line_color:
+                                result[r, c] = color
+
+    return from_np(result)
+
+
+def absorb_noise_to_nearest_line(grid: Grid) -> Grid:
+    """Move isolated pixels to extend the nearest same-color line.
+
+    For each isolated pixel, find the nearest vertical/horizontal line
+    of the same color. Extend that line by 1 pixel toward the isolated pixel.
+    Remove the isolated pixel.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+    arr = to_np(grid)
+
+    # Find vertical lines (columns where most cells share a color)
+    lines = []  # (orientation, position, color)
+    for c in range(w):
+        col = arr[:, c]
+        non_zero = col[col != 0]
+        if len(non_zero) >= h * 0.6:
+            color = int(Counter(non_zero.tolist()).most_common(1)[0][0])
+            if sum(1 for v in col if v == color) >= h * 0.6:
+                lines.append(('v', c, color))
+
+    for r in range(h):
+        row = arr[r, :]
+        non_zero = row[row != 0]
+        if len(non_zero) >= w * 0.6:
+            color = int(Counter(non_zero.tolist()).most_common(1)[0][0])
+            if sum(1 for v in row if v == color) >= w * 0.6:
+                lines.append(('h', r, color))
+
+    if not lines:
+        return grid
+
+    # Find isolated pixels (not part of any line)
+    line_cells = set()
+    for orient, pos, color in lines:
+        if orient == 'v':
+            for r in range(h):
+                if arr[r, pos] == color:
+                    line_cells.add((r, pos))
+        else:
+            for c in range(w):
+                if arr[pos, c] == color:
+                    line_cells.add((pos, c))
+
+    result = arr.copy()
+
+    # Find isolated colored pixels not on lines
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and (r, c) not in line_cells:
+                pixel_color = int(arr[r, c])
+                # Find nearest same-color line
+                best_line = None
+                best_dist = float('inf')
+                for orient, pos, lcolor in lines:
+                    if lcolor != pixel_color:
+                        continue
+                    if orient == 'v':
+                        dist = abs(c - pos)
+                    else:
+                        dist = abs(r - pos)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_line = (orient, pos, lcolor)
+
+                # Remove the noise pixel regardless
+                result[r, c] = 0
+                if best_line:
+                    orient, pos, lcolor = best_line
+                    # Extend line by 1 toward the noise pixel
+                    if orient == 'v':
+                        dc = 1 if c > pos else -1
+                        result[r, pos + dc] = lcolor
+                    else:
+                        dr = 1 if r > pos else -1
+                        result[pos + dr, c] = lcolor
+
+    return from_np(result)
+
+
+def compact_shape(grid: Grid) -> Grid:
+    """Make shapes more compact by closing diagonal gaps.
+
+    For each connected component, fill in pixels that would make the
+    bounding box more filled while preserving the shape's outline.
+    Specifically, close 1-pixel diagonal gaps in contours.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+    arr = to_np(grid)
+    result = arr.copy()
+
+    # For each non-zero pixel, check if it has diagonal neighbors
+    # that share a color but no orthogonal path between them
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                color = arr[r, c]
+                # Check diagonal neighbors
+                for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and arr[nr, nc] == color:
+                        # Check if there's NO orthogonal connection
+                        mid1 = arr[r, nc] if 0 <= nc < w else -1
+                        mid2 = arr[nr, c] if 0 <= nr < h else -1
+                        if mid1 != color and mid2 != color:
+                            # Fill one of the gap cells
+                            if mid1 == 0 and 0 <= nc < w:
+                                result[r, nc] = color
+                            elif mid2 == 0 and 0 <= nr < h:
+                                result[nr, c] = color
+
+    return from_np(result)
+
+
+# =============================================================================
 # Build the ARC primitive registry
 # =============================================================================
 
@@ -5440,6 +5887,13 @@ def _build_arc_primitives() -> list[Primitive]:
         ("fill_between_diag",       fill_between_diagonal),
         ("complete_border_pattern", complete_border_pattern),
         ("replicate_small_obj",     replicate_small_object_to_large),
+        # --- Batch 7: near-miss targeted primitives ---
+        ("move_to_contact",         move_objects_to_contact),
+        ("project_color_face",      project_color_to_object_face),
+        ("align_v_center",          align_objects_vertically),
+        ("fill_grid_between",       fill_grid_cells_between_markers),
+        ("absorb_noise_to_line",    absorb_noise_to_nearest_line),
+        ("compact_shape",           compact_shape),
     ]
 
     for name, fn in unary_ops:
