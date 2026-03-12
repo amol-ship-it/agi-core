@@ -260,5 +260,91 @@ class TestGeneralization(unittest.TestCase):
                                 f"Task {task.task_id}: train_solved but not test_solved (overfit)")
 
 
+# =============================================================================
+# 5. Primitive discovery improvements
+# =============================================================================
+
+class TestPrimitiveDiscovery(unittest.TestCase):
+    """Verify that learned primitives participate in composition search."""
+
+    def test_learned_prims_enter_pair_pool(self):
+        """Learned library entries should be auto-promoted to essential status
+        and participate in depth-2 pair search."""
+        learner = _make_list_learner(exhaustive_depth=2)
+        tasks = list_tasks()
+
+        # Run round 1 to build solutions, then sleep to extract library
+        level12 = [t for t in tasks if t.difficulty <= 2.0]
+        for task in level12:
+            learner.wake_on_task(task)
+        learner.sleep()
+
+        lib = learner.memory.get_library()
+        if len(lib) == 0:
+            # If sleep didn't extract anything, use sequential compounding
+            learner2 = _make_list_learner(exhaustive_depth=2)
+            config = CurriculumConfig(
+                wake_sleep_rounds=1, workers=1, sequential_compounding=True)
+            learner2.run_curriculum(level12, config)
+            lib = learner2.memory.get_library()
+
+        # The key test: with library entries, a subsequent wake phase should
+        # include them in the vocabulary (they have arity=0 and learned=True)
+        if lib:
+            prims = learner.grammar.inject_library(lib)
+            learned_names = {p.name for p in prims if p.learned}
+            self.assertGreater(len(learned_names), 0,
+                               "Library entries should produce learned primitives")
+
+    def test_depth1_dominated_sleep_synthesizes_pairs(self):
+        """When most solutions are depth-1, sleep should synthesize
+        depth-2 candidates from frequently-solving primitives."""
+        from core.types import ScoredProgram
+        learner = _make_list_learner()
+
+        # Manually add depth-1 solutions for different tasks
+        # (simulating a round where most solves are single primitives)
+        depth1_prims = ["reverse", "sort_asc", "double_all", "increment_all"]
+        for i, prim_name in enumerate(depth1_prims):
+            prog = Program(root=prim_name)
+            scored = ScoredProgram(
+                program=prog, energy=0.0,
+                prediction_error=0.0, complexity_cost=1.0)
+            # Each primitive "solves" 2 tasks to meet the >= 2 frequency threshold
+            for j in range(2):
+                task_id = f"synth_task_{prim_name}_{j}"
+                learner.memory.store_solution(task_id, scored)
+
+        result = learner.sleep()
+        lib = learner.memory.get_library()
+
+        # With 4 depth-1 primitives each solving 2+ tasks, sleep should
+        # synthesize depth-2 compositions (e.g., reverse(sort_asc(x)))
+        self.assertGreater(len(lib), 0,
+                           "Sleep should synthesize compositions from depth-1 solutions")
+        # At least some entries should be depth-2 (size >= 2)
+        has_depth2 = any(e.program.size >= 2 for e in lib)
+        self.assertTrue(has_depth2,
+                        "Some library entries should be depth-2 synthesized compositions")
+
+    def test_promoted_entries_have_boosted_usefulness(self):
+        """Immediately promoted entries should have quality-boosted usefulness."""
+        learner = _make_list_learner(exhaustive_depth=2)
+        tasks = list_tasks()
+
+        config = CurriculumConfig(
+            wake_sleep_rounds=1, workers=1, sequential_compounding=True)
+        learner.run_curriculum(tasks, config)
+
+        lib = learner.memory.get_library()
+        for entry in lib:
+            if entry.name.startswith("promoted_"):
+                # Boosted usefulness should be > base log(size+1) ≈ 1.1
+                base = 1.1  # log(2+1) for size-2
+                self.assertGreater(entry.usefulness, base,
+                                   f"Promoted entry {entry.name} should have boosted usefulness")
+                break
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -249,6 +249,20 @@ class Learner:
 
         logger.debug(f"  [wake] Phase 1 enumeration: {time.time()-t_phase:.2f}s, {n_evals} evals")
 
+        # Partial credit for learned primitives that appeared in near-miss
+        # programs. Even when a learned entry doesn't end up in the final
+        # solution, appearing in promising candidates indicates usefulness
+        # and should slow decay so the entry survives to future rounds.
+        if record and enum_candidates:
+            library_names = {e.name for e in self.memory.get_library()}
+            if library_names:
+                near_miss_thresh = cfg.near_miss_threshold
+                for sp in enum_candidates:
+                    if sp.prediction_error < near_miss_thresh:
+                        for st in self._enumerate_subtrees(sp.program):
+                            if st.root in library_names:
+                                self.memory.update_usefulness(st.root, 0.25)
+
         # --- Phase 1.1: Object decomposition ---
         # Try applying the same transform to each object independently.
         # High-ROI for tasks where objects are transformed in-place.
@@ -588,6 +602,35 @@ class Learner:
                 if key not in subtree_counts:
                     subtree_counts[key] = []
                 subtree_counts[key].append((subtree, task_id))
+
+        # 2b. Synthesize compositions from depth-1-dominated rounds.
+        # When most solutions are single primitives, there are no multi-node
+        # subtrees to extract. Synthesize depth-2 candidates by composing
+        # frequently-solving primitives with each other.
+        depth1_solutions = {
+            tid: s for tid, s in solutions.items() if s.program.size == 1
+        }
+        if len(depth1_solutions) > len(solutions) * 0.6 and len(solutions) >= 4:
+            prim_to_tasks: dict[str, list[str]] = {}
+            for tid, scored in depth1_solutions.items():
+                name = scored.program.root
+                prim_to_tasks.setdefault(name, []).append(tid)
+
+            frequent = [
+                name for name, tids in prim_to_tasks.items() if len(tids) >= 2
+            ]
+            for i, a in enumerate(frequent):
+                for b in frequent[i + 1:]:
+                    for outer, inner in [(a, b), (b, a)]:
+                        synth = Program(root=outer, children=[Program(root=inner)])
+                        key = repr(synth)
+                        if key not in subtree_counts:
+                            combined = list(
+                                set(prim_to_tasks[a] + prim_to_tasks[b])
+                            )
+                            subtree_counts[key] = [
+                                (synth, tid) for tid in combined
+                            ]
 
         # Build a map of task_id → solution root op for diversity scoring
         task_roots = {tid: scored.program.root for tid, scored in solutions.items()}
@@ -1008,10 +1051,13 @@ class Learner:
             if len(self.memory.get_library()) >= self.sleep_cfg.max_library_size:
                 break
 
+            # Boost usefulness based on parent solution quality:
+            # perfect solve (error=0) → 5× base, marginal (error≥0.3) → 2× base.
+            quality_boost = max(2.0, 5.0 - scored.prediction_error * 10)
             entry = LibraryEntry(
                 name=f"promoted_{len(self.memory.get_library())}",
                 program=subtree,
-                usefulness=math.log(subtree.size + 1),
+                usefulness=math.log(subtree.size + 1) * quality_boost,
                 reuse_count=0,
                 source_tasks=[task_id],
                 domain="",
@@ -1383,9 +1429,12 @@ class Learner:
                 break
 
         # Phase 2: essentials not already included, sorted by depth-1
-        # score (most task-relevant first)
+        # score (most task-relevant first).  Learned primitives are
+        # auto-promoted to essential status so they always get pair slots.
+        learned_names_set = frozenset(p.name for p in primitives if p.learned)
+        effective_essentials = essential_names | learned_names_set
         remaining_essentials = [
-            n for n in essential_names
+            n for n in effective_essentials
             if n not in seen_names and n in prim_by_name
         ]
         remaining_essentials.sort(
@@ -1409,10 +1458,14 @@ class Learner:
         # Inner steps with very high error (>0.7) rarely help in composition.
         # Keep the full pair_pool for outer steps (they transform results)
         # but restrict inner steps to those that produce useful intermediate results.
+        # Exception: learned primitives bypass this filter — they represent
+        # proven compositions and may produce useful intermediates even if
+        # their depth-1 score is high on this particular task.
         INNER_STEP_THRESHOLD = 0.70
         inner_pool = [
             name for name in pair_pool
             if depth1_scores.get(name, 1.0) <= INNER_STEP_THRESHOLD
+            or name in learned_names_set
         ]
         # Fallback: if too few pass threshold, use top half by score
         if len(inner_pool) < pair_top_k // 3:
@@ -1464,9 +1517,9 @@ class Learner:
                     triple_pool.append(name)
                     triple_seen.add(name)
 
-        # Phase 2: essentials
+        # Phase 2: essentials (including learned primitives)
         triple_essential_cap = triple_top_k * 2 // 3
-        for name in essential_names:
+        for name in effective_essentials:
             if len(triple_pool) >= triple_essential_cap:
                 break
             if name not in triple_seen and name in prim_by_name:
@@ -1510,7 +1563,6 @@ class Learner:
     # Private helpers
     # -------------------------------------------------------------------------
 
-    @staticmethod
     @staticmethod
     def _avg_cells(task: Task) -> int:
         """Max cell count across training input grids.
