@@ -3167,7 +3167,11 @@ def repeat_pattern_to_size(grid: Grid) -> Grid:
 
 
 def extend_lines_to_contact(grid: Grid) -> Grid:
-    """Extend non-bg colored segments to fill gaps within their row or column."""
+    """Extend non-bg colored segments to fill gaps within their row or column.
+
+    Handles each color independently: if a row has color A at cols 2,5 and
+    color B at cols 7,9, fills A between 2-5 and B between 7-9.
+    """
     if not grid or not grid[0]:
         return grid
     h, w = len(grid), len(grid[0])
@@ -3175,26 +3179,36 @@ def extend_lines_to_contact(grid: Grid) -> Grid:
     flat = [v for row in grid for v in row]
     bg = Counter(flat).most_common(1)[0][0]
     result = [row[:] for row in grid]
-    # Extend horizontally
+    # Extend horizontally — per color
     for r in range(h):
-        non_bg_cols = [(c, grid[r][c]) for c in range(w) if grid[r][c] != bg]
-        if len(non_bg_cols) >= 2:
-            min_c, fill_color = non_bg_cols[0]
-            max_c = non_bg_cols[-1][0]
-            if all(grid[r][c] in (bg, fill_color) for c in range(min_c, max_c + 1)):
+        by_color: dict[int, list[int]] = {}
+        for c in range(w):
+            if grid[r][c] != bg:
+                color = grid[r][c]
+                if color not in by_color:
+                    by_color[color] = []
+                by_color[color].append(c)
+        for color, cols in by_color.items():
+            if len(cols) >= 2:
+                min_c, max_c = cols[0], cols[-1]
                 for c in range(min_c, max_c + 1):
                     if result[r][c] == bg:
-                        result[r][c] = fill_color
-    # Extend vertically
+                        result[r][c] = color
+    # Extend vertically — per color
     for c in range(w):
-        non_bg_rows = [(r, grid[r][c]) for r in range(h) if grid[r][c] != bg]
-        if len(non_bg_rows) >= 2:
-            min_r, fill_color = non_bg_rows[0]
-            max_r = non_bg_rows[-1][0]
-            if all(grid[r][c] in (bg, fill_color) for r in range(min_r, max_r + 1)):
+        by_color2: dict[int, list[int]] = {}
+        for r in range(h):
+            if grid[r][c] != bg:
+                color = grid[r][c]
+                if color not in by_color2:
+                    by_color2[color] = []
+                by_color2[color].append(r)
+        for color, rows in by_color2.items():
+            if len(rows) >= 2:
+                min_r, max_r = rows[0], rows[-1]
                 for r in range(min_r, max_r + 1):
                     if result[r][c] == bg:
-                        result[r][c] = fill_color
+                        result[r][c] = color
     return result
 
 
@@ -4423,6 +4437,56 @@ def complete_sym_180(grid: Grid) -> Grid:
                 if c0 <= sc2 <= c1 and result[r][sc2] != 0:
                     result[r][c] = result[r][sc2]
                     changed = True
+        if not changed:
+            break
+    return result
+
+
+def complete_sym_90(grid: Grid) -> Grid:
+    """Complete 4-fold (90°) rotational symmetry around the bounding box center.
+
+    For each zero cell, checks if any of its 90°, 180°, or 270° rotated
+    counterparts (relative to the bounding box center) are non-zero, and
+    fills it with that value. Iterates until stable.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    nz_rows = [r for r in range(h) if any(grid[r][c] != 0 for c in range(w))]
+    nz_cols = [c for c in range(w) if any(grid[r][c] != 0 for r in range(h))]
+    if not nz_rows or not nz_cols:
+        return grid
+
+    r0, r1 = min(nz_rows), max(nz_rows)
+    c0, c1 = min(nz_cols), max(nz_cols)
+    cr2 = r0 + r1  # 2x center row (avoid float)
+    cc2 = c0 + c1  # 2x center col
+
+    result = [row[:] for row in grid]
+    for _ in range(4):
+        changed = False
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                if result[r][c] != 0:
+                    continue
+                # Try 90°, 180°, 270° rotations
+                # 90° CW: (r,c) -> (c, cr2+cc2-r) relative to center
+                # In terms of grid coords:
+                dr, dc = 2 * r - cr2, 2 * c - cc2
+                rotations = [
+                    (-dc + cr2, dr + cc2),   # 90° CW
+                    (-dr + cr2, -dc + cc2),  # 180°
+                    (dc + cr2, -dr + cc2),   # 270° CW
+                ]
+                for sr2, sc2 in rotations:
+                    if sr2 % 2 != 0 or sc2 % 2 != 0:
+                        continue
+                    sr, sc = sr2 // 2, sc2 // 2
+                    if r0 <= sr <= r1 and c0 <= sc <= c1 and result[sr][sc] != 0:
+                        result[r][c] = result[sr][sc]
+                        changed = True
+                        break
         if not changed:
             break
     return result
@@ -5869,6 +5933,7 @@ def _build_arc_primitives() -> list[Primitive]:
         ("rect_around_objs",        draw_rect_around_objects),
         # --- Batch 5: targeted near-miss improvements ---
         ("complete_sym_180",        complete_sym_180),
+        ("complete_sym_90",         complete_sym_90),
         ("remove_small_2",          remove_small_components),
         ("remove_small_3",          remove_components_lte3),
         ("keep_solid_rect",         keep_solid_rectangle),
