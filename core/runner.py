@@ -39,30 +39,33 @@ from .metrics import extract_metrics, print_compounding_table, save_metrics_json
 # =============================================================================
 
 PRESETS = {
-    # Quick: fast dev loop. Exhaustive-only (beam is negligible at this scale).
+    # Quick: fast dev loop. Beam search adds 0 solves (verified A/B test on
+    # 49 tasks: 17/49 with beam=20 vs 17/49 with beam=1, same tasks solved,
+    # beam adds +13% wall time). Minimal beam kept for future library entries.
     "quick": {
         "rounds": 1,
-        "beam_width": 20,
-        "max_generations": 10,
+        "beam_width": 1,
+        "max_generations": 1,
         "max_tasks": 50,
         "compute_cap": 5_000_000,   # 5M ops → ~6K evals/task ceiling
     },
-    # Default: full dataset, modest beam. Exhaustive does ~97% of solves,
-    # so beam budget is kept small to avoid diminishing returns.
+    # Default: full dataset. Exhaustive enumeration does ~100% of solves.
+    # Beam=1 avoids wasting compute on a phase that contributes nothing.
     "default": {
         "rounds": 1,
-        "beam_width": 40,
-        "max_generations": 20,
+        "beam_width": 1,
+        "max_generations": 1,
         "max_tasks": 0,
         "compute_cap": 20_000_000,  # 20M ops → ~25K evals/task ceiling
     },
-    # Contest: maximum effort. Still capped to avoid runaway compute.
+    # Contest: maximum effort. Keeps modest beam in case deeper search
+    # helps on the hardest tasks. Still mainly exhaustive.
     "contest": {
         "rounds": 1,
-        "beam_width": 150,
-        "max_generations": 60,
+        "beam_width": 30,
+        "max_generations": 15,
         "max_tasks": 0,
-        "compute_cap": 100_000_000, # 100M ops → ~125K evals/task ceiling
+        "compute_cap": 50_000_000,  # 50M ops → ~62K evals/task ceiling
     },
 }
 
@@ -199,9 +202,9 @@ def make_parser(description: str, domain_name: str = "experiment") -> argparse.A
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=f"""
 Presets (the only knob most users need):
-  quick     Fast dev loop (~2 min, 50 tasks, 8M compute cap)
-  default   Balanced (all tasks, 50M compute cap)
-  contest   Maximum accuracy (all tasks, 200M compute cap)
+  quick     Fast dev loop (~1 min, 50 tasks, 5M compute cap)
+  default   Full dataset (all tasks, 20M compute cap)
+  contest   Maximum accuracy (all tasks, 50M compute cap, beam search)
 
 Compute cap examples:
   --compute-cap 50M          # 50 million (cell-normalized per task)

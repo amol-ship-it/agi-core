@@ -994,7 +994,7 @@ class TestRunnerHelpers(unittest.TestCase):
         )
         resolved = resolve_from_preset(args, PRESETS["quick"])
         self.assertEqual(resolved["rounds"], 1)
-        self.assertEqual(resolved["beam_width"], 20)
+        self.assertEqual(resolved["beam_width"], 1)
         self.assertEqual(resolved["compute_cap"], 5_000_000)
 
     def test_resolve_from_preset_overrides(self):
