@@ -193,17 +193,17 @@ class Learner:
         pareto: dict[int, ParetoEntry] = {}
         enum_candidates: list[ScoredProgram] = []
 
-        # Cell-normalized eval budget: scale budget by grid size.
-        # Small grids are cheap to evaluate → more evals allowed.
-        # Large grids are expensive → fewer evals.
-        # Formula from agi-mvp-general: min(max(cap/cells, 500), max_evals)
+        # Cell-normalized compute budget (deterministic, reproducible).
+        # The eval_budget from the runner is based on DEFAULT_CELLS=800.
+        # Scale inversely with actual grid size: larger grids get fewer evals
+        # because each eval is more expensive (more cells to transform/compare).
         DEFAULT_CELLS = 800
+        cells = self._avg_cells(task)
         if cfg.eval_budget > 0:
-            cells = self._avg_cells(task)
-            # Scale: if cells < DEFAULT_CELLS, allow more evals (cheaper)
-            # If cells > DEFAULT_CELLS, allow fewer evals
-            scaled = max(cfg.eval_budget * DEFAULT_CELLS // max(cells, 1), 500)
-            eval_budget = min(scaled, cfg.eval_budget * 4)  # cap at 4x base
+            # Scale: budget * (DEFAULT / actual_cells)
+            # Large grids (>800 cells) get fewer evals; small grids get more.
+            eval_budget = max(cfg.eval_budget * DEFAULT_CELLS // max(cells, 1), 500)
+            eval_budget = min(eval_budget, cfg.eval_budget * 4)  # cap at 4x base
         else:
             eval_budget = 0  # unlimited
 
@@ -1404,13 +1404,24 @@ class Learner:
     # -------------------------------------------------------------------------
 
     @staticmethod
+    @staticmethod
     def _avg_cells(task: Task) -> int:
-        """Average cell count across training input grids."""
+        """Max cell count across training input grids.
+
+        Uses max (not average) because the most expensive input determines
+        the per-evaluation cost — primitives must process every input.
+        """
         grids = [inp for inp, _ in task.train_examples]
         if not grids:
             return 1
-        total = sum(len(g) * len(g[0]) for g in grids if g and len(g) > 0 and len(g[0]) > 0)
-        return max(1, total // len(grids))
+        sizes = []
+        for g in grids:
+            try:
+                if g and len(g) > 0 and len(g[0]) > 0:
+                    sizes.append(len(g) * len(g[0]))
+            except TypeError:
+                continue  # non-grid input (e.g. scalar)
+        return max(sizes) if sizes else 1
 
     def _init_beam(self, primitives: list[Primitive], n: int) -> list[Program]:
         """

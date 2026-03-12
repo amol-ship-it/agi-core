@@ -39,26 +39,30 @@ from .metrics import extract_metrics, print_compounding_table, save_metrics_json
 # =============================================================================
 
 PRESETS = {
+    # Quick: fast dev loop. Exhaustive-only (beam is negligible at this scale).
     "quick": {
         "rounds": 1,
-        "beam_width": 30,
-        "max_generations": 15,
+        "beam_width": 20,
+        "max_generations": 10,
         "max_tasks": 50,
-        "compute_cap": 8_000_000,   # 8M ops → ~10K evals/task ceiling
+        "compute_cap": 5_000_000,   # 5M ops → ~6K evals/task ceiling
     },
+    # Default: full dataset, modest beam. Exhaustive does ~97% of solves,
+    # so beam budget is kept small to avoid diminishing returns.
     "default": {
         "rounds": 1,
-        "beam_width": 80,
-        "max_generations": 40,
+        "beam_width": 40,
+        "max_generations": 20,
         "max_tasks": 0,
-        "compute_cap": 50_000_000,  # 50M ops → ~62K evals/task ceiling
+        "compute_cap": 20_000_000,  # 20M ops → ~25K evals/task ceiling
     },
+    # Contest: maximum effort. Still capped to avoid runaway compute.
     "contest": {
         "rounds": 1,
-        "beam_width": 250,
-        "max_generations": 100,
+        "beam_width": 150,
+        "max_generations": 60,
         "max_tasks": 0,
-        "compute_cap": 200_000_000, # 200M ops → ~250K evals/task ceiling
+        "compute_cap": 100_000_000, # 100M ops → ~125K evals/task ceiling
     },
 }
 
