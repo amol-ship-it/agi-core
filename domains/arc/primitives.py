@@ -531,6 +531,123 @@ def _jit_most_common_overall(arr):
     return best
 
 
+@nb.njit(cache=True)
+def _jit_extend_lines_to_contact(arr, result, bg):
+    """Extend colored segments to fill gaps within row/column, per color."""
+    h, w = arr.shape
+    # Horizontal
+    for r in range(h):
+        for color in range(10):
+            if color == bg:
+                continue
+            c_min = w
+            c_max = -1
+            for c in range(w):
+                if arr[r, c] == color:
+                    if c < c_min:
+                        c_min = c
+                    if c > c_max:
+                        c_max = c
+            if c_max > c_min:
+                for c in range(c_min, c_max + 1):
+                    if result[r, c] == bg:
+                        result[r, c] = color
+    # Vertical
+    for c in range(w):
+        for color in range(10):
+            if color == bg:
+                continue
+            r_min = h
+            r_max = -1
+            for r in range(h):
+                if arr[r, c] == color:
+                    if r < r_min:
+                        r_min = r
+                    if r > r_max:
+                        r_max = r
+            if r_max > r_min:
+                for r in range(r_min, r_max + 1):
+                    if result[r, c] == bg:
+                        result[r, c] = color
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_fill_grid_intersections(arr, result):
+    """Fill bg cells at row/col intersections with matching colors."""
+    h, w = arr.shape
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                continue
+            # Collect row and col colors using bitmask (colors 0-9)
+            row_mask = 0
+            col_mask = 0
+            for cc in range(w):
+                if arr[r, cc] != 0:
+                    row_mask |= (1 << arr[r, cc])
+            for rr in range(h):
+                if arr[rr, c] != 0:
+                    col_mask |= (1 << arr[rr, c])
+            common = row_mask & col_mask
+            if common:
+                # Find minimum color in common
+                for v in range(1, 10):
+                    if common & (1 << v):
+                        result[r, c] = v
+                        break
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_complete_sym_90(arr):
+    """Complete 90-degree rotational symmetry."""
+    h, w = arr.shape
+    result = arr.copy()
+    if h != w:
+        return result
+    n = h
+    for _iter in range(4):
+        changed = False
+        for r in range(n):
+            for c in range(n):
+                if result[r, c] != 0:
+                    r2, c2 = c, n - 1 - r
+                    if 0 <= r2 < n and 0 <= c2 < n and result[r2, c2] == 0:
+                        result[r2, c2] = result[r, c]
+                        changed = True
+                    r3, c3 = n - 1 - r, n - 1 - c
+                    if 0 <= r3 < n and 0 <= c3 < n and result[r3, c3] == 0:
+                        result[r3, c3] = result[r, c]
+                        changed = True
+                    r4, c4 = n - 1 - c, r
+                    if 0 <= r4 < n and 0 <= c4 < n and result[r4, c4] == 0:
+                        result[r4, c4] = result[r, c]
+                        changed = True
+        if not changed:
+            break
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_complete_sym_180(arr):
+    """Complete 180-degree rotational symmetry."""
+    h, w = arr.shape
+    result = arr.copy()
+    for _iter in range(2):
+        changed = False
+        for r in range(h):
+            for c in range(w):
+                if result[r, c] != 0:
+                    r2, c2 = h - 1 - r, w - 1 - c
+                    if 0 <= r2 < h and 0 <= c2 < w and result[r2, c2] == 0:
+                        result[r2, c2] = result[r, c]
+                        changed = True
+        if not changed:
+            break
+    return result
+
+
 def grid_shape(grid: Grid) -> tuple[int, int]:
     """Return (rows, cols) of a grid."""
     if not grid:
@@ -3177,18 +3294,8 @@ def fill_grid_intersections(grid: Grid) -> Grid:
     """Fill bg cells at row/col intersections with matching colors."""
     if not grid or not grid[0]:
         return grid
-    h, w = len(grid), len(grid[0])
-    result = [row[:] for row in grid]
-    for r in range(h):
-        for c in range(w):
-            if grid[r][c] != 0:
-                continue
-            row_colors = set(grid[r][cc] for cc in range(w) if grid[r][cc] != 0)
-            col_colors = set(grid[rr][c] for rr in range(h) if grid[rr][c] != 0)
-            common = row_colors & col_colors
-            if common:
-                result[r][c] = min(common)
-    return result
+    arr = to_np(grid)
+    return from_np(_jit_fill_grid_intersections(arr, arr.copy()))
 
 
 def tile_grid_2x1(grid: Grid) -> Grid:
@@ -3535,49 +3642,12 @@ def repeat_pattern_to_size(grid: Grid) -> Grid:
 
 
 def extend_lines_to_contact(grid: Grid) -> Grid:
-    """Extend non-bg colored segments to fill gaps within their row or column.
-
-    Handles each color independently: if a row has color A at cols 2,5 and
-    color B at cols 7,9, fills A between 2-5 and B between 7-9.
-    """
+    """Extend non-bg colored segments to fill gaps within their row or column."""
     if not grid or not grid[0]:
         return grid
-    h, w = len(grid), len(grid[0])
-    from collections import Counter
-    flat = [v for row in grid for v in row]
-    bg = Counter(flat).most_common(1)[0][0]
-    result = [row[:] for row in grid]
-    # Extend horizontally — per color
-    for r in range(h):
-        by_color: dict[int, list[int]] = {}
-        for c in range(w):
-            if grid[r][c] != bg:
-                color = grid[r][c]
-                if color not in by_color:
-                    by_color[color] = []
-                by_color[color].append(c)
-        for color, cols in by_color.items():
-            if len(cols) >= 2:
-                min_c, max_c = cols[0], cols[-1]
-                for c in range(min_c, max_c + 1):
-                    if result[r][c] == bg:
-                        result[r][c] = color
-    # Extend vertically — per color
-    for c in range(w):
-        by_color2: dict[int, list[int]] = {}
-        for r in range(h):
-            if grid[r][c] != bg:
-                color = grid[r][c]
-                if color not in by_color2:
-                    by_color2[color] = []
-                by_color2[color].append(r)
-        for color, rows in by_color2.items():
-            if len(rows) >= 2:
-                min_r, max_r = rows[0], rows[-1]
-                for r in range(min_r, max_r + 1):
-                    if result[r][c] == bg:
-                        result[r][c] = color
-    return result
+    arr = to_np(grid)
+    bg = np.int32(_jit_most_common_overall(arr))
+    return from_np(_jit_extend_lines_to_contact(arr, arr.copy(), bg))
 
 
 def recolor_2nd_to_dominant(grid: Grid) -> Grid:
