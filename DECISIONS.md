@@ -981,4 +981,28 @@ Need baseline benchmarks for new domains (ARC-AGI-2, Zork) to track progress and
 
 ---
 
+## Decision 49: Honest README & Compounding Tests — 2026-03-12
+
+### Context
+External review revealed that the README overstated claims, had stale numbers, and the test suite had zero tests verifying the core compounding hypothesis.
+
+### README Fixes
+1. **Removed "NumPy is the only dependency"** — actually requires numpy, scipy, numba, pytest
+2. **Fixed test count** — was "420", now dynamically accurate (482)
+3. **Fixed quick mode compute cap** — was "8M", actually 500K
+4. **Added honest "Current status" section**: explicitly states compounding works on list_ops but NOT on ARC, acknowledges the 4:1 train-eval gap, and notes that ARC performance depends primarily on 342 hand-crafted primitives
+5. **Updated roadmap** — marked completed phases, reframed Phase 4 as "make compounding work on ARC"
+6. **Added multi-domain results table** — ARC-AGI-2, Zork, list_ops baselines alongside ARC-AGI-1
+
+### New Tests (test_compounding.py — 9 tests)
+1. **Library reuse**: sequential compounding grows library, immediate_promote adds entries
+2. **Multi-round compounding**: solve rate improves across rounds on list_ops, library doesn't shrink
+3. **Cross-domain**: same algorithm runs on list_ops and Zork, core/ verified to have zero domain imports
+4. **Generalization**: train_solved implies test_solved on list_ops (no overfitting)
+
+### Rationale
+Credibility requires honesty about what works and what doesn't. The framework's architecture is genuinely clean and generic — but the compounding claim is only demonstrated on a synthetic domain. The README now says this explicitly. Tests now verify the core hypothesis rather than just checking code doesn't crash.
+
+---
+
 *This document will be updated with each new session and major decision.*

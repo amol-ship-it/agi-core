@@ -13,7 +13,7 @@ Based on the research and principles proposed by [Vibhor Jain](https://github.co
 ## Quick Start
 
 ```bash
-# Clone and install (NumPy is the only runtime dependency)
+# Clone and install
 git clone https://github.com/vibhor-77/agi-core.git
 cd agi-core
 
@@ -29,13 +29,13 @@ git clone https://github.com/arcprizeorg/ARC-AGI-2.git data/ARC-AGI-2
 # Reproduce our results — one command does train + eval with culture transfer
 python -m experiments.phase1_arc
 
-# Run the test suite (420 tests, ~1 second)
+# Run the test suite (~1 second)
 python -m pytest tests/ -v
 ```
 
 The default command runs all 400 training tasks, saves the learned culture, then runs all 400 evaluation tasks using that culture. Results, logs, and culture snapshots are auto-saved with timestamps. Output file paths are printed at the start so you can `tail -f` them in another terminal.
 
-**Requirements:** Python 3.10+, NumPy.
+**Requirements:** Python 3.10+, NumPy, SciPy, Numba. See `requirements.txt`.
 
 ### Syncing an existing clone
 
@@ -52,7 +52,7 @@ git -C data/ARC-AGI-2 pull
 # Full pipeline: train → save culture → eval (default, recommended)
 python -m experiments.phase1_arc
 
-# Quick subset for development (50 tasks, 8M compute cap, ~2 min on M1 Max)
+# Quick subset for development (50 tasks, 500K compute cap, ~25s on M1 Max)
 python -m experiments.phase1_arc --mode quick
 
 # Train only, save culture for later
@@ -182,13 +182,24 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 ### Expected performance
 
+**ARC-AGI-1:**
+
 | Mode | Training | Eval (culture transfer) | Wall time |
 |------|----------|------------------------|-----------|
 | `quick` | ~17/50 (~34%) | ~2/50 (~4%) | **~25s** |
 | `default` | ~85/400 (~21%) | ~20/400 (~5%) | **~3 min** |
 | `contest` | higher | TBD | ~30 min |
 
-**342 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
+**Other domains:**
+
+| Domain | Tasks | Solved | Rate | Notes |
+|--------|-------|--------|------|-------|
+| ARC-AGI-2 Train | 100/1000 | 10 | 10% | Harder than AGI-1 |
+| ARC-AGI-2 Eval | 120 | 0 | 0% | Cold start, no culture transfer |
+| Zork | 4 | 2 | 50% | Self-contained game engine |
+| List Ops | 28 | ~20 | ~71% | Compounding demonstrated here |
+
+**342 hand-crafted ARC primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
 
@@ -245,7 +256,7 @@ Every domain implements exactly 4 things:
 | **DriveSignal** | Score: error + complexity | MSE + node count | Pixel distance + size | Game score + novelty |
 | **Memory** | Store episodes, library, solutions | InMemoryStore | InMemoryStore | InMemoryStore |
 
-The core loop (`core/learner.py`) depends **only** on these interfaces. It never imports anything domain-specific. This is the "one algorithm" claim — the same loop works for grid puzzles, symbolic math, text adventures, and (eventually) robotics.
+The core loop (`core/learner.py`) depends **only** on these interfaces. It never imports anything domain-specific. The same search framework works for grid puzzles, symbolic math, text adventures, and (eventually) robotics — but performance on each domain depends on the quality of its primitives and domain engineering.
 
 ### Terminology
 
@@ -265,6 +276,16 @@ Round  Solved     Rate  Library  New  Avg Energy   Wake(s)  Sleep(s)
 ```
 
 If solve rate increases across rounds without new hand-coded primitives, the framework is working.
+
+### Current status: what works and what doesn't
+
+**Compounding is demonstrated on list_ops** (22 primitives, depth-limited to 2). The library learns depth-2 compositions that enable depth-3+ solutions in subsequent rounds, with library reuse counts of 4-11 across tasks.
+
+**Compounding does not yet work on ARC.** 78/80 ARC solves are depth-1 (a single hand-crafted primitive). The depth-3 exhaustive search already covers the same space that library entries would provide, making them redundant. This is the top priority to fix — see the [Roadmap](#roadmap).
+
+**The training-eval gap is significant.** ARC-AGI-1 training solves 85/400 (21%), but eval solves only ~20/400 (5%). This 4:1 ratio indicates the hand-crafted primitives are biased toward training task patterns. Improving eval performance requires genuinely general primitives, not more training-specific ones.
+
+**Where the ARC solve rate comes from:** The 342 hand-crafted primitives (6,500 lines of domain code) encode substantial human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition), but the primitives are the primary source of ARC performance. This is honest: the architecture is generic, but ARC results depend on domain engineering.
 
 ## Structure
 
@@ -303,7 +324,7 @@ agi-core/
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (473 tests, 12 files)
+├── tests/                   # Test suite (482 tests, 13 files)
 │   ├── test_arc.py
 │   ├── test_color_fix.py
 │   ├── test_conditional_search.py
@@ -323,7 +344,7 @@ agi-core/
 ├── CLAUDE.md                # Persistent instructions for Claude Code sessions
 ├── PROMPTS.md               # Chronological log of all prompts
 ├── DECISIONS.md             # Chronological log of all decisions
-├── requirements.txt         # Python dependencies (numpy, scipy, pytest)
+├── requirements.txt         # Python dependencies (numpy, scipy, numba, pytest)
 └── README.md                # This file
 ```
 
@@ -345,12 +366,13 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** 🔧 ARC-AGI-1 training, curriculum style (330 primitives, beam search, wake-sleep)
-- **Phase 2** ARC-AGI-1 eval, zero-shot transfer
-- **Phase 3** Second domain (Zork), same core, cold start
-- **Phase 4** Cross-domain library transfer
-- **Phase 5** ARC-AGI-2
-- **Phase 6** Continuous mixed-domain learning
+- **Phase 1** ✅ ARC-AGI-1 training (342 primitives, exhaustive enumeration, wake-sleep) — 85/400 (21%)
+- **Phase 2** ✅ ARC-AGI-1 eval with culture transfer — ~20/400 (5%)
+- **Phase 3** ✅ Additional domains (Zork, list_ops), same core — compounding demonstrated on list_ops
+- **Phase 4** 🔧 Make compounding work on ARC (reduce exhaustive depth, gap-driven synthesis)
+- **Phase 5** 🔧 ARC-AGI-2 baseline established (10% train, 0% eval) — improve toward parity with AGI-1
+- **Phase 6** Cross-domain library transfer
+- **Phase 7** Continuous mixed-domain learning
 
 ## License
 

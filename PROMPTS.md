@@ -222,6 +222,12 @@
 
 > In the quickstart, you should probably include instructions to download/clone the ARC-AGI-2 dataset as well as the Zork dataset? [...] Let's make a PR and merge to main with the baselines for these other domains, and also with updated instructions.
 
+### Prompt 35: Skeptic's Review & Honest Framing
+
+> Now imagine you are [a skeptical person] who is critiquing our repository. What will be your analysis and report? And what would be the next steps to address those and move forward to genuinely make progress.
+
+[Claude performed a thorough external review. Key findings: (1) README overstated claims — "one algorithm" framing hides 6,500 lines of hand-crafted ARC primitives, (2) compounding doesn't work on ARC (78/80 solves are depth-1), (3) test suite had zero compounding verification tests, (4) stale numbers throughout README. User approved the fix plan: honest README, compounding tests, updated roadmap.]
+
 ---
 
 *This document will be updated with each new session.*
