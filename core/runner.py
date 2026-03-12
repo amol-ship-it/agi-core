@@ -66,7 +66,7 @@ PRESETS = {
         "beam_width": 30,
         "max_generations": 15,
         "max_tasks": 0,
-        "compute_cap": 50_000_000,  # 50M ops → ~62K evals/task ceiling
+        "compute_cap": 50_000_000,  # 50M ops — beam search safety net
     },
 }
 
