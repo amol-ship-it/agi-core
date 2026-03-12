@@ -151,15 +151,17 @@ Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, 
 
 Three modes. Pick one. That's the only knob most users need.
 
-| Mode | Tasks | Beam | Gens | Compute Cap | Use case |
-|------|-------|------|------|-------------|----------|
-| `quick` | 50 | 30 | 15 | 8M | Fast dev loop |
-| `default` | all (400) | 80 | 40 | 50M | Balanced speed/accuracy |
-| `contest` | all (400) | 250 | 100 | 200M | Maximum accuracy |
+| Mode | Tasks | Beam | Compute Cap | Use case |
+|------|-------|------|-------------|----------|
+| `quick` | 50 | off | none | Fast dev loop (~1 min) |
+| `default` | all (400) | off | none | Full benchmark (~5 min) |
+| `contest` | all (400) | 30×15 | 50M | Maximum accuracy (~30 min) |
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic.
 
-**Compute cap** is cell-normalized: small grids (cheap to evaluate) get more search budget, large grids (expensive) get capped. The per-task ceiling is `compute_cap / 800` (800 = median ARC grid cells). For quick mode at 8M: ceiling = 10,000 evals/task. Override with `--compute-cap`:
+**Why no beam search?** A/B testing on 49 tasks showed beam search (width=20, gens=10) solves **exactly the same tasks** as exhaustive-only, while adding +13% wall time. All solves come from exhaustive enumeration (depth 1-3), object decomposition, conditional search, near-miss refinement, and color fix. Beam is kept in contest mode as a safety net.
+
+**Compute cap** is only relevant for contest mode (beam search). Exhaustive enumeration is self-limiting (~7.5K evals/task), so quick/default need no cap. Override with `--compute-cap`:
 
 ```bash
 python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
@@ -167,19 +169,15 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 ### Expected performance
 
-Times measured on M1 Max with 8 workers. Scale inversely with worker count and CPU speed.
-
-| Mode | Training | Eval (culture transfer) | Wall time (M1 Max, 8 workers) |
-|------|----------|------------------------|-------------------------------|
-| `quick` | ~13/50 (~26%) | ~4/50 (~8%) | **~2 min** |
-| `default` | **~108/400 (~27%)** | **~35/400 (~9%)** | **~11 min** |
-| `contest` | higher | TBD | ~3-4 hr |
+| Mode | Training | Eval (culture transfer) | Wall time |
+|------|----------|------------------------|-----------|
+| `quick` | ~17/50 (~34%) | ~2/50 (~4%) | **~1 min** |
+| `default` | ~100/400 (~25%) | ~33/400 (~8%) | **~5 min** |
+| `contest` | higher | TBD | ~30 min |
 
 **342 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
-
-The key metric is whether solve rate **increases across rounds** as the library grows — that validates compounding.
 
 ## Options
 
@@ -193,11 +191,11 @@ The key metric is whether solve rate **increases across rounds** as the library 
 | `--save-culture` | auto | Override auto culture save path |
 | `--max-tasks` | from preset | Limit tasks (0 = all). Quick: `50`, default/contest: all |
 | `--rounds` | `1` | Wake-sleep rounds |
-| `--beam-width` | from preset | Candidates per generation. Quick: `30`, default: `80`, contest: `250` |
-| `--max-generations` | from preset | Generations per task. Quick: `15`, default: `40`, contest: `100` |
+| `--beam-width` | from preset | Beam search width. Quick/default: `1` (off), contest: `30` |
+| `--max-generations` | from preset | Beam generations. Quick/default: `1` (off), contest: `15` |
 | `--workers` | `0` (perf cores) | Parallel workers. `0` = auto-detect performance cores |
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
-| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick: `8M`, default: `50M`, contest: `200M`. `0` = unlimited |
+| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick/default: `0` (unlimited), contest: `50M`. `0` = unlimited |
 | `--exhaustive-depth` | `3` | Exhaustive enumeration depth (`0`=off, `2`=pairs, `3`=triples) |
 | `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
 | `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |

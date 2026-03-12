@@ -780,4 +780,35 @@ Key evidence of compounding:
 
 ---
 
+### Decision 38: Disable Beam Search in Quick/Default Presets (A/B Tested)
+
+**Date:** 2026-03-12
+
+**Context:** Beam search parameters in presets had never been scientifically validated. The DECISIONS.md noted "beam search contributes ~2 tasks out of 86" but this was an observation, not a controlled experiment.
+
+**Experiment:** Ran A/B test on 49 training tasks (seed 42, quick preset):
+- **Test A:** Exhaustive-only (beam_width=1, max_generations=1)
+- **Test B:** Current quick preset (beam_width=20, max_generations=10)
+
+**Results:**
+| Config | Solved | Overfit | Wall Time | Beam Overhead |
+|--------|--------|---------|-----------|---------------|
+| No beam | **17/49** | 2 | 157.3s | — |
+| Beam=20 | **17/49** | 2 | 178.3s | +21.0s (+13%) |
+
+- **Exact same 17 tasks solved** in both runs (set intersection = 17)
+- **Zero additional solves from beam search**
+- Beam adds 0.65s overhead per unsolved task (pure waste)
+
+**Decision:** Set beam_width=1, max_generations=1 in quick and default presets. Contest keeps beam=30, gens=15 as a safety net for harder tasks. Updated README presets table, options table, and expected performance to match.
+
+**New presets:**
+| Mode | Beam | Compute Cap |
+|------|------|-------------|
+| quick | off (1×1) | 5M |
+| default | off (1×1) | 20M |
+| contest | 30×15 | 50M |
+
+---
+
 *This document will be updated with each new session and major decision.*
