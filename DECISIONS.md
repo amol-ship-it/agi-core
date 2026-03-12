@@ -1393,4 +1393,47 @@ The key relationship: transform primitives operate on object primitives. You can
 **Lesson:** Apply scientific method — hypothesize, experiment, measure — BEFORE committing. Don't add speculative code; don't remove without evidence either.
 
 ---
+
+### Decision 67: Grid Size Guard — Fix OOM/Hang from Composed Expanding Primitives
+
+**Date:** 2026-03-12
+**Context:** Running default mode caused 300GB RAM usage and uninterruptible hangs. User's 64GB Mac thrashed into swap.
+
+**Root cause:** Grid-expanding primitives (tile_3x3=9x, scale_5x=25x, scale_4x=16x) composed at depth 2-3 create massive intermediate grids. For example, `scale_5x(tile_3x3(30×30))` → 450×450 = 202,500 pixels. Numba JIT functions processing such grids:
+1. Run for minutes/hours as compiled machine code
+2. **Ignore Ctrl-C** (Python signals not checked in numba)
+3. Allocate GBs of native memory invisible to Python's GC
+
+This was latent since the numba JIT commit (b970016) but only triggered with certain task/seed combinations that put expanding primitives into the depth-2/3 search pool.
+
+**Fix:** Added `MAX_GRID_PIXELS = 10,000` guard in `ARCEnv._eval_tree()`. Any intermediate or output grid exceeding ~100×100 pixels is rejected (returns input grid unchanged). This is 3x the maximum ARC grid size (30×30 = 900 pixels), so no valid ARC solution is affected.
+
+**Validation:**
+- 498 tests pass (2 new tests for the guard)
+- 50-task quick benchmark: 18/50 train solved (no regression)
+- 10-task pipeline: worker RSS stable at ~160-170MB throughout
+
+**Lesson:** Grid-expanding primitives must be guarded when composed. Any system that composes transforms needs output size bounds — otherwise O(n²) or worse algorithms on accidentally-large intermediates cause OOM. This should have been caught when numba JIT was added.
+
+---
+
+### Decision 68: Search Improvements — Overlay Composition, Wider Refinement, Node Replacement
+
+**Date:** 2026-03-12
+**Context:** Looking for incremental improvements to break the 100-solve plateau.
+
+**Changes:**
+1. **Overlay (binary) composition in exhaustive search**: Try `overlay(prog_a, prog_b)` for top-15 depth-1 programs. Cost: ~210 evals per task. Many ARC tasks require combining two independent views.
+2. **Wider near-miss refinement pool**: Use ALL ~280 unary prims instead of top-50+essentials (~60). Cost: 5 × 280 × 2 = 2,800 evals — still cheap. Many critical fixes use primitives ranked low individually.
+3. **Node replacement for depth-1+ near-misses**: For programs like `f(g(x))`, try replacing internal nodes (e.g., `f(h(x))`). Cost: O(near_misses × depth × 60 prims).
+4. **Two-step near-miss refinement**: For close misses (error < 0.10), try `prim(close_miss)` for all prims. Cost: 5 × 280 = 1,400 evals.
+5. **Worker start/finish logging**: Print task ID and RSS on task start/finish for easier debugging.
+
+**Results (400 tasks, 3M cap):**
+- Train: 100/400 (25.0%) — up from 99 baseline (+1)
+- No regression on 50-task quick benchmark
+
+**Verdict:** Modest improvement (+1 solve). The overlay, node replacement, and two-step features add search coverage without meaningful cost. The wider refinement pool is the right default — restricting to top-50 was premature optimization.
+
+---
 *This document will be updated with each new session and major decision.*

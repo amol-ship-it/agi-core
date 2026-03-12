@@ -106,8 +106,20 @@ def _wake_worker(args: tuple) -> WakeResult:
     # Re-seed the grammar's RNG with the per-task seed for deterministic mutations
     grammar._rng = random.Random(task_seed)
 
+    # Log task start (flushes to help identify memory-hungry tasks)
+    import sys as _sys
+    import resource as _resource
+    rss_mb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss / 1024
+    print(f"    [worker pid={os.getpid()}] STARTING {task.task_id} (RSS={rss_mb:.0f}MB)",
+          flush=True)
+
     # Solve — but skip memory recording (main process handles that)
-    return learner._wake_on_task_no_record(task)
+    result = learner._wake_on_task_no_record(task)
+
+    rss_mb_after = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss / 1024
+    print(f"    [worker pid={os.getpid()}] FINISHED {task.task_id} (RSS={rss_mb_after:.0f}MB)",
+          flush=True)
+    return result
 
 
 # =============================================================================
@@ -1124,25 +1136,12 @@ class Learner:
         near_misses.sort(key=lambda s: s.prediction_error)
         near_misses = near_misses[:5]
 
-        # Select top-50 unary primitives by depth-1 score from candidates,
-        # plus essential pair concepts. This reduces from ~280 to ~50-60 prims.
+        # Use ALL unary primitives for near-miss refinement.
+        # Cost: 5 near-misses × ~280 prims × 2 = ~2800 evals — still cheap.
+        # Many fixes involve primitives ranked low individually (e.g. a specific
+        # color fill, a rare symmetry op) but critical as the final correction.
         all_unary = [p for p in primitives if p.arity <= 1]
-        essential = self.grammar.essential_pair_concepts()
-        depth1 = [sp for sp in candidates if sp.program.depth == 1]
-        depth1.sort(key=lambda s: s.prediction_error)
-        top_names = set()
-        for sp in depth1:
-            top_names.add(sp.program.root)
-            if len(top_names) >= 50:
-                break
-        # Always include essential pair concepts
-        for p in all_unary:
-            if p.name in essential:
-                top_names.add(p.name)
-        unary_prims = [p for p in all_unary if p.name in top_names]
-        # Fallback: if very few candidates, use all
-        if len(unary_prims) < 10:
-            unary_prims = all_unary
+        unary_prims = all_unary
         refined: list[ScoredProgram] = []
         n_evals = 0
 
@@ -1175,6 +1174,75 @@ class Learner:
                 n_evals += 1
                 if sp.prediction_error <= solve_thresh:
                     return refined, n_evals
+
+        # --- Node replacement for depth-1+ near-misses ---
+        # For programs with at least one composition (e.g. f(g(x))),
+        # try replacing each internal node with a different primitive.
+        # This catches "right structure, wrong step" cases.
+        # Cost: O(near_misses × depth × n_prims) — limited to top-60 prims.
+        NODE_REPLACE_PRIMS = 60
+        depth1_sorted = sorted(
+            [sp for sp in candidates if sp.program.depth == 1],
+            key=lambda s: s.prediction_error)
+        replace_names = set()
+        for sp in depth1_sorted:
+            replace_names.add(sp.program.root)
+            if len(replace_names) >= NODE_REPLACE_PRIMS:
+                break
+        replace_prims = [p for p in all_unary if p.name in replace_names]
+
+        for nm in near_misses:
+            if nm.program.depth < 1:
+                continue  # nothing to replace in a single primitive
+            # Collect all internal nodes
+            nodes_to_replace: list[Program] = []
+
+            def _collect(node: Program, parent: Optional[Program] = None):
+                if parent is not None:  # skip root (that's append)
+                    nodes_to_replace.append(node)
+                for child in (node.children or []):
+                    _collect(child, node)
+
+            _collect(nm.program)
+            for target_node in nodes_to_replace:
+                original_root = target_node.root
+                for prim in replace_prims:
+                    if prim.name == original_root:
+                        continue
+                    # Replace in-place, eval, restore
+                    target_node.root = prim.name
+                    prog_replaced = copy.deepcopy(nm.program)
+                    target_node.root = original_root  # restore
+                    sp = self._evaluate_program(prog_replaced, task)
+                    refined.append(sp)
+                    n_evals += 1
+                    if sp.prediction_error <= solve_thresh:
+                        return refined, n_evals
+
+        # --- Two-step near-miss refinement ---
+        # For the closest near-misses (error < 0.10), try prim2(prim1(program)).
+        # Strategy: collect top-10 single-step improvements per near-miss,
+        # then apply a second step to each.
+        # Cost: O(close_misses × top_improved × refine_prims) ≈ 5 × 10 × 50 = 2500
+        TWO_STEP_THRESHOLD = 0.10
+        close_misses = [sp for sp in refined if sp.prediction_error < TWO_STEP_THRESHOLD]
+        if not close_misses:
+            # Also check original near-misses that were already close
+            close_misses = [nm for nm in near_misses if nm.prediction_error < TWO_STEP_THRESHOLD]
+        if close_misses:
+            close_misses.sort(key=lambda s: s.prediction_error)
+            close_misses = close_misses[:5]
+            for cm in close_misses:
+                for prim in unary_prims:
+                    prog_outer = Program(
+                        root=prim.name,
+                        children=[copy.deepcopy(cm.program)],
+                    )
+                    sp = self._evaluate_program(prog_outer, task)
+                    refined.append(sp)
+                    n_evals += 1
+                    if sp.prediction_error <= solve_thresh:
+                        return refined, n_evals
 
         return refined, n_evals
 
@@ -1654,6 +1722,39 @@ class Learner:
                 n_evals += 2  # depth 2 = 2 primitive applications
                 if sp.prediction_error <= solve_thresh:
                     return scored, n_evals
+
+        # --- Depth 2.5: Overlay (binary) composition ---
+        # Try overlay(prog_a, prog_b) for top-scoring depth-1 programs.
+        # Many ARC tasks require combining two independent transforms
+        # (e.g. background pattern + foreground objects).
+        # Cost: O(K²) where K = overlay_top_k (~15), so ~225 evals.
+        binary_prims = [p for p in primitives if p.arity == 2]
+        if binary_prims and _budget_ok():
+            OVERLAY_TOP_K = 15
+            overlay_pool = pair_pool[:OVERLAY_TOP_K]
+            for bp in binary_prims:
+                if not _budget_ok():
+                    break
+                for a_name in overlay_pool:
+                    if not _budget_ok():
+                        break
+                    for b_name in overlay_pool:
+                        if not _budget_ok():
+                            break
+                        if a_name == b_name:
+                            continue
+                        prog = Program(
+                            root=bp.name,
+                            children=[
+                                Program(root=a_name),
+                                Program(root=b_name),
+                            ],
+                        )
+                        sp = self._evaluate_program(prog, task)
+                        scored.append(sp)
+                        n_evals += 2  # 2 child evals + 1 combine
+                        if sp.prediction_error <= solve_thresh:
+                            return scored, n_evals
 
         if max_depth < 3 or not _budget_ok():
             return scored, n_evals

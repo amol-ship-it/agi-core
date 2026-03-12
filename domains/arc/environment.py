@@ -125,6 +125,13 @@ class ARCEnv(Environment):
             _PRIM_MAP[name] = prim
         return Program(root=name)
 
+    # Maximum intermediate grid size (pixels). Grid-expanding primitives
+    # (tile_3x3=9x, scale_5x=25x) composed at depth 2-3 can create grids
+    # with millions of pixels. Numba JIT functions on such grids run for
+    # minutes/hours in compiled code that ignores Ctrl-C and consumes GBs
+    # of RAM. This guard prevents runaway expansion.
+    MAX_GRID_PIXELS = 10_000  # ~100x100 — generous for ARC (max 30x30)
+
     def _eval_tree(self, node: Program, grid: Grid) -> Grid:
         """Recursively evaluate a program tree on a grid."""
         prim = _PRIM_MAP.get(node.root)
@@ -147,8 +154,18 @@ class ARCEnv(Environment):
                     child_grid = self._eval_tree(node.children[0], grid)
                 else:
                     child_grid = grid
+                # Guard: reject oversized intermediate grids from expansion
+                h = len(child_grid)
+                w = len(child_grid[0]) if child_grid else 0
+                if h * w > self.MAX_GRID_PIXELS:
+                    return grid
                 result = prim.fn(child_grid)
                 if not isinstance(result, list) or not result:
+                    return grid
+                # Guard: reject oversized output grids
+                rh = len(result)
+                rw = len(result[0]) if result else 0
+                if rh * rw > self.MAX_GRID_PIXELS:
                     return grid
                 return result
             elif prim.arity == 2:

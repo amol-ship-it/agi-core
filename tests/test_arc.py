@@ -359,6 +359,41 @@ class TestARCEnvironment(unittest.TestCase):
         result = env.execute(prog, grid)
         self.assertIsInstance(result, list)
 
+    def test_grid_size_guard_prevents_expansion(self):
+        """Composing grid-expanding primitives must not create huge grids.
+
+        Without the guard, tile_3x3(tile_3x3(x)) on a 30x30 grid creates
+        a 270x270 intermediate (72,900 pixels). Numba functions on such
+        grids run for minutes, ignore Ctrl-C, and consume GBs of RAM.
+        """
+        env = ARCEnv()
+        # tile_3x3(tile_3x3(input)) on a 30x30 grid
+        # Inner: 30x30 -> 90x90 (8100 pixels, under 10,000 limit)
+        # Outer: 90x90 -> would be 270x270 but input is 8100 pixels < guard
+        # The guard should let the inner pass but block the outer from
+        # processing the 8100-pixel grid through tile_3x3 (since 90x90
+        # is already at the edge, the result 270x270 = 72900 > guard).
+        prog = Program(root="tile_3x3", children=[
+            Program(root="tile_3x3")])
+        grid = [[i % 10 for i in range(30)] for _ in range(30)]
+        result = env.execute(prog, grid)
+        # Result should be bounded — either the guard kicked in (returns
+        # original grid) or a reasonably-sized tiled grid
+        self.assertIsInstance(result, list)
+        total_pixels = len(result) * (len(result[0]) if result else 0)
+        self.assertLessEqual(total_pixels, env.MAX_GRID_PIXELS,
+                             f"Grid too large: {len(result)}x{len(result[0])} = {total_pixels} pixels")
+
+    def test_grid_size_guard_allows_normal_grids(self):
+        """Normal ARC grids (up to 30x30) should not be affected by the guard."""
+        env = ARCEnv()
+        # Single tile_3x3 on a small grid: 3x3 -> 9x9 = 81 pixels. Fine.
+        prog = Program(root="tile_3x3")
+        grid = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+        result = env.execute(prog, grid)
+        self.assertEqual(len(result), 9)
+        self.assertEqual(len(result[0]), 9)
+
 
 class TestARCGrammarMethods(unittest.TestCase):
     """Test ARCGrammar mutate and crossover."""
