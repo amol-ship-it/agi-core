@@ -22,8 +22,9 @@ python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\acti
 
 pip install -r requirements.txt
 
-# Clone the ARC-AGI dataset
+# Clone the ARC-AGI datasets
 git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI
+git clone https://github.com/arcprizeorg/ARC-AGI-2.git data/ARC-AGI-2
 
 # Reproduce our results — one command does train + eval with culture transfer
 python -m experiments.phase1_arc
@@ -42,6 +43,7 @@ The default command runs all 400 training tasks, saves the learned culture, then
 git pull origin main
 pip install -r requirements.txt
 git -C data/ARC-AGI pull
+git -C data/ARC-AGI-2 pull
 ```
 
 ## Usage
@@ -84,20 +86,20 @@ python -m experiments.phase1_arc --mode quick --max-tasks 0
 
 **Extrapolation:** If you solve 12/50 tasks (24%) in quick mode, you can expect roughly 96/400 (24%) on the full dataset. The seeded shuffle ensures the subset is unbiased.
 
-### Other demos (no dataset needed)
-
-These demonstrate the **same invariant core algorithm** on different domains:
+### Other experiments
 
 ```bash
-# Symbolic regression — discover mathematical formulas (y=2x+1, y=x², y=sin(x)+x, ...)
-python -m domains.symbolic_math
-
-# ARC with built-in sample tasks (rotate, mirror, crop, gravity, fill, ...)
-python -m experiments.phase1_arc --mode quick
+# ARC-AGI-2 (1000 training + 120 eval tasks, harder than AGI-1)
+python -m experiments.phase2_arc --mode quick
 
 # Zork text adventure — navigate rooms, collect items, unlock doors
-# (run tests to see it in action: pytest tests/test_zork.py -v)
+python -m experiments.zork_baseline --mode quick
+
+# Symbolic regression — discover mathematical formulas (y=2x+1, y=x², y=sin(x)+x, ...)
+python -m domains.symbolic_math
 ```
+
+The Zork domain is fully self-contained (custom game engine, no external dependencies). ARC-AGI-2 requires the dataset clone above.
 
 ### Auto-saved artifacts
 
@@ -281,7 +283,10 @@ agi-core/
 │   └── metrics.py           # Compounding curve measurement
 │
 ├── experiments/             # Thin domain-specific wrappers over core/runner.py
-│   └── phase1_arc.py        # ARC curriculum training (dataset loading + ARC wiring)
+│   ├── phase1_arc.py        # ARC-AGI-1 training & evaluation pipeline
+│   ├── phase2_arc.py        # ARC-AGI-2 baseline experiment
+│   ├── zork_baseline.py     # Zork text adventure baseline
+│   └── list_compounding.py  # List ops compounding demonstration
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
 │   ├── arc/                 # ARC-AGI grid transformations (342 primitives)
@@ -293,10 +298,12 @@ agi-core/
 │   │   └── dataset.py       # Task loading + sample tasks
 │   ├── symbolic_math/       # 1D symbolic regression (15 math primitives)
 │   │   └── __init__.py      # All 4 interfaces in one file
+│   ├── list_ops/            # List operations (22 primitives, compounding demo)
+│   │   └── __init__.py      # All 4 interfaces in one file
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (471 tests, 12 files)
+├── tests/                   # Test suite (473 tests, 12 files)
 │   ├── test_arc.py
 │   ├── test_color_fix.py
 │   ├── test_conditional_search.py

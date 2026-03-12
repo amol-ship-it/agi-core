@@ -956,4 +956,29 @@ Users had to scroll up through train+eval output to find key results. No single 
 
 ---
 
+## Decision 48: Multi-Domain Baselines & ARC-AGI-2 Experiment — 2026-03-12
+
+### Context
+Need baseline benchmarks for new domains (ARC-AGI-2, Zork) to track progress and validate the "one algorithm" claim across domains.
+
+### Results
+
+| Domain | Tasks | Solved | Rate |
+|--------|-------|--------|------|
+| ARC-AGI-1 Train | 400 | 85 | 21.2% |
+| ARC-AGI-1 Eval | 400 | ~20 | ~5% |
+| ARC-AGI-2 Train (100/1000) | 100 | 10 | 10.0% |
+| ARC-AGI-2 Eval (cold) | 120 | 0 | 0.0% |
+| Zork | 4 | 2 | 50% |
+
+### Changes
+1. **experiments/phase2_arc.py**: ARC-AGI-2 experiment script with pipeline mode, auto-detection of AGI-2 data, fallback to AGI-1 training data.
+2. **experiments/zork_baseline.py**: Zork baseline experiment.
+3. **README.md**: Added ARC-AGI-2 clone instructions, updated experiment commands.
+
+### Key Insight: Why Compounding Fails on ARC
+78/80 ARC solves are depth-1 (single primitive). Library entries compress depth-2+ compositions that exhaustive depth-3 search already covers. Compounding works on list_ops because exhaustive_depth=2 forces reliance on library for depth-3+. The solution space is wide-and-shallow (342 primitives, depth 1-2), not narrow-and-deep.
+
+---
+
 *This document will be updated with each new session and major decision.*

@@ -202,4 +202,26 @@
 
 ---
 
+## Session 7 — Claude Code Web (March 12, 2026)
+
+### Prompt 31: Venv, Pipeline Summary, Compute Cap Optimization
+
+> I ran the commands and merged to main. Can you do the following items: (a) Add venv as optional quickstart step, (b) Add end-of-pipeline summary with all parameters/results + combined JSONL/JSON files, (c) Run experiments to find lowest compute cap sweet spot.
+
+### Prompt 32: Compute Cap Observations
+
+> In my own experiments, I am finding that even with compute-cap=100, there are 16 train solves and 2 eval solves. And even with compute-cap=500M, there are 17 train and 2 eval solves, but it is just a bit slower. [...] Also, after the optimization, the benchmark is running really fast on my M1 Max.
+
+### Prompt 33: Learning Concerns & Strategic Focus
+
+> I am a bit concerned that maybe no learning is going on here, because regardless of compute cap, the solves remain the same. [...] We want to be close to 100% long term, and even in the short term I would like to get close to 40-50%. So we need to think about this in a very systematic, focussed, long term strategic way. What are big picture items missing here? How to get the compounding? Can we also do a baseline benchmark experiment run for ARC-AGI-2 and Zork?
+
+[Claude performed deep strategic analysis. Key findings: (1) 78/80 ARC solves are depth-1 — compounding can't help when solutions are shallow, (2) library entries are redundant with depth-3 exhaustive search, (3) compounding works on list_ops because depth=2 forces library reliance. Baselines established: ARC-AGI-2 train 10/100 (10%), eval 0/120 (0%), Zork 2/4 (50%).]
+
+### Prompt 34: Update Quickstart & Merge
+
+> In the quickstart, you should probably include instructions to download/clone the ARC-AGI-2 dataset as well as the Zork dataset? [...] Let's make a PR and merge to main with the baselines for these other domains, and also with updated instructions.
+
+---
+
 *This document will be updated with each new session.*
