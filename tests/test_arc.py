@@ -977,6 +977,66 @@ class TestColorCycling(unittest.TestCase):
         self.assertEqual(result, grid)
 
 
+class TestContextColorPrimitives(unittest.TestCase):
+    """Test context-dependent color primitives (Decision 59)."""
+
+    def test_neighbor_vote_fixes_artifact(self):
+        from domains.arc.primitives import recolor_by_neighbor_vote
+        # 3x3 grid with one artifact cell (center is 2, neighbors are all 1)
+        grid = [[1, 1, 1],
+                [1, 2, 1],
+                [1, 1, 1]]
+        result = recolor_by_neighbor_vote(grid)
+        self.assertEqual(result[1][1], 1)  # artifact fixed
+
+    def test_neighbor_vote_preserves_regions(self):
+        from domains.arc.primitives import recolor_by_neighbor_vote
+        # Two clear regions should stay distinct
+        grid = [[1, 1, 2, 2],
+                [1, 1, 2, 2]]
+        result = recolor_by_neighbor_vote(grid)
+        self.assertEqual(result, grid)  # no change needed
+
+    def test_swap_two_most_common(self):
+        from domains.arc.primitives import swap_two_most_common
+        # Color 1 appears 4 times, color 2 appears 3 times
+        grid = [[1, 1, 2],
+                [1, 2, 2],
+                [1, 0, 0]]
+        result = swap_two_most_common(grid)
+        self.assertEqual(result[0][0], 2)  # 1→2
+        self.assertEqual(result[0][2], 1)  # 2→1
+        self.assertEqual(result[2][1], 0)  # 0 preserved
+
+    def test_fill_by_surround(self):
+        from domains.arc.primitives import fill_by_surround_color
+        # Hole surrounded by color 3
+        grid = [[3, 3, 3],
+                [3, 0, 3],
+                [3, 3, 3]]
+        result = fill_by_surround_color(grid)
+        self.assertEqual(result[1][1], 3)
+
+    def test_cleanup_isolated(self):
+        from domains.arc.primitives import cleanup_isolated_cells
+        # Isolated cell (5) with no same-colored neighbors
+        grid = [[1, 1, 0],
+                [1, 5, 0],
+                [0, 0, 0]]
+        result = cleanup_isolated_cells(grid)
+        self.assertEqual(result[1][1], 0)  # isolated cell removed
+        self.assertEqual(result[0][0], 1)  # connected cells preserved
+
+    def test_recolor_minority_to_majority(self):
+        from domains.arc.primitives import recolor_minority_to_majority
+        # Component with 3 cells of color 1 and 1 cell of color 2
+        grid = [[1, 1, 0],
+                [1, 2, 0],
+                [0, 0, 0]]
+        result = recolor_minority_to_majority(grid)
+        self.assertEqual(result[1][1], 1)  # minority recolored
+
+
 class TestARCFullLoop(unittest.TestCase):
     """Test the full wake-sleep loop on ARC tasks."""
 

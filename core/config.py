@@ -64,3 +64,10 @@ class CurriculumConfig:
     # immediately promoting solved programs to the library so the next
     # task benefits. When True, overrides workers to 1.
     sequential_compounding: bool = False
+    # Adaptive compute reallocation: after each round, re-run near-miss tasks
+    # (unsolved, error < near_miss_threshold) with boosted search budget.
+    # The boost multiplier controls how much extra compute near-misses get.
+    adaptive_realloc: bool = False
+    adaptive_realloc_budget_multiplier: float = 3.0
+    adaptive_realloc_pair_top_k_boost: int = 20  # added to base pair_top_k
+    adaptive_realloc_triple_top_k_boost: int = 10  # added to base triple_top_k

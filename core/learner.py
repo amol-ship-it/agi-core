@@ -734,6 +734,11 @@ class Learner:
                 wake_results = self._wake_parallel(
                     tasks, cfg.workers, round_num + 1, on_task_done)
 
+            # Adaptive compute reallocation: re-run near-misses with boosted budget
+            if cfg.adaptive_realloc:
+                wake_results = self._adaptive_realloc_pass(
+                    tasks, wake_results, cfg, round_num + 1, on_task_done)
+
             # SLEEP: consolidate (sequential — mutates shared state)
             sleep_result = self.sleep()
 
@@ -761,6 +766,86 @@ class Learner:
             )
 
         return results
+
+    def _adaptive_realloc_pass(
+        self,
+        tasks: list[Task],
+        wake_results: list[WakeResult],
+        cfg: CurriculumConfig,
+        round_num: int,
+        on_task_done: "Optional[callable]" = None,
+    ) -> list[WakeResult]:
+        """
+        Re-run near-miss tasks with boosted search budget.
+
+        Identifies tasks that are close to being solved (low error but not
+        solved) and gives them more compute. This is a purely algorithmic
+        improvement — no data leakage since it's based on training error only.
+
+        Returns the updated wake_results list with improved results merged in.
+        """
+        near_miss_thresh = self.search_cfg.near_miss_threshold
+        near_miss_indices = []
+        for i, wr in enumerate(wake_results):
+            err = wr.best.prediction_error if wr.best else 1.0
+            if not wr.train_solved and 0 < err < near_miss_thresh:
+                near_miss_indices.append(i)
+
+        if not near_miss_indices:
+            return wake_results
+
+        logger.info(
+            f"    Adaptive realloc: {len(near_miss_indices)} near-miss tasks "
+            f"(err < {near_miss_thresh}), re-running with boosted budget")
+
+        # Save original config and apply boost
+        orig_cfg = self.search_cfg
+        boosted = copy.copy(orig_cfg)
+        boosted.eval_budget = int(orig_cfg.eval_budget * cfg.adaptive_realloc_budget_multiplier)
+        boosted.exhaustive_pair_top_k = (
+            orig_cfg.exhaustive_pair_top_k + cfg.adaptive_realloc_pair_top_k_boost)
+        boosted.exhaustive_triple_top_k = (
+            orig_cfg.exhaustive_triple_top_k + cfg.adaptive_realloc_triple_top_k_boost)
+        self.search_cfg = boosted
+
+        try:
+            near_miss_tasks = [tasks[i] for i in near_miss_indices]
+            boosted_results = self._wake_parallel(
+                near_miss_tasks, cfg.workers, round_num)
+        finally:
+            self.search_cfg = orig_cfg
+
+        # Merge: keep the better result for each near-miss task
+        improved = 0
+        wake_results = list(wake_results)  # copy to avoid mutating original
+        for idx, boosted_wr in zip(near_miss_indices, boosted_results):
+            orig_wr = wake_results[idx]
+            orig_energy = orig_wr.best.energy if orig_wr.best else float('inf')
+            boosted_energy = boosted_wr.best.energy if boosted_wr.best else float('inf')
+            # Better = newly solved, or lower energy
+            if (boosted_wr.train_solved and not orig_wr.train_solved) or \
+               (boosted_energy < orig_energy):
+                # Accumulate evaluations from both passes
+                merged = WakeResult(
+                    task_id=boosted_wr.task_id,
+                    train_solved=boosted_wr.train_solved,
+                    best=boosted_wr.best,
+                    generations_used=orig_wr.generations_used + boosted_wr.generations_used,
+                    evaluations=orig_wr.evaluations + boosted_wr.evaluations,
+                    wall_time=orig_wr.wall_time + boosted_wr.wall_time,
+                    pareto_front=boosted_wr.pareto_front,
+                    dedup_count=orig_wr.dedup_count + boosted_wr.dedup_count,
+                    test_error=boosted_wr.test_error,
+                    test_solved=boosted_wr.test_solved,
+                )
+                wake_results[idx] = merged
+                if boosted_wr.train_solved and not orig_wr.train_solved:
+                    improved += 1
+
+        logger.info(
+            f"    Adaptive realloc done: {improved} tasks newly solved")
+
+        return wake_results
 
     def _wake_parallel(
         self,

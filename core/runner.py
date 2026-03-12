@@ -265,6 +265,9 @@ Examples:
     parser.add_argument("--task-ids", type=str, default="",
                         help="Comma-separated task IDs to run (e.g. '0dfd9992,1190e5a7'). "
                              "Overrides --max-tasks. Prefix match supported.")
+    parser.add_argument("--adaptive-realloc", action="store_true",
+                        help="Re-run near-miss tasks with boosted compute budget "
+                             "(3x budget, wider search breadth)")
     return parser
 
 
@@ -469,6 +472,9 @@ class ExperimentConfig:
 
     # Sequential compounding
     sequential_compounding: bool = False
+
+    # Adaptive compute reallocation for near-miss tasks
+    adaptive_realloc: bool = False
 
     # Culture file (load pre-trained library)
     culture_path: str = ""
@@ -698,6 +704,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             wake_sleep_rounds=rounds,
             workers=workers,
             sequential_compounding=cfg.sequential_compounding,
+            adaptive_realloc=cfg.adaptive_realloc,
         ),
         on_task_done=tracker.on_task_done,
     )

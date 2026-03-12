@@ -3195,6 +3195,191 @@ def _make_recolor_nonzero(to_color: int):
     return recolor
 
 
+# --- Context-dependent color primitives ---
+# These address the near-miss gap: programs that get geometry right but colors wrong.
+
+
+def recolor_by_neighbor_vote(grid: Grid) -> Grid:
+    """Recolor each non-background cell to the majority color of its 4-neighbors.
+
+    Fixes "artifact" cells that have the wrong color relative to their
+    neighborhood. Leaves background (0) untouched. Ties broken by keeping
+    the original color.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0:
+                continue
+            neighbors: dict[int, int] = {}
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] != 0:
+                    neighbors[grid[nr][nc]] = neighbors.get(grid[nr][nc], 0) + 1
+            if neighbors:
+                best = max(neighbors, key=lambda k: neighbors[k])
+                if neighbors[best] > neighbors.get(grid[r][c], 0):
+                    result[r][c] = best
+    return result
+
+
+def recolor_by_8neighbor_vote(grid: Grid) -> Grid:
+    """Like recolor_by_neighbor_vote but uses 8-connected neighbors."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0:
+                continue
+            neighbors: dict[int, int] = {}
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] != 0:
+                        neighbors[grid[nr][nc]] = neighbors.get(grid[nr][nc], 0) + 1
+            if neighbors:
+                best = max(neighbors, key=lambda k: neighbors[k])
+                if neighbors[best] > neighbors.get(grid[r][c], 0):
+                    result[r][c] = best
+    return result
+
+
+def swap_two_most_common(grid: Grid) -> Grid:
+    """Swap the two most common non-background colors.
+
+    Identifies the two most frequent non-zero colors and swaps them.
+    Useful when a transformation gets the structure right but assigns
+    the two main colors backwards.
+    """
+    flat = [c for row in grid for c in row if c != 0]
+    if len(flat) < 2:
+        return [row[:] for row in grid]
+    counts = Counter(flat)
+    top2 = [c for c, _ in counts.most_common(2)]
+    if len(top2) < 2:
+        return [row[:] for row in grid]
+    a, b = top2
+    return [[b if v == a else (a if v == b else v) for v in row] for row in grid]
+
+
+def swap_two_least_common(grid: Grid) -> Grid:
+    """Swap the two least common non-background colors."""
+    flat = [c for row in grid for c in row if c != 0]
+    if len(flat) < 2:
+        return [row[:] for row in grid]
+    counts = Counter(flat)
+    ranked = [c for c, _ in counts.most_common()]
+    if len(ranked) < 2:
+        return [row[:] for row in grid]
+    a, b = ranked[-1], ranked[-2]
+    return [[b if v == a else (a if v == b else v) for v in row] for row in grid]
+
+
+def fill_by_surround_color(grid: Grid) -> Grid:
+    """Fill background cells with the color of the surrounding non-bg region.
+
+    For each background (0) cell that has exactly one non-zero color in its
+    4-neighbors, fill it with that color. Iterates until stable (flood-fill
+    from edges inward).
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    changed = True
+    max_iters = max(h, w)
+    for _ in range(max_iters):
+        if not changed:
+            break
+        changed = False
+        for r in range(h):
+            for c in range(w):
+                if result[r][c] != 0:
+                    continue
+                neighbor_colors: set[int] = set()
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and result[nr][nc] != 0:
+                        neighbor_colors.add(result[nr][nc])
+                if len(neighbor_colors) == 1:
+                    result[r][c] = neighbor_colors.pop()
+                    changed = True
+    return result
+
+
+def cleanup_isolated_cells(grid: Grid) -> Grid:
+    """Remove non-background cells that have no same-colored 4-neighbors.
+
+    These are often artifacts from imperfect structural transformations.
+    Sets isolated colored cells to background (0).
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0:
+                continue
+            has_same = False
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] == grid[r][c]:
+                    has_same = True
+                    break
+            if not has_same:
+                result[r][c] = 0
+    return result
+
+
+def recolor_minority_to_majority(grid: Grid) -> Grid:
+    """For each connected component, recolor minority cells to the majority.
+
+    Uses 4-connectivity. For each component, finds the most common color
+    and recolors all other cells in the component to that color.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    visited = [[False] * w for _ in range(h)]
+    result = [row[:] for row in grid]
+
+    for r in range(h):
+        for c in range(w):
+            if visited[r][c] or grid[r][c] == 0:
+                continue
+            # BFS to find connected non-zero component
+            component = []
+            stack = [(r, c)]
+            while stack:
+                cr, cc = stack.pop()
+                if visited[cr][cc]:
+                    continue
+                visited[cr][cc] = True
+                component.append((cr, cc))
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = cr + dr, cc + dc
+                    if 0 <= nr < h and 0 <= nc < w and not visited[nr][nc] and grid[nr][nc] != 0:
+                        stack.append((nr, nc))
+            # Find majority color in component
+            color_counts: dict[int, int] = {}
+            for cr, cc in component:
+                v = grid[cr][cc]
+                color_counts[v] = color_counts.get(v, 0) + 1
+            majority = max(color_counts, key=lambda k: color_counts[k])
+            for cr, cc in component:
+                result[cr][cc] = majority
+
+    return result
+
+
 def project_markers_to_block(grid: Grid) -> Grid:
     """Draw lines from block edges to isolated marker cells."""
     if not grid or not grid[0]:
@@ -6232,6 +6417,14 @@ def _build_arc_primitives() -> list[Primitive]:
         ("fill_grid_between",       fill_grid_cells_between_markers),
         ("absorb_noise_to_line",    absorb_noise_to_nearest_line),
         ("compact_shape",           compact_shape),
+        # --- Batch 8: context-dependent color primitives (Decision 59) ---
+        ("neighbor_vote_4",         recolor_by_neighbor_vote),
+        ("neighbor_vote_8",         recolor_by_8neighbor_vote),
+        ("swap_top2_colors",        swap_two_most_common),
+        ("swap_bottom2_colors",     swap_two_least_common),
+        ("fill_surround",           fill_by_surround_color),
+        ("cleanup_isolated",        cleanup_isolated_cells),
+        ("recolor_min_to_maj",      recolor_minority_to_majority),
     ]
 
     for name, fn in unary_ops:

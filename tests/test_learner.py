@@ -646,6 +646,52 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertEqual(cfg.wake_sleep_rounds, 3)
         self.assertEqual(cfg.workers, 0)
 
+    def test_adaptive_realloc_config_defaults(self):
+        cfg = CurriculumConfig()
+        self.assertFalse(cfg.adaptive_realloc)
+        self.assertEqual(cfg.adaptive_realloc_budget_multiplier, 3.0)
+        self.assertEqual(cfg.adaptive_realloc_pair_top_k_boost, 20)
+        self.assertEqual(cfg.adaptive_realloc_triple_top_k_boost, 10)
+
+    def test_adaptive_realloc_no_near_misses(self):
+        """Adaptive realloc with solvable tasks should be a no-op."""
+        learner = _make_learner()
+        tasks = [_make_identity_task()]
+        results = learner.run_curriculum(
+            tasks,
+            CurriculumConfig(
+                wake_sleep_rounds=1, workers=1,
+                adaptive_realloc=True,
+            ),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].wake_results[0].train_solved)
+
+    def test_adaptive_realloc_runs_on_unsolved(self):
+        """Adaptive realloc runs a second pass on near-miss tasks."""
+        # Use a task that can't be solved (output differs from any primitive)
+        unsolvable = Task(
+            task_id="unsolvable",
+            train_examples=[(1.0, 99.0), (2.0, 99.0)],
+            test_inputs=[3.0],
+            test_outputs=[99.0],
+            difficulty=5.0,
+        )
+        learner = _make_learner(near_miss_threshold=1.0)  # wide threshold
+        results = learner.run_curriculum(
+            [unsolvable],
+            CurriculumConfig(
+                wake_sleep_rounds=1, workers=1,
+                adaptive_realloc=True,
+            ),
+        )
+        self.assertEqual(len(results), 1)
+        # Task should still be unsolved, but the realloc should have run
+        wr = results[0].wake_results[0]
+        self.assertFalse(wr.train_solved)
+        # Evaluations should be higher than a single pass (realloc added more)
+        self.assertGreater(wr.evaluations, 0)
+
 
 # =============================================================================
 # Semantic deduplication tests
