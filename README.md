@@ -24,7 +24,7 @@ git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI
 # Reproduce our results — one command does train + eval with culture transfer
 python -m experiments.phase1_arc
 
-# Run the test suite (380 tests, ~1 second)
+# Run the test suite (420 tests, ~1 second)
 python -m pytest tests/ -v
 ```
 
@@ -90,6 +90,9 @@ python -m domains.symbolic_math
 
 # ARC with built-in sample tasks (rotate, mirror, crop, gravity, fill, ...)
 python -m experiments.phase1_arc --mode quick
+
+# Zork text adventure — navigate rooms, collect items, unlock doors
+# (run tests to see it in action: pytest tests/test_zork.py -v)
 ```
 
 ### Auto-saved artifacts
@@ -279,8 +282,10 @@ agi-core/
 │   │   ├── grammar.py       # ARCGrammar
 │   │   ├── drive.py         # ARCDrive
 │   │   └── dataset.py       # Task loading + sample tasks
-│   └── symbolic_math/       # 1D symbolic regression (15 math primitives)
-│       └── __init__.py      # All 4 interfaces in one file
+│   ├── symbolic_math/       # 1D symbolic regression (15 math primitives)
+│   │   └── __init__.py      # All 4 interfaces in one file
+│   └── zork/                # Text adventure (30 action primitives, 16 predicates)
+│       └── __init__.py      # Game engine + all 4 interfaces
 │
 ├── tests/                   # Test suite (380 tests, 10 files)
 │   ├── test_arc.py

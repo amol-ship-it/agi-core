@@ -119,7 +119,11 @@ class ARCEnv(Environment):
 
         try:
             if prim.arity == 0:
-                # Nullary: return the input grid (identity-like)
+                # Learned library entries have fn=Program (a stored sub-tree).
+                # Execute the stored program recursively.
+                if isinstance(prim.fn, Program):
+                    return self._eval_tree(prim.fn, grid)
+                # Other nullary: return the input grid (identity-like)
                 return grid
             elif prim.arity == 1:
                 # Unary: apply to the result of the single child

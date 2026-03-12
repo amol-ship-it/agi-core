@@ -688,4 +688,96 @@ Net +7 train tasks (+8 new, -1 regression). The 8 newly solved tasks:
 
 ---
 
+### Decision 32: Wire transition matrix into beam search mutations (Session 6)
+
+**Date:** 2026-03-12
+**Context:** The DreamCoder-style transition matrix was already built and observed from solutions, but beam search mutations used uniform random primitive selection. Free performance was being left on the table.
+
+**Solution:** Added optional `transition_matrix` parameter to `Grammar.mutate()`. When provided, all three mutation types (point, grow, shrink) use `TransitionMatrix.weighted_choice()` to bias primitive selection toward known-good compositions. The Learner passes the transition matrix during beam search when it has observed data.
+
+**Result:** Backward-compatible (default None). All domains updated. 420 tests pass.
+
+---
+
+### Decision 33: Improve sleep phase compounding with diversity bonus and pruning (Session 6)
+
+**Date:** 2026-03-12
+**Context:** Sleep phase was extracting only 1-2 library entries per 400 tasks, and solve rate didn't improve across rounds. Root causes: (1) scoring didn't reward structural diversity, (2) dead entries accumulated and crowded out better abstractions.
+
+**Solution:**
+- **Diversity bonus**: Subtrees appearing across solutions with different root operations score higher. Formula: `usefulness = tasks_used × log(size+1) × (1 + 0.5 × log(unique_roots))`. This rewards general-purpose compositions over task-specific ones.
+- **Library pruning**: After decay, entries with usefulness < 0.01 AND reuse_count == 0 are removed. Added `Memory.prune_library()` method. This prevents the library from filling with stale abstractions.
+
+**Result:** Library now self-cleans. General abstractions preferred over narrow ones. 420 tests pass.
+
+---
+
+### Decision 34: Add Zork text adventure domain (Session 6)
+
+**Date:** 2026-03-12
+**Context:** The architecture claimed domain-agnosticism but only had 2 domains (ARC grids, symbolic math). Both are stateless input→output transforms. Need to prove the core loop handles sequential, stateful, goal-directed domains.
+
+**Solution:** New `domains/zork/` with:
+- **Game engine**: Room graph with items, locked doors, inventory, flags
+- **30 primitives**: 4 movement + 8 items × 3 verbs + wait + look
+- **16 predicates**: has_item, room_has_item for conditional branching
+- **Drive signal**: Weighted composite (40% room match, 30% inventory Jaccard, 15% score, 15% flags)
+- **4 sample tasks**: navigation, take+move, locked door puzzle, simple traverse
+- **36 tests**: Engine, primitives, environment, grammar, drive, integration
+
+**Key insight:** Programs compose as sequential actions: `go_north(take_lamp(state))`. This is the same tree structure as ARC programs, proving the Program representation handles both stateless transforms and stateful action sequences.
+
+**Result:** Core learner runs on Zork tasks without modification. 420 tests pass (380 → 420).
+
+---
+
+### Decision 35: List Operations Domain + Compounding Validation
+
+**Date:** 2026-03-12
+
+**Context:** Needed to validate the core compounding hypothesis: does library learning (sleep) actually help solve harder tasks (wake)? ARC is too complex to isolate the compounding mechanism. Need a simpler domain where the expected behavior is clear.
+
+**Architecture:** New domain `domains/list_ops/` with 22 primitives (reverse, sort, double_all, filter_pos, cumsum, etc.), 28 tasks at 3 difficulty levels:
+- Level 1 (8 tasks): single operations
+- Level 2 (12 tasks): two-step compositions
+- Level 3 (8 tasks): three-step compositions
+
+Experiment script `experiments/list_compounding.py` runs multiple wake-sleep rounds with sequential compounding enabled.
+
+**Result:** Domain works correctly, 51 tests pass. Experiment runs in <1 second.
+
+---
+
+### Decision 36: Fix Critical Library Execution Bug (All Domains)
+
+**Date:** 2026-03-12
+
+**Context:** Compounding experiment showed flat solve rate across rounds (75%→75%→78%). Library was growing but NOT helping solve new tasks. Diagnosed the root cause:
+
+**The bug:** `inject_library()` creates 0-arity Primitives with `fn=Program` (a stored sub-tree). But ALL four environments silently ignored these:
+- **ARCEnv**: `if prim.arity == 0: return grid` (line 122) — returns input unchanged
+- **ListEnv**: No lookup for dynamic primitives with Program fn
+- **SymbolicMathEnv**: Unknown primitives return 0.0
+- **ZorkEnv**: Same pattern
+
+This meant **library entries were NEVER executed in any domain**. The entire compounding mechanism was broken since the beginning.
+
+**Fix:** When a primitive's fn is a `Program` (library entry), recursively execute it:
+```python
+if isinstance(prim.fn, Program):
+    return self.execute(prim.fn, input_data)
+```
+Applied to all 4 environments. Also register library primitives with the environment in the learner so they can be resolved during execution.
+
+**Before fix:** List domain: R1=75%, R5=78% (flat)
+**After fix:** List domain: R1=89%, R5=96.4% (compounding!)
+
+Key evidence of compounding:
+- `list_L3_increment_all_then_double_all_then_sort_asc`: R1 needed 1505 evals (beam search), R2 solved in 32 evals (depth-1 via library entry) — **47x speedup**
+- 7/8 L3 tasks solved by R5 vs 3/8 before fix
+
+471 tests pass.
+
+---
+
 *This document will be updated with each new session and major decision.*
