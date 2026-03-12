@@ -1320,11 +1320,24 @@ class Learner:
                 pair_pool.append(name)
                 seen_names.add(name)
 
-        # --- Depth 2: exhaustive K² pairs (cost: 2 ops each) ---
+        # --- Smart pruning for depth-2: filter inner steps by quality ---
+        # Inner steps with very high error (>0.7) rarely help in composition.
+        # Keep the full pair_pool for outer steps (they transform results)
+        # but restrict inner steps to those that produce useful intermediate results.
+        INNER_STEP_THRESHOLD = 0.70
+        inner_pool = [
+            name for name in pair_pool
+            if depth1_scores.get(name, 1.0) <= INNER_STEP_THRESHOLD
+        ]
+        # Fallback: if too few pass threshold, use top half by score
+        if len(inner_pool) < pair_top_k // 3:
+            inner_pool = pair_pool[:pair_top_k // 2]
+
+        # --- Depth 2: smart K × K' pairs (cost: 2 ops each) ---
         for outer_name in pair_pool:
             if not _budget_ok():
                 break
-            for inner_name in pair_pool:
+            for inner_name in inner_pool:
                 if not _budget_ok():
                     break
                 prog = Program(root=outer_name, children=[
@@ -1338,10 +1351,17 @@ class Learner:
         if max_depth < 3 or not _budget_ok():
             return scored, n_evals
 
-        # --- Build triple pool: use depth-2 results + essentials ---
-        # Include primitives that appear in top depth-2 programs (they
-        # work well in compositions) plus essentials and top singles.
-        # Total pool is hard-capped at triple_top_k (cost = K³).
+        # --- Adaptive depth skip: if depth-2 best is poor, skip depth-3 ---
+        # Depth-3 rarely helps when depth-2 can't find anything close.
+        DEPTH3_SKIP_THRESHOLD = 0.50
+        depth2_best = min(
+            (s.prediction_error for s in scored if s.program.children),
+            default=1.0)
+        if depth2_best > DEPTH3_SKIP_THRESHOLD:
+            return scored, n_evals
+
+        # --- Build triple pool: error-guided, from top depth-2 results ---
+        # Use primitives that worked well in depth-2 compositions.
         depth2_ranked = sorted(
             [s for s in scored if s.program.children],
             key=lambda s: s.prediction_error)
