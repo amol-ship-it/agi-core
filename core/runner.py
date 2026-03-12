@@ -39,27 +39,28 @@ from .metrics import extract_metrics, print_compounding_table, save_metrics_json
 # =============================================================================
 
 PRESETS = {
-    # Quick: fast dev loop. Beam search adds 0 solves (verified A/B test on
-    # 49 tasks: 17/49 with beam=20 vs 17/49 with beam=1, same tasks solved,
-    # beam adds +13% wall time). Exhaustive enumeration is self-limiting
-    # (~7.5K evals/task max) but large grids (21x21=441 cells) waste compute.
-    # Cell-normalized compute cap: 3.5M ops = evals * cells. Verified on
-    # 400-task training set: 0 solves lost, 8.5% wall-time reduction.
+    # Quick: fast dev loop. Cell-normalized compute cap (~3x median ops).
+    # Analysis on 400-task training set:
+    #   - Solved tasks are bimodal: 72 "fast" (depth 0-1, <1K evals) vs
+    #     23 "slow" (depth 1+, >1K evals from per_object_recolor/triples).
+    #   - 30x30 grids solve in 30 evals when we have the right primitive;
+    #     146s on wrong primitive = wasted compute, not useful search.
+    #   - 2M cap: loses 2 depth-3 solves, caps 49 pathological tasks, ~17% faster.
+    #   - Philosophy: if it takes >3x median ops, fix the primitives, don't brute force.
     "quick": {
         "rounds": 1,
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 50,
-        "compute_cap": 3_500_000,   # cell-normalized: 0 solves lost, ~8.5% faster
+        "compute_cap": 2_000_000,   # ~3x median ops; 2 solves lost, 17% faster
     },
-    # Default: full dataset. Exhaustive enumeration does ~100% of solves.
-    # Beam=1 avoids wasting compute on a phase that contributes nothing.
+    # Default: full dataset. Same aggressive cap — forces primitive quality.
     "default": {
         "rounds": 1,
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 0,
-        "compute_cap": 3_500_000,   # cell-normalized: 0 solves lost, ~8.5% faster
+        "compute_cap": 2_000_000,   # ~3x median ops; 2 solves lost, 17% faster
     },
     # Contest: maximum effort. Keeps modest beam in case deeper search
     # helps on the hardest tasks. Still mainly exhaustive.

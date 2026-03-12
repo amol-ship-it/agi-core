@@ -813,18 +813,26 @@ Key evidence of compounding:
 
 ## Session — Cell-Normalized Compute Cap (2026-03-12)
 
-### Decision: Enable compute_cap=3.5M for quick/default presets
+### Decision: Aggressive compute cap at 2M ops (~3x median)
 
 **Problem:** Task `0dfd9992` (21×21=441 cells) consumed 69s and 6,580 evals — pure waste on an unsolved task. Large-grid tasks dominated wall time while contributing zero solves.
 
-**Analysis (400-task training set):**
-- Solved tasks: max 3.25M ops (`evals × max_cells`), median 22K ops
-- Unsolved tasks: up to 4.9M ops, median 662K ops
-- Cap at 3.5M ops: **0 solves lost**, 15 tasks capped, ~8.5% wall-time reduction
+**Key insight — bimodal solve distribution (400-task training set):**
+- **72 "fast" solves** (depth 0-1, <1K evals): direct primitives or simple pairs
+- **23 "slow" solves** (depth 1+, >1K evals): `per_object_recolor`, `per_object`, or depth-3 triples
+- **305 unsolved**: exhausted full search (5K-7.4K evals each), never found it
+- Grid size is NOT the bottleneck: 30×30 task `1f85a75f` solves in 30 evals (0.0s) with `extract_largest`; 29×29 task `484b58aa` burns 146s unsolved
+- Solved tasks: median 22K ops, max 3.25M ops
+- Overall median ops: 714K
 
-**Implementation:** Set `compute_cap=3_500_000` in quick/default presets. The existing cell-normalization code in `learner.py` already scales eval budgets inversely with grid size. For 441-cell grids, this gives ~7,936 evals (vs ~6K self-limited by exhaustive depth).
+**Philosophy:** If a task needs >3x median ops to solve, the primitives aren't good enough. Brute-forcing deeper search is the wrong investment — better to add the right primitive.
 
-**Result:** Safety net for pathologically large grids. For most tasks the exhaustive depth limit bites first. Can be overridden with `--compute-cap 0` for unlimited.
+**Implementation:** `compute_cap=2_000_000` for quick/default presets (~3x median ops).
+- Loses 2 solves (both depth-3 compositions on 441-cell grids: `90c28cc7`, `0b148d64`)
+- Caps 49 pathological tasks, saves ~17% of total compute ops
+- Verified on 50-task quick run: still 17/50 solved (no regression)
+- Contest preset remains at 50M for maximum effort
+- Override with `--compute-cap 0` for unlimited
 
 ### Decision: Add --task-ids flag for targeted runs
 
