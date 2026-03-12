@@ -389,7 +389,9 @@ class Learner:
         if not _budget_ok():
             logger.debug(f"  [wake] Phase 2 beam search: SKIPPED (budget exceeded, {n_evals} evals)")
         else:
-            if best_enum_error > 0.3:
+            if cfg.max_generations <= 1:
+                effective_gens = cfg.max_generations
+            elif best_enum_error > 0.3:
                 effective_gens = max(5, cfg.max_generations // 4)
             elif best_enum_error > 0.15:
                 effective_gens = max(10, cfg.max_generations // 2)
