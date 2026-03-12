@@ -193,33 +193,23 @@ class Learner:
         pareto: dict[int, ParetoEntry] = {}
         enum_candidates: list[ScoredProgram] = []
 
-        # Cell-normalized eval budget: scale budget by grid size.
-        # Small grids are cheap to evaluate → more evals allowed.
-        # Large grids are expensive → fewer evals.
-        # Formula from agi-mvp-general: min(max(cap/cells, 500), max_evals)
+        # Cell-normalized compute budget (deterministic, reproducible).
+        # The eval_budget from the runner is based on DEFAULT_CELLS=800.
+        # Scale inversely with actual grid size: larger grids get fewer evals
+        # because each eval is more expensive (more cells to transform/compare).
         DEFAULT_CELLS = 800
+        cells = self._avg_cells(task)
         if cfg.eval_budget > 0:
-            cells = self._avg_cells(task)
-            # Scale: if cells < DEFAULT_CELLS, allow more evals (cheaper)
-            # If cells > DEFAULT_CELLS, allow fewer evals
-            scaled = max(cfg.eval_budget * DEFAULT_CELLS // max(cells, 1), 500)
-            eval_budget = min(scaled, cfg.eval_budget * 4)  # cap at 4x base
+            # Scale: budget * (DEFAULT / actual_cells)
+            # Large grids (>800 cells) get fewer evals; small grids get more.
+            eval_budget = max(cfg.eval_budget * DEFAULT_CELLS // max(cells, 1), 500)
+            eval_budget = min(eval_budget, cfg.eval_budget * 4)  # cap at 4x base
         else:
             eval_budget = 0  # unlimited
 
-        # Wall-time cap per task: 60 seconds for quick mode, 120 for default,
-        # 300 for contest. Prevents single tasks from dominating run time.
-        wall_time_cap = {
-            30: 60, 80: 120, 250: 300  # beam_width -> seconds
-        }.get(cfg.beam_width, 120)
-
         def _budget_ok() -> bool:
-            """Check whether we've exceeded the per-task eval or time budget."""
-            if eval_budget > 0 and n_evals >= eval_budget:
-                return False
-            if time.time() - t0 > wall_time_cap:
-                return False
-            return True
+            """Check whether we've exceeded the per-task eval budget."""
+            return eval_budget <= 0 or n_evals < eval_budget
 
         def _record_solve():
             """Record solution in memory if record=True."""
@@ -235,8 +225,7 @@ class Learner:
         if cfg.exhaustive_depth >= 1:
             enum_candidates, n_enum_evals = self._exhaustive_enumerate(
                 all_prims, task, cfg.exhaustive_depth,
-                eval_budget=eval_budget,
-                wall_time_cap=wall_time_cap, t_start=t0)
+                eval_budget=eval_budget)
             n_evals += n_enum_evals
             for sp in enum_candidates:
                 self._update_pareto_front(pareto, sp)
@@ -1239,8 +1228,6 @@ class Learner:
         max_depth: int = 2,
         top_k: int = 15,
         eval_budget: int = 0,
-        wall_time_cap: float = 0,
-        t_start: float = 0,
     ) -> tuple[list[ScoredProgram], int]:
         """
         Enumerate ALL programs up to max_depth and evaluate them.
@@ -1257,8 +1244,6 @@ class Learner:
 
         eval_budget: max evaluations (0 = unlimited). Budget is checked
         between depth phases and within inner loops.
-        wall_time_cap: max wall time in seconds (0 = unlimited).
-        t_start: start time for wall time cap.
 
         Returns (scored_programs, num_evaluations).
         """
@@ -1269,11 +1254,7 @@ class Learner:
         triple_top_k = self.search_cfg.exhaustive_triple_top_k
 
         def _budget_ok() -> bool:
-            if eval_budget > 0 and n_evals >= eval_budget:
-                return False
-            if wall_time_cap > 0 and t_start > 0 and time.time() - t_start > wall_time_cap:
-                return False
-            return True
+            return eval_budget <= 0 or n_evals < eval_budget
 
         # --- Depth 1: all single primitives ---
         unary_prims = [p for p in primitives if p.arity <= 1]
@@ -1423,13 +1404,24 @@ class Learner:
     # -------------------------------------------------------------------------
 
     @staticmethod
+    @staticmethod
     def _avg_cells(task: Task) -> int:
-        """Average cell count across training input grids."""
+        """Max cell count across training input grids.
+
+        Uses max (not average) because the most expensive input determines
+        the per-evaluation cost — primitives must process every input.
+        """
         grids = [inp for inp, _ in task.train_examples]
         if not grids:
             return 1
-        total = sum(len(g) * len(g[0]) for g in grids if g and len(g) > 0 and len(g[0]) > 0)
-        return max(1, total // len(grids))
+        sizes = []
+        for g in grids:
+            try:
+                if g and len(g) > 0 and len(g[0]) > 0:
+                    sizes.append(len(g) * len(g[0]))
+            except TypeError:
+                continue  # non-grid input (e.g. scalar)
+        return max(sizes) if sizes else 1
 
     def _init_beam(self, primitives: list[Primitive], n: int) -> list[Program]:
         """

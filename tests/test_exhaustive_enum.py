@@ -560,8 +560,8 @@ class TestNewConfigFields(unittest.TestCase):
             ],
             test_inputs=[],
         )
-        avg = Learner._avg_cells(task)
-        self.assertEqual(avg, 7)  # (6+8)//2 = 7
+        max_cells = Learner._avg_cells(task)
+        self.assertEqual(max_cells, 8)  # max(6, 8) = 8
 
     def test_avg_cells_empty(self):
         """Empty task returns 1 (safe default)."""
