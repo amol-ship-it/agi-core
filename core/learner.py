@@ -1496,8 +1496,16 @@ class Learner:
         return Program(root=prim.name, children=children)
 
     def _evaluate_program(self, program: Program, task: Task) -> ScoredProgram:
-        """Evaluate a program on all training examples, return scored result."""
+        """Evaluate a program on all training examples, return scored result.
+
+        Uses max-error blending to penalize programs that match some examples
+        but fail on others.  A program that perfectly matches 2/3 examples
+        but fails on the third (avg=0.33, max=1.0) scores worse than one
+        that partially matches all three (avg=0.33, max=0.4).  This reduces
+        overfitting when tasks have few training examples.
+        """
         total_error = 0.0
+        max_error = 0.0
         n = len(task.train_examples)
 
         for inp, expected in task.train_examples:
@@ -1507,10 +1515,13 @@ class Learner:
             except Exception:
                 err = 1e6  # penalty for programs that crash
             total_error += err
+            max_error = max(max_error, err)
 
         avg_error = total_error / n if n > 0 else total_error
+        # Blend average and max: penalizes inconsistent programs
+        effective_error = max(avg_error, max_error * 0.5)
         comp_cost = self.drive.complexity_cost(program)
-        energy = self.search_cfg.energy_alpha * avg_error + self.search_cfg.energy_beta * comp_cost
+        energy = self.search_cfg.energy_alpha * effective_error + self.search_cfg.energy_beta * comp_cost
 
         return ScoredProgram(
             program=program,

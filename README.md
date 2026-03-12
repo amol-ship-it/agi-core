@@ -283,7 +283,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **Compounding produces library entries on ARC but has limited impact.** With `--compounding` flag (depth-2 + 3 rounds + sequential), the system creates 3-5 library entries with 2x reuse. However, most ARC solves are depth-1 (single primitives), so the library provides little additional coverage beyond what depth-3 exhaustive search already finds.
 
-**The training-eval gap is significant.** ARC-AGI-1 training solves 85/400 (21%), but eval solves only ~20/400 (5%). This 4:1 ratio indicates the hand-crafted primitives are biased toward training task patterns. Improving eval performance requires genuinely general primitives, not more training-specific ones.
+**The training-eval gap is significant.** ARC-AGI-1 training: 85/400 (21%) truly solved (train+test), 16 overfit. Eval: ~2/50 (4%) on quick mode. Analysis shows the gap is driven by **overfitting, not missing primitives**: deeper programs (depth-2+) are 4-5x more likely to overfit than depth-0. The fix is better generalization (Occam's razor, per-example verification), not more primitives.
 
 **Where the ARC solve rate comes from:** The 342 hand-crafted primitives (6,500 lines of domain code) encode substantial human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition), but the primitives are the primary source of ARC performance. This is honest: the architecture is generic, but ARC results depend on domain engineering.
 
