@@ -62,6 +62,55 @@ def _find_connected_components(grid: Grid) -> list[dict]:
     return components
 
 
+def _find_multicolor_objects(grid: Grid, bg_color: int = 0) -> list[dict]:
+    """Find multi-color objects via 8-connectivity flood fill on non-bg pixels.
+
+    Unlike _find_connected_components which groups by same color, this groups
+    all adjacent non-background pixels into objects. Useful for tasks where
+    objects are multi-colored (e.g. a pattern with multiple colors).
+
+    Returns list of dicts with keys: pixels (set of (r,c)), bbox, size, colors.
+    """
+    if not grid or not grid[0]:
+        return []
+    height, width = len(grid), len(grid[0])
+    visited: set[tuple[int, int]] = set()
+    objects: list[dict] = []
+
+    for r in range(height):
+        for c in range(width):
+            if grid[r][c] != bg_color and (r, c) not in visited:
+                pixels: set[tuple[int, int]] = set()
+                colors: set[int] = set()
+                stack = [(r, c)]
+                while stack:
+                    cr, cc = stack.pop()
+                    if (cr, cc) in visited:
+                        continue
+                    if cr < 0 or cr >= height or cc < 0 or cc >= width:
+                        continue
+                    if grid[cr][cc] == bg_color:
+                        continue
+                    visited.add((cr, cc))
+                    pixels.add((cr, cc))
+                    colors.add(grid[cr][cc])
+                    # 8-connectivity
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            if dr == 0 and dc == 0:
+                                continue
+                            stack.append((cr + dr, cc + dc))
+                rows = [p[0] for p in pixels]
+                cols = [p[1] for p in pixels]
+                objects.append({
+                    "pixels": pixels,
+                    "bbox": (min(rows), min(cols), max(rows), max(cols)),
+                    "size": len(pixels),
+                    "colors": colors,
+                })
+    return objects
+
+
 def _component_to_subgrid(comp: dict) -> Grid:
     """Extract a component as a minimal cropped sub-grid."""
     min_r, min_c, max_r, max_c = comp["bbox"]
@@ -70,6 +119,17 @@ def _component_to_subgrid(comp: dict) -> Grid:
     result = [[0] * w for _ in range(h)]
     for r, c in comp["pixels"]:
         result[r - min_r][c - min_c] = comp["color"]
+    return result
+
+
+def _multicolor_object_to_subgrid(obj: dict, grid: Grid) -> Grid:
+    """Extract a multi-color object as a minimal cropped sub-grid."""
+    min_r, min_c, max_r, max_c = obj["bbox"]
+    h = max_r - min_r + 1
+    w = max_c - min_c + 1
+    result = [[0] * w for _ in range(h)]
+    for r, c in obj["pixels"]:
+        result[r - min_r][c - min_c] = grid[r][c]
     return result
 
 
@@ -93,6 +153,24 @@ def find_foreground_shapes(grid: Grid) -> list[dict]:
             "position": (comp["bbox"][0], comp["bbox"][1]),
         })
     return shapes
+
+
+def find_multicolor_objects(grid: Grid, bg_color: int = 0) -> list[dict]:
+    """Extract multi-color objects via 8-connectivity.
+
+    Returns list of dicts with: subgrid, bbox, size, colors, position.
+    """
+    objects = _find_multicolor_objects(grid, bg_color)
+    result = []
+    for obj in objects:
+        result.append({
+            "subgrid": _multicolor_object_to_subgrid(obj, grid),
+            "bbox": obj["bbox"],
+            "size": obj["size"],
+            "colors": obj["colors"],
+            "position": (obj["bbox"][0], obj["bbox"][1]),
+        })
+    return result
 
 
 def place_subgrid(
@@ -173,6 +251,12 @@ def try_object_decomposition(
 
     For same-dims tasks, tries each primitive as a per-object transform.
     Returns (name, transform_fn) if pixel-perfect on all training examples.
+
+    Strategies (in order):
+    1. Single primitive per-object (same-color 4-connectivity)
+    2. Pairs of primitives per-object (composed: outer(inner(obj)))
+    3. Single primitive per multi-color object (8-connectivity)
+    4. Conditional recolor by object properties
     """
     if not task_examples:
         return None
@@ -186,10 +270,9 @@ def try_object_decomposition(
 
     bg_color = _get_background_color(task_examples[0][0])
 
-    for prim in primitives:
-        if prim.arity != 1:
-            continue
-
+    # --- Strategy 1: Single primitive per-object ---
+    unary_prims = [p for p in primitives if p.arity == 1]
+    for prim in unary_prims:
         def make_per_obj_fn(t=prim.fn, bg=bg_color):
             def fn(grid):
                 result = apply_transform_per_object(grid, t, bg)
@@ -197,26 +280,125 @@ def try_object_decomposition(
             return fn
 
         per_obj_fn = make_per_obj_fn()
-        all_match = True
-        for inp, expected in task_examples:
-            try:
-                result = per_obj_fn(inp)
-                if result != expected:
-                    all_match = False
-                    break
-            except Exception:
-                all_match = False
-                break
-
-        if all_match:
+        if _test_on_examples(per_obj_fn, task_examples):
             return (f"per_object({prim.name})", per_obj_fn)
 
-    # Strategy 2: conditional recolor by object properties
+    # --- Strategy 2: Pairs of primitives per-object ---
+    # First, score individual prims to find top candidates (avoid O(n²) on all)
+    scored_prims = _score_per_object_prims(unary_prims, task_examples, bg_color)
+    top_prims = scored_prims[:15]  # top 15 by per-object error
+
+    for outer in top_prims:
+        for inner in top_prims:
+            if outer.name == inner.name:
+                continue
+
+            def make_composed_fn(o=outer.fn, i=inner.fn, bg=bg_color):
+                def composed_transform(subgrid):
+                    mid = i(subgrid)
+                    if not isinstance(mid, list) or not mid:
+                        return subgrid
+                    return o(mid)
+
+                def fn(grid):
+                    result = apply_transform_per_object(grid, composed_transform, bg)
+                    return result if result is not None else grid
+                return fn
+
+            composed_fn = make_composed_fn()
+            if _test_on_examples(composed_fn, task_examples):
+                return (f"per_object({outer.name}({inner.name}))", composed_fn)
+
+    # --- Strategy 3: Single primitive per multi-color object ---
+    for prim in unary_prims:
+        def make_mc_fn(t=prim.fn, bg=bg_color):
+            def fn(grid):
+                result = apply_transform_per_multicolor_object(grid, t, bg)
+                return result if result is not None else grid
+            return fn
+
+        mc_fn = make_mc_fn()
+        if _test_on_examples(mc_fn, task_examples):
+            return (f"per_mc_object({prim.name})", mc_fn)
+
+    # --- Strategy 4: Conditional recolor by object properties ---
     cond = _try_conditional_recolor(task_examples)
     if cond is not None:
         return cond
 
     return None
+
+
+def _test_on_examples(fn: Callable, examples: list[tuple]) -> bool:
+    """Test if a function produces pixel-perfect output on all examples."""
+    for inp, expected in examples:
+        try:
+            result = fn(inp)
+            if result != expected:
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def _score_per_object_prims(
+    prims: list,
+    examples: list[tuple],
+    bg_color: int,
+) -> list:
+    """Score unary prims by per-object error, return sorted (best first)."""
+    import numpy as np
+    scores = []
+    for prim in prims:
+        total_err = 0.0
+        n_examples = 0
+        for inp, expected in examples:
+            try:
+                result = apply_transform_per_object(inp, prim.fn, bg_color)
+                if result is None:
+                    total_err += 1.0
+                else:
+                    got = np.array(result, dtype=np.int32)
+                    exp = np.array(expected, dtype=np.int32)
+                    if got.shape == exp.shape:
+                        total_err += float(np.mean(got != exp))
+                    else:
+                        total_err += 1.0
+            except Exception:
+                total_err += 1.0
+            n_examples += 1
+        avg_err = total_err / max(n_examples, 1)
+        scores.append((avg_err, prim))
+    scores.sort(key=lambda x: x[0])
+    return [p for _, p in scores]
+
+
+def apply_transform_per_multicolor_object(
+    grid: Grid,
+    transform: Callable[[Grid], Grid],
+    bg_color: int = 0,
+) -> Optional[Grid]:
+    """Apply a transform to each multi-color object and reassemble.
+
+    Uses 8-connectivity to detect objects spanning multiple colors.
+    """
+    objects = find_multicolor_objects(grid, bg_color)
+    if not objects:
+        return None
+
+    h, w = len(grid), len(grid[0]) if grid else 0
+    canvas = [[bg_color] * w for _ in range(h)]
+
+    for obj in objects:
+        try:
+            transformed = transform(obj["subgrid"])
+            if transformed is None:
+                return None
+        except Exception:
+            return None
+        canvas = place_subgrid(canvas, transformed, obj["position"],
+                               transparent_color=bg_color)
+    return canvas
 
 
 # =============================================================================

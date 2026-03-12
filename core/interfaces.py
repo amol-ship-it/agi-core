@@ -5,6 +5,10 @@ These are the ONLY abstractions that domain-specific code must implement.
 The core loop (learner.py) depends on nothing else.
 
 Data types (Primitive, Program, Task, etc.) live in core/types.py.
+
+The Grammar interface embodies Pillar 3 (Abstraction & Composition).
+Decomposition is the flip side of composition: complex inputs are broken
+into parts, each part is solved independently, and results are recomposed.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from .types import (
     Program,
     Observation,
     Task,
+    Decomposition,
     ScoredProgram,
     LibraryEntry,
 )
@@ -102,10 +107,16 @@ class Environment(ABC):
 
 class Grammar(ABC):
     """
-    The building blocks and composition rules.
+    The building blocks, composition rules, and decomposition strategies.
 
-    Defines what primitives exist and how they can be combined.
-    This is the abstraction & composability pillar.
+    Defines what primitives exist, how they can be combined (composition),
+    and how complex inputs can be broken into simpler parts (decomposition).
+
+    Composition and decomposition are duals:
+    - Composition: simple parts → complex whole (synthesis)
+    - Decomposition: complex whole → simple parts (analysis)
+
+    This is Pillar 3: Abstraction & Composability.
     """
 
     @abstractmethod
@@ -189,6 +200,43 @@ class Grammar(ABC):
             )
             learned.append(p)
         return learned
+
+    # --- Decomposition (inverse of composition) ---
+
+    def decompose(self, input_data: Any, task: Task) -> list[Decomposition]:
+        """Decompose an input into structured parts for independent solving.
+
+        This is the inverse of composition: given a complex input, propose
+        ways to break it into simpler sub-problems. Each Decomposition
+        contains the parts and context needed for reassembly.
+
+        Multiple decomposition strategies may be returned (e.g., for ARC:
+        same-color objects, multi-color objects, grid partitions). The
+        learner tries each and picks the best.
+
+        This embodies the universal principle: complex problems are solved
+        by decomposing into sub-problems, solving each, and recomposing.
+
+        Default: no decomposition (returns empty list).
+
+        Examples:
+          ARC: grid → [object_subgrids] with positions for reassembly
+          Symbolic regression: expression → [sub-expressions]
+          Planning: goal → [subgoals]
+        """
+        return []
+
+    def recompose(self, decomposition: Decomposition,
+                  transformed_parts: list[Any]) -> Any:
+        """Reassemble transformed parts back into a complete output.
+
+        Given a decomposition and the independently-transformed parts,
+        produce the final output. This is the composition step that
+        follows decomposition.
+
+        Default: returns the first part (identity).
+        """
+        return transformed_parts[0] if transformed_parts else None
 
 
 # =============================================================================

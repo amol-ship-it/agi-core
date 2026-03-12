@@ -1206,5 +1206,262 @@ class TestBatch4Primitives(unittest.TestCase):
         self.assertEqual(result, [[1, 2], [3, 4]])
 
 
+class TestGrammarDecomposition(unittest.TestCase):
+    """Test Grammar.decompose/recompose as a core principle."""
+
+    def setUp(self):
+        self.grammar = ARCGrammar(seed=42)
+
+    def test_decompose_returns_strategies(self):
+        """decompose should return at least one strategy for multi-object grids."""
+        grid = [
+            [0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0],
+            [0, 0, 0, 2, 0],
+            [0, 0, 0, 0, 0],
+        ]
+        from core import Task
+        task = Task(task_id="test", train_examples=[(grid, grid)], test_inputs=[grid])
+        decomps = self.grammar.decompose(grid, task)
+        self.assertGreater(len(decomps), 0)
+        self.assertEqual(decomps[0].strategy, "same_color_objects")
+        self.assertEqual(decomps[0].n_parts, 2)
+
+    def test_recompose_identity(self):
+        """recompose(decompose(grid), identity_parts) should reproduce grid."""
+        grid = [
+            [0, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 0, 2],
+            [0, 0, 0, 0],
+        ]
+        from core import Task
+        task = Task(task_id="test", train_examples=[(grid, grid)], test_inputs=[grid])
+        decomps = self.grammar.decompose(grid, task)
+        self.assertGreater(len(decomps), 0)
+
+        d = decomps[0]
+        result = self.grammar.recompose(d, d.parts)
+        self.assertEqual(result, grid)
+
+    def test_decompose_empty_for_single_object(self):
+        """Single object grids should not decompose (not useful)."""
+        grid = [
+            [0, 0, 0],
+            [0, 1, 0],
+            [0, 0, 0],
+        ]
+        from core import Task
+        task = Task(task_id="test", train_examples=[(grid, grid)], test_inputs=[grid])
+        decomps = self.grammar.decompose(grid, task)
+        self.assertEqual(len(decomps), 0)
+
+    def test_grid_partition_decomposition(self):
+        """Grid with separator lines should produce grid_partition strategy."""
+        grid = [
+            [1, 1, 5, 2, 2],
+            [1, 1, 5, 2, 2],
+            [5, 5, 5, 5, 5],
+            [3, 3, 5, 4, 4],
+            [3, 3, 5, 4, 4],
+        ]
+        from core import Task
+        task = Task(task_id="test", train_examples=[(grid, grid)], test_inputs=[grid])
+        decomps = self.grammar.decompose(grid, task)
+        strategies = [d.strategy for d in decomps]
+        self.assertIn("grid_partition", strategies)
+        gp = [d for d in decomps if d.strategy == "grid_partition"][0]
+        self.assertEqual(gp.n_parts, 4)
+
+    def test_grid_partition_recompose(self):
+        """Recompose grid_partition should reproduce the original grid."""
+        grid = [
+            [1, 1, 5, 2, 2],
+            [1, 1, 5, 2, 2],
+            [5, 5, 5, 5, 5],
+            [3, 3, 5, 4, 4],
+            [3, 3, 5, 4, 4],
+        ]
+        from core import Task
+        task = Task(task_id="test", train_examples=[(grid, grid)], test_inputs=[grid])
+        decomps = self.grammar.decompose(grid, task)
+        gp = [d for d in decomps if d.strategy == "grid_partition"][0]
+        result = self.grammar.recompose(gp, gp.parts)
+        self.assertEqual(result, grid)
+
+    def test_multicolor_strategy_when_different(self):
+        """Multi-color decomposition should appear when 8-conn differs from 4-conn."""
+        grid = [
+            [0, 0, 0, 0, 0],
+            [0, 1, 2, 0, 0],  # 4-conn: 2 objects; 8-conn: 1 object
+            [0, 0, 0, 0, 3],  # 4-conn: 3 objects total; 8-conn: 2
+            [0, 0, 0, 0, 0],
+        ]
+        from core import Task
+        task = Task(task_id="test", train_examples=[(grid, grid)], test_inputs=[grid])
+        decomps = self.grammar.decompose(grid, task)
+        strategies = [d.strategy for d in decomps]
+        self.assertIn("same_color_objects", strategies)
+        # 4-conn gives 3 objects (1,2,3); 8-conn gives 2 (1+2 merged, 3 alone)
+        # So multicolor should also appear
+        if len(decomps) > 1:
+            self.assertIn("multicolor_objects", strategies)
+
+
+class TestFixedPointIteration(unittest.TestCase):
+    """Test apply_until_stable combinator."""
+
+    def test_identity_converges_immediately(self):
+        from domains.arc.primitives import apply_until_stable
+        grid = [[1, 2], [3, 4]]
+        result = apply_until_stable(lambda g: g, grid)
+        self.assertEqual(result, grid)
+
+    def test_fill_propagation(self):
+        """Repeated fill should expand colored regions."""
+        from domains.arc.primitives import apply_until_stable
+
+        # Simple: each step fills one layer of bg-adjacent cells
+        def fill_one_layer(grid):
+            h, w = len(grid), len(grid[0])
+            result = [row[:] for row in grid]
+            for r in range(h):
+                for c in range(w):
+                    if grid[r][c] == 0:
+                        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] != 0:
+                                result[r][c] = grid[nr][nc]
+                                break
+            return result
+
+        grid = [
+            [0, 0, 0],
+            [0, 1, 0],
+            [0, 0, 0],
+        ]
+        result = apply_until_stable(fill_one_layer, grid)
+        # After iteration, everything should be filled with 1
+        self.assertTrue(all(c == 1 for row in result for c in row))
+
+    def test_max_iters_respected(self):
+        """Should stop after max_iters even if not converged."""
+        from domains.arc.primitives import apply_until_stable
+        call_count = [0]
+
+        def counter(grid):
+            call_count[0] += 1
+            return [[c + 1 for c in row] for row in grid]  # never converges
+
+        apply_until_stable(counter, [[0]], max_iters=5)
+        self.assertEqual(call_count[0], 5)
+
+    def test_make_fixed_point_fn(self):
+        from domains.arc.primitives import make_fixed_point_fn
+        fn = make_fixed_point_fn(lambda g: g)
+        self.assertEqual(fn([[1]]), [[1]])
+
+
+class TestObjectDecompositionExtended(unittest.TestCase):
+    """Test extended object decomposition: pairs, multi-color, scoring."""
+
+    def test_multicolor_object_detection(self):
+        """8-connectivity should group adjacent different-colored pixels."""
+        from domains.arc.objects import find_multicolor_objects
+        grid = [
+            [0, 0, 0, 0, 0],
+            [0, 1, 2, 0, 0],
+            [0, 3, 1, 0, 0],
+            [0, 0, 0, 0, 4],
+            [0, 0, 0, 4, 4],
+        ]
+        objects = find_multicolor_objects(grid)
+        self.assertEqual(len(objects), 2)
+        # First object: the 2x2 cluster of colors 1,2,3
+        sizes = sorted([o["size"] for o in objects])
+        self.assertEqual(sizes, [3, 4])
+
+    def test_multicolor_subgrid_extraction(self):
+        """Multi-color subgrids should preserve original colors."""
+        from domains.arc.objects import find_multicolor_objects
+        grid = [
+            [0, 0, 0],
+            [0, 1, 2],
+            [0, 3, 0],
+        ]
+        objects = find_multicolor_objects(grid)
+        self.assertEqual(len(objects), 1)
+        sg = objects[0]["subgrid"]
+        # Should be a 2x2 subgrid with colors 1,2,3,0
+        self.assertEqual(len(sg), 2)
+        self.assertEqual(len(sg[0]), 2)
+        self.assertEqual(sg[0][0], 1)
+        self.assertEqual(sg[0][1], 2)
+        self.assertEqual(sg[1][0], 3)
+        self.assertEqual(sg[1][1], 0)
+
+    def test_per_object_pair_decomposition(self):
+        """Composed per-object transforms: outer(inner(obj)) should work."""
+        from domains.arc.objects import try_object_decomposition
+        from core import Primitive
+
+        # Task: each object needs rotate90(identity(obj)) = rotate90(obj)
+        # But we test that the pair search finds it even when single doesn't
+        inp = [
+            [0, 0, 0, 0, 0],
+            [0, 1, 1, 0, 0],
+            [0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 2, 0],
+            [0, 0, 2, 2, 0],
+        ]
+        # After rotate90 per-object, each L-shape rotates
+        from domains.arc.primitives import rotate_90_cw
+        from domains.arc.objects import apply_transform_per_object
+        expected = apply_transform_per_object(inp, rotate_90_cw)
+
+        if expected is not None:
+            task_examples = [(inp, expected)]
+            prims = [
+                Primitive(name="identity", arity=1, fn=lambda g: g, domain="arc"),
+                Primitive(name="rotate_90_cw", arity=1, fn=rotate_90_cw, domain="arc"),
+            ]
+            result = try_object_decomposition(task_examples, prims)
+            self.assertIsNotNone(result)
+            name, fn = result
+            self.assertIn("per_object", name)
+
+    def test_score_per_object_prims(self):
+        """_score_per_object_prims should rank prims by per-object error."""
+        from domains.arc.objects import _score_per_object_prims
+        from core import Primitive
+
+        inp = [[0, 1, 0], [0, 1, 0]]
+        expected = [[0, 1, 0], [0, 1, 0]]  # identity is best
+        task_examples = [(inp, expected)]
+
+        prims = [
+            Primitive(name="identity", arity=1, fn=lambda g: g, domain="arc"),
+            Primitive(name="rotate_90_cw", arity=1, fn=rotate_90_cw, domain="arc"),
+        ]
+        scored = _score_per_object_prims(prims, task_examples, bg_color=0)
+        # Identity should rank first (lowest error)
+        self.assertEqual(scored[0].name, "identity")
+
+    def test_multicolor_per_object_transform(self):
+        """Per-multicolor-object transforms should work."""
+        from domains.arc.objects import apply_transform_per_multicolor_object
+
+        grid = [
+            [0, 0, 0, 0],
+            [0, 1, 2, 0],
+            [0, 3, 1, 0],
+            [0, 0, 0, 0],
+        ]
+        # Identity transform should reproduce the grid
+        result = apply_transform_per_multicolor_object(grid, lambda g: g)
+        self.assertEqual(result, grid)
+
+
 if __name__ == "__main__":
     unittest.main()

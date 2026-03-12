@@ -6566,6 +6566,38 @@ def lookup_prim(name: str) -> Optional[Primitive]:
 
 
 # =============================================================================
+# Fixed-point iteration combinator
+# =============================================================================
+
+def apply_until_stable(fn, grid: Grid, max_iters: int = 20) -> Grid:
+    """Apply fn repeatedly until the grid stops changing (fixed point).
+
+    Many ARC tasks need iterated application: fill propagation, growth,
+    pattern completion. This applies fn up to max_iters times, stopping
+    early when the output equals the input (convergence).
+    """
+    current = grid
+    for _ in range(max_iters):
+        try:
+            result = fn(current)
+            if not isinstance(result, list) or not result:
+                return current
+            if result == current:
+                return current
+            current = result
+        except Exception:
+            return current
+    return current
+
+
+def make_fixed_point_fn(fn):
+    """Wrap a Grid→Grid function to apply until stable."""
+    def fp(grid):
+        return apply_until_stable(fn, grid)
+    return fp
+
+
+# =============================================================================
 # Predicates: Grid → bool functions for conditional branching
 # =============================================================================
 

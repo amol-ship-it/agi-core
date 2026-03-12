@@ -1252,6 +1252,118 @@ The search finds programs that get the **geometry** right — correct shapes, po
 
 **Decision:** Keep the 7 new primitives (they're useful at depth-0 for 3 tasks, and will compose better as the library grows). But the next breakthrough requires parameterized/learned primitives, not more hand-coded ones.
 
+### Decision 61: Pixel-Transition Primitives + Color Remap Safety
+
+**Two changes:**
+
+1. **Pixel-transition analysis in `prepare_for_task`**: For same-sized I/O pairs, analyze pixel-level color transitions. If color A consistently becomes color B (≥70%, ≥2 occurrences), generate `task_recolor_A_to_B` primitive. These are task-specific and composable.
+
+2. **Color remap safety check**: `infer_output_correction` now verifies that remapping a color fixes more pixels than it corrupts. Previously, a remap like `{3→2}` would destroy all correct color-3 pixels to fix a few wrong ones. Also: ambiguous colors are now skipped instead of rejecting the entire remap.
+
+**400-task results:**
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Train solved | 77/400 (19.2%) | 77/400 (19.2%) |
+| Overfit | 8 | 6 (-2) |
+| Eval solved | 15/400 (3.8%) | 15/400 (3.8%) |
+| Near-misses improved | — | 15 tasks |
+| Near-misses worsened | — | 7 tasks |
+
+**Notable improvements:**
+- 0d3d703e: 0.46→0.07 (using `task_recolor_2_to_6`)
+- ea32f347: 0.11→0.03 (safer remap)
+- 63613498: 0.05→0.04 (using `task_recolor_9_to_5`)
+
+**Verdict:** No new solves but overfitting reduced (8→6) and 15 near-misses improved. The task-recolor primitives are being composed effectively. The remaining gap requires spatial (per-region) color assignment, not global remapping.
+
+### Decision 62: Architecture Roadmap — Grammar Evolution
+
+**Current bottleneck:** The 152 near-misses need task-conditioned, spatially-aware color assignment. Global remaps destroy correct pixels. Context-dependent cleanup (Decision 60) doesn't capture task semantics.
+
+**Roadmap for breaking the plateau (in order of expected impact):**
+
+1. **Map-over-objects**: Decompose grid → apply transform per-object → reassemble. The object decomposition infrastructure exists but is underutilized. Many tasks apply the same transform to each object independently but with per-object parameters.
+
+2. **Recursive/iterative application**: Apply a transform until stable (fixed point). Many ARC patterns involve repeated application: fill, propagate, grow.
+
+3. **Parameterized programs**: Programs with fitted constants (e.g., "recolor to the color of the nearest object"). Currently all primitives are zero-parameter. Adding even one fitted parameter (color choice) would dramatically expand expressiveness.
+
+4. **Grammar evolution**: In the long term, the composition rules themselves should evolve. The sleep phase currently promotes sub-trees to primitives, but true grammar evolution means discovering new meta-operations (map, fold, iterate, condition) and adding them to the vocabulary.
+
+---
+
+### Decision 63: Extended Per-Object Decomposition — Pairs + Multi-Color
+
+**Date:** 2026-03-12
+**Context:** Phase 1.1 object decomposition only tried single primitives per-object. Many tasks need composed per-object transforms (e.g., crop then rotate each object).
+
+**Changes:**
+1. **Composed per-object transforms** (`objects.py`): Try top-15 × top-15 pairs of primitives applied per-object. Scoring function ranks prims by per-object pixel error to avoid O(n²) on all prims.
+2. **Multi-color object segmentation** (`objects.py`): 8-connectivity flood fill groups adjacent non-background pixels regardless of color. Enables per-object transforms on multi-colored objects.
+3. **`apply_transform_per_multicolor_object`**: New function paralleling `apply_transform_per_object` but using 8-connectivity segmentation.
+4. **Test fix** (`test_exhaustive_enum.py`): `test_exhaustive_disabled` was brittle — expected beam search to run but new object decomp solves the task earlier. Changed to assert evaluations > 0.
+
+**Results (400 training tasks):**
+- Train: 110/400 (27.5%) — up from 77/400 (19.2%), **+33 new solves**
+- Eval: 23/400 (5.8%) — up from 15/400 (3.8%), **+8 new solves**
+- Combined: 93/400 (23.3%) — up from 77/400 (19.2%)
+
+**Key insight:** The composed per-object search (Strategy 2) is where most gains come from. Many ARC tasks apply two-step transforms to individual objects.
+
+---
+
+### Decision 64: Decomposition as a Core Principle (Pillar 3 Dual)
+
+**Date:** 2026-03-12
+**Context:** User insight: "Decomposition is the flip side of composition" — it should be a first-class operation in the core loop, not just an ARC-specific hack. Complex problems are universally solved by decomposing into sub-problems, solving each, and recomposing.
+
+**Architectural change:**
+
+1. **New data type `Decomposition`** (`core/types.py`): Represents a structured decomposition of an input into parts with reassembly context. Fields: `strategy` (name), `parts` (sub-problems), `context` (reassembly info).
+
+2. **Grammar gains `decompose()` and `recompose()` methods** (`core/interfaces.py`):
+   - `decompose(input, task) → list[Decomposition]` — proposes multiple decomposition strategies
+   - `recompose(decomposition, transformed_parts) → output` — reassembles transformed parts
+   - Default: no decomposition (returns empty list)
+
+3. **ARCGrammar implements both** (`domains/arc/grammar.py`):
+   - Strategy 1: Same-color objects (4-connectivity) — standard ARC objects
+   - Strategy 2: Multi-color objects (8-connectivity) — for multi-colored patterns
+   - Recompose: place subgrids back at original positions on background canvas
+
+4. **Phase 1.15 in learner** (`core/learner.py`): Generic decomposition phase that uses `grammar.decompose()` + `grammar.recompose()`. Tries each primitive as a per-part transform. Domain-agnostic — works for any Grammar that implements decompose/recompose.
+
+**Design rationale:** Decomposition belongs on the Grammar (not Environment) because:
+- Grammar defines "how things compose" — it should also define "how they decompose"
+- Composition and decomposition are duals of the same abstraction
+- Both are domain-specific but structurally universal
+
+**Two levels of decomposition in ARC (user's framework):**
+1. **Input decomposition** (perception): "How was this grid generated?" — detecting background, objects, patterns. This is inverse rendering.
+2. **Transform decomposition** (program synthesis): "What operations map input to output?" — operating on the objects from level 1.
+
+The key relationship: transform primitives operate on object primitives. You can't correctly express "rotate each object" without first decomposing the grid into objects.
+
+**Future directions:**
+- Recursive decomposition: decompose → solve → if stuck, decompose parts further
+- Learned decomposition strategies: the sleep phase should discover new decomposition patterns from solved tasks
+- Grammar evolution: decomposition strategies themselves should be primitives that can be composed and evolved
+
+---
+
+### Decision 65: Fixed-Point Iteration + Grid Partition Decomposition
+
+**Date:** 2026-03-12
+**Context:** Many ARC tasks need iterated application (fill propagation, pattern growth). Also, tasks with grids divided by separator lines need per-cell decomposition.
+
+**Changes:**
+1. **Fixed-point iteration** (`primitives.py`): `apply_until_stable(fn, grid, max_iters=20)` — applies fn repeatedly until output equals input (convergence). `make_fixed_point_fn` wrapper.
+2. **Phase 1.6 in learner**: For near-miss depth-1 programs, tries `iterate(program)` — applying the program until stable. Checks if iterated version improves over single application.
+3. **Grid partition decomposition** (`grammar.py`): New strategy in `decompose()` — detects separator lines, splits into cells, with `recompose` that reassembles cells with separator lines restored.
+
+**Results:** 110/400 train (27.5%), 93/400 combined (23.2%) — same as Decision 63. The new features are structurally correct (506 tests pass, 10 new) but don't add immediate solves. They target task types (iterative propagation, grid-cell operations) that will compound with future work.
+
 ---
 
 *This document will be updated with each new session and major decision.*

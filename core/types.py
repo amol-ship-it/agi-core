@@ -80,6 +80,31 @@ class Task:
 
 
 @dataclass
+class Decomposition:
+    """A structured decomposition of an input into parts.
+
+    Decomposition is the inverse of composition: given a complex input,
+    break it into simpler parts that can be independently transformed
+    and then reassembled.
+
+    This is the core abstraction for "divide and conquer" — the universal
+    principle that complex problems can be solved by decomposing into
+    sub-problems, solving each, and recomposing.
+
+    For ARC: grid → [object_subgrids], with reassembly info
+    For symbolic regression: expression → sub-expressions
+    For planning: goal → subgoals
+    """
+    strategy: str                    # name of the decomposition strategy
+    parts: list[Any]                 # the sub-problems (subgrids, sub-expressions, etc.)
+    context: dict = field(default_factory=dict)  # reassembly info (positions, background, etc.)
+
+    @property
+    def n_parts(self) -> int:
+        return len(self.parts)
+
+
+@dataclass
 class ScoredProgram:
     """A program together with its evaluation metrics."""
     program: Program

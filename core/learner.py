@@ -23,6 +23,7 @@ from typing import Optional
 from .types import (
     Program,
     Task,
+    Decomposition,
     ScoredProgram,
     LibraryEntry,
     Primitive,
@@ -281,6 +282,38 @@ class Learner:
 
         logger.debug(f"  [wake] Phase 1.1 object decomp: {time.time()-t_phase:.2f}s")
 
+        # --- Phase 1.15: Grammar-based decomposition ---
+        # The grammar's decompose() breaks inputs into parts; we try applying
+        # each primitive to all parts and recompose. This is the generic
+        # version of object decomposition — works for any domain that
+        # implements decompose/recompose on its Grammar.
+        t_phase = time.time()
+        if _budget_ok() and (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
+            decomp_result = self._try_grammar_decomposition(all_prims, task)
+            if decomp_result is not None:
+                n_evals += 1
+                self._update_pareto_front(pareto, decomp_result)
+                if best_so_far is None or decomp_result.energy < best_so_far.energy:
+                    best_so_far = decomp_result
+                enum_candidates.append(decomp_result)
+
+                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                    best_so_far.task_id = task.task_id
+                    _record_solve()
+                    test_error, test_solved = self._evaluate_on_test(best_so_far, task)
+                    front = self._extract_pareto_front(pareto)
+                    wall = time.time() - t0
+                    logger.info(
+                        f"  [wake] Task {task.task_id}: SOLVED by grammar decomposition, "
+                        f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                    return WakeResult(
+                        task_id=task.task_id, train_solved=True, best=best_so_far,
+                        generations_used=0, evaluations=n_evals, wall_time=wall,
+                        pareto_front=front, dedup_count=0,
+                        test_error=test_error, test_solved=test_solved)
+
+        logger.debug(f"  [wake] Phase 1.15 grammar decomp: {time.time()-t_phase:.2f}s")
+
         # --- Phase 1.25: Conditional search ---
         # Try if(predicate, A, B) programs. For each predicate, partition
         # training inputs into true/false groups and find best primitives
@@ -345,6 +378,37 @@ class Learner:
                     test_error=test_error, test_solved=test_solved)
 
         logger.debug(f"  [wake] Phase 1.5 near-miss refine: {time.time()-t_phase:.2f}s")
+
+        # --- Phase 1.6: Fixed-point iteration ---
+        # For near-miss depth-1 programs, try applying them repeatedly until
+        # stable. Many ARC tasks need iterated application (fill propagation,
+        # pattern growth, etc). Cost: O(near_misses × max_iters).
+        t_phase = time.time()
+        if enum_candidates and _budget_ok() and (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
+            fp_result = self._try_fixed_point(enum_candidates, task)
+            if fp_result is not None:
+                n_evals += 1
+                self._update_pareto_front(pareto, fp_result)
+                if best_so_far is None or fp_result.energy < best_so_far.energy:
+                    best_so_far = fp_result
+                enum_candidates.append(fp_result)
+
+                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                    best_so_far.task_id = task.task_id
+                    _record_solve()
+                    test_error, test_solved = self._evaluate_on_test(best_so_far, task)
+                    front = self._extract_pareto_front(pareto)
+                    wall = time.time() - t0
+                    logger.info(
+                        f"  [wake] Task {task.task_id}: SOLVED by fixed-point iteration, "
+                        f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
+                    return WakeResult(
+                        task_id=task.task_id, train_solved=True, best=best_so_far,
+                        generations_used=0, evaluations=n_evals, wall_time=wall,
+                        pareto_front=front, dedup_count=0,
+                        test_error=test_error, test_solved=test_solved)
+
+        logger.debug(f"  [wake] Phase 1.6 fixed-point: {time.time()-t_phase:.2f}s")
 
         # --- Phase 1.75: Color fix ---
         # For near-miss programs, try learning a color remapping from
@@ -1306,6 +1370,164 @@ class Learner:
                 best_fix = sp
 
         return best_fix
+
+    def _try_fixed_point(
+        self,
+        candidates: list[ScoredProgram],
+        task: Task,
+        threshold: float = 0.20,
+        max_iters: int = 20,
+    ) -> Optional[ScoredProgram]:
+        """Try applying near-miss programs repeatedly until stable (fixed point).
+
+        Many ARC tasks require iterative application: fill propagation, pattern
+        growth, color spreading. For each near-miss depth-1 program, we apply
+        it repeatedly and check if the converged result matches the expected.
+        """
+        solve_thresh = self.search_cfg.solve_threshold
+        near_misses = [
+            sp for sp in candidates
+            if solve_thresh < sp.prediction_error <= threshold
+            and sp.program.depth == 1  # only single primitives for now
+        ]
+        if not near_misses:
+            return None
+
+        near_misses.sort(key=lambda s: s.prediction_error)
+        near_misses = near_misses[:10]
+
+        best_result: Optional[ScoredProgram] = None
+
+        for nm in near_misses:
+            prim_name = nm.program.root
+
+            # Build a fixed-point version
+            fp_name = f"iterate_{prim_name}"
+
+            def _make_fp(name=prim_name, iters=max_iters):
+                def fp_fn(grid):
+                    current = grid
+                    for _ in range(iters):
+                        result = self.env.execute(Program(root=name), current)
+                        if not isinstance(result, list) or not result:
+                            return current
+                        if result == current:
+                            return current
+                        current = result
+                    return current
+                return fp_fn
+
+            fp_fn = _make_fp()
+            fp_prim = Primitive(name=fp_name, arity=1, fn=fp_fn, domain="")
+            self.env.register_primitive(fp_prim)
+
+            prog = Program(root=fp_name)
+            sp = self._evaluate_program(prog, task)
+
+            if sp.prediction_error <= solve_thresh:
+                return sp
+            if sp.prediction_error < nm.prediction_error:
+                # Fixed-point improved over single application
+                if best_result is None or sp.energy < best_result.energy:
+                    best_result = sp
+
+        return best_result
+
+    def _try_grammar_decomposition(
+        self,
+        primitives: list[Primitive],
+        task: Task,
+    ) -> Optional[ScoredProgram]:
+        """Try solving a task via the grammar's decompose/recompose.
+
+        For each decomposition strategy and each unary primitive:
+        1. Decompose each training input into parts
+        2. Apply the primitive to each part
+        3. Recompose the transformed parts
+        4. Check if the recomposed result matches the expected output
+
+        This is the generic "map-over-parts" search that works for any
+        domain implementing decompose/recompose on its Grammar.
+        """
+        solve_thresh = self.search_cfg.solve_threshold
+        unary_prims = [p for p in primitives if p.arity <= 1]
+
+        # Get decompositions from the first training input to determine strategies
+        if not task.train_examples:
+            return None
+        first_inp = task.train_examples[0][0]
+        strategies = self.grammar.decompose(first_inp, task)
+        if not strategies:
+            return None
+
+        best_result: Optional[ScoredProgram] = None
+
+        for strategy_template in strategies:
+            for prim in unary_prims:
+                all_match = True
+                for inp, expected in task.train_examples:
+                    decomps = self.grammar.decompose(inp, task)
+                    # Find matching strategy
+                    decomp = None
+                    for d in decomps:
+                        if d.strategy == strategy_template.strategy:
+                            decomp = d
+                            break
+                    if decomp is None:
+                        all_match = False
+                        break
+
+                    # Apply primitive to each part
+                    transformed = []
+                    for part in decomp.parts:
+                        try:
+                            result = prim.fn(part) if prim.arity == 1 else part
+                            if not isinstance(result, list) or not result:
+                                result = part
+                            transformed.append(result)
+                        except Exception:
+                            transformed.append(part)
+
+                    # Recompose
+                    recomposed = self.grammar.recompose(decomp, transformed)
+                    if recomposed != expected:
+                        all_match = False
+                        break
+
+                if all_match:
+                    # Register as a primitive and evaluate
+                    decomp_name = f"decomp_{strategy_template.strategy}_{prim.name}"
+
+                    def _make_decomp_fn(strategy_name, prim_fn, grammar, task_ref):
+                        def fn(grid):
+                            decomps = grammar.decompose(grid, task_ref)
+                            for d in decomps:
+                                if d.strategy == strategy_name:
+                                    parts = []
+                                    for part in d.parts:
+                                        try:
+                                            r = prim_fn(part)
+                                            parts.append(r if isinstance(r, list) and r else part)
+                                        except Exception:
+                                            parts.append(part)
+                                    return grammar.recompose(d, parts)
+                            return grid
+                        return fn
+
+                    fn = _make_decomp_fn(
+                        strategy_template.strategy, prim.fn, self.grammar, task)
+                    decomp_prim = Primitive(
+                        name=decomp_name, arity=1, fn=fn, domain="")
+                    self.env.register_primitive(decomp_prim)
+
+                    prog = Program(root=decomp_name)
+                    sp = self._evaluate_program(prog, task)
+                    if sp.prediction_error <= solve_thresh:
+                        return sp
+                    if best_result is None or sp.energy < best_result.energy:
+                        best_result = sp
+
+        return best_result
 
     def _exhaustive_enumerate(
         self,

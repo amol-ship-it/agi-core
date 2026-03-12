@@ -7,10 +7,16 @@ from __future__ import annotations
 import copy
 import random
 
-from core import Grammar, Primitive, Program, Task
+from typing import Any
+
+from core import Grammar, Primitive, Program, Task, Decomposition
 from .primitives import (
     ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP,
-    _make_replace_color,
+    _make_replace_color, _detect_any_separator_lines, _split_grid_cells,
+)
+from .objects import (
+    find_foreground_shapes, find_multicolor_objects, place_subgrid,
+    _get_background_color,
 )
 
 
@@ -92,7 +98,13 @@ class ARCGrammar(Grammar):
         return list(ARC_PRIMITIVES) + self._task_prims
 
     def prepare_for_task(self, task: Task) -> None:
-        """Analyze training examples to create task-specific color primitives."""
+        """Analyze training examples to create task-specific color primitives.
+
+        Generates three categories of task-specific primitives:
+        1. Color introduction/removal: for colors that appear/disappear between I/O
+        2. Color replacement: for pairs where one color consistently replaces another
+        3. Dominant-color operations: recolor to the task's most common output color
+        """
         self._task_prims = []
         if not task.train_examples:
             return
@@ -127,6 +139,40 @@ class ARCGrammar(Grammar):
                 if name not in prim_names:
                     self._task_prims.append(Primitive(
                         name=name, arity=1, fn=_make_replace_color(old_c, new_c), domain="arc"))
+                    prim_names.add(name)
+
+        # --- Pixel-level color transition analysis ---
+        # Collect per-pixel color changes across all training examples.
+        # If color A consistently becomes color B (>70% of transitions),
+        # create a task-specific replacement primitive.
+        from collections import Counter
+        transitions: Counter = Counter()
+        for inp, out in task.train_examples:
+            h_i, w_i = len(inp), len(inp[0]) if inp else 0
+            h_o, w_o = len(out), len(out[0]) if out else 0
+            if h_i != h_o or w_i != w_o:
+                continue  # skip size-changing tasks for this analysis
+            for r in range(h_i):
+                for c in range(w_i):
+                    if inp[r][c] != out[r][c]:
+                        transitions[(inp[r][c], out[r][c])] += 1
+
+        # Group by source color
+        by_src: dict[int, Counter] = {}
+        for (src, dst), count in transitions.items():
+            if src not in by_src:
+                by_src[src] = Counter()
+            by_src[src][dst] += count
+
+        for src, tally in by_src.items():
+            best_dst, best_count = tally.most_common(1)[0]
+            total = sum(tally.values())
+            if best_count / total >= 0.70 and best_count >= 2:
+                name = f"task_recolor_{src}_to_{best_dst}"
+                if name not in prim_names:
+                    self._task_prims.append(Primitive(
+                        name=name, arity=1,
+                        fn=_make_replace_color(src, best_dst), domain="arc"))
                     prim_names.add(name)
 
         # Register task prims in _PRIM_MAP for execution
@@ -234,4 +280,157 @@ class ARCGrammar(Grammar):
         for child in program.children:
             result.extend(self._collect_nodes(child))
         return result
+
+    # --- Decomposition (inverse of composition) ---
+
+    def decompose(self, input_data: Any, task: Task) -> list[Decomposition]:
+        """Decompose an ARC grid into objects for independent transformation.
+
+        Returns multiple decomposition strategies:
+        1. Same-color objects (4-connectivity) — standard ARC objects
+        2. Multi-color objects (8-connectivity) — for multi-colored patterns
+
+        Each Decomposition contains the subgrids and reassembly context
+        (positions, background color, grid dimensions).
+        """
+        grid = input_data
+        if not grid or not grid[0]:
+            return []
+
+        bg_color = _get_background_color(grid)
+        h, w = len(grid), len(grid[0])
+        decompositions = []
+
+        # Strategy 1: Same-color objects (4-connectivity)
+        shapes = find_foreground_shapes(grid)
+        if shapes and len(shapes) >= 2:
+            decompositions.append(Decomposition(
+                strategy="same_color_objects",
+                parts=[s["subgrid"] for s in shapes],
+                context={
+                    "positions": [s["position"] for s in shapes],
+                    "bg_color": bg_color,
+                    "grid_h": h,
+                    "grid_w": w,
+                },
+            ))
+
+        # Strategy 2: Multi-color objects (8-connectivity)
+        mc_objects = find_multicolor_objects(grid, bg_color)
+        if mc_objects and len(mc_objects) >= 2:
+            # Only add if different from strategy 1
+            mc_parts = [o["subgrid"] for o in mc_objects]
+            if len(mc_objects) != len(shapes):
+                decompositions.append(Decomposition(
+                    strategy="multicolor_objects",
+                    parts=mc_parts,
+                    context={
+                        "positions": [o["position"] for o in mc_objects],
+                        "bg_color": bg_color,
+                        "grid_h": h,
+                        "grid_w": w,
+                    },
+                ))
+
+        # Strategy 3: Grid partition (separator lines)
+        # Many ARC tasks have a grid divided by separator lines into cells.
+        # Each cell can be independently transformed.
+        try:
+            h_lines, v_lines = _detect_any_separator_lines(grid)
+            if h_lines or v_lines:
+                cells = _split_grid_cells(grid)
+                if cells and len(cells) >= 2:
+                    # Determine separator color and line positions for recompose
+                    sep_color = 0
+                    if h_lines:
+                        sep_color = grid[h_lines[0]][0]
+                    elif v_lines:
+                        sep_color = grid[0][v_lines[0]]
+                    decompositions.append(Decomposition(
+                        strategy="grid_partition",
+                        parts=cells,
+                        context={
+                            "h_lines": h_lines,
+                            "v_lines": v_lines,
+                            "sep_color": sep_color,
+                            "bg_color": bg_color,
+                            "grid_h": h,
+                            "grid_w": w,
+                        },
+                    ))
+        except Exception:
+            pass  # separator detection can fail on unusual grids
+
+        return decompositions
+
+    def recompose(self, decomposition: Decomposition,
+                  transformed_parts: list[Any]) -> Any:
+        """Reassemble transformed ARC subgrids back onto a canvas."""
+        ctx = decomposition.context
+        strategy = decomposition.strategy
+
+        if strategy == "grid_partition":
+            return self._recompose_grid_partition(ctx, transformed_parts)
+
+        # Default: object-based recomposition
+        bg = ctx.get("bg_color", 0)
+        h = ctx.get("grid_h", 0)
+        w = ctx.get("grid_w", 0)
+        positions = ctx.get("positions", [])
+
+        if not h or not w:
+            return transformed_parts[0] if transformed_parts else None
+
+        canvas = [[bg] * w for _ in range(h)]
+        for part, pos in zip(transformed_parts, positions):
+            if part is not None:
+                canvas = place_subgrid(canvas, part, pos, transparent_color=bg)
+        return canvas
+
+    def _recompose_grid_partition(self, ctx: dict, parts: list) -> Any:
+        """Reassemble grid cells separated by lines."""
+        h = ctx.get("grid_h", 0)
+        w = ctx.get("grid_w", 0)
+        h_lines = ctx.get("h_lines", [])
+        v_lines = ctx.get("v_lines", [])
+        sep_color = ctx.get("sep_color", 0)
+
+        if not h or not w:
+            return parts[0] if parts else None
+
+        canvas = [[0] * w for _ in range(h)]
+
+        # Fill separator lines
+        for r in h_lines:
+            for c in range(w):
+                if 0 <= r < h:
+                    canvas[r][c] = sep_color
+        for c in v_lines:
+            for r in range(h):
+                if 0 <= c < w:
+                    canvas[r][c] = sep_color
+
+        # Compute cell positions from separator lines
+        row_boundaries = [0] + sorted(h_lines) + [h]
+        col_boundaries = [0] + sorted(v_lines) + [w]
+
+        cell_idx = 0
+        for ri in range(len(row_boundaries) - 1):
+            r_start = row_boundaries[ri]
+            r_end = row_boundaries[ri + 1]
+            if r_start in h_lines:
+                r_start += 1
+            for ci in range(len(col_boundaries) - 1):
+                c_start = col_boundaries[ci]
+                c_end = col_boundaries[ci + 1]
+                if c_start in v_lines:
+                    c_start += 1
+                if cell_idx < len(parts) and parts[cell_idx] is not None:
+                    cell = parts[cell_idx]
+                    for r in range(min(len(cell), r_end - r_start)):
+                        for c in range(min(len(cell[0]) if cell else 0, c_end - c_start)):
+                            canvas[r_start + r][c_start + c] = cell[r][c]
+                cell_idx += 1
+
+        return canvas
 

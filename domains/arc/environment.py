@@ -65,8 +65,15 @@ class ARCEnv(Environment):
         For each (got, expected) grid pair, collects pixel-level color
         mismatches.  If a consistent remap exists (>80% agreement per
         source color), creates a correction Program.
+
+        Safety check: only includes a remap src→dst if remapping all src
+        pixels to dst fixes more pixels than it corrupts. This prevents
+        the common failure mode where a few wrong pixels of color X
+        cause ALL correct color-X pixels to be remapped.
         """
         votes: Counter = Counter()
+        # Also count correct pixels per color (src matches expected)
+        correct_counts: Counter = Counter()
 
         for got, expected in zip(program_outputs, expected_outputs):
             got_arr = np.array(got, dtype=np.int32)
@@ -74,11 +81,15 @@ class ARCEnv(Environment):
             if got_arr.shape != exp_arr.shape:
                 return None
             diff = got_arr != exp_arr
+            same = ~diff
             if not diff.any():
                 continue
             for g, w in zip(got_arr[diff].flat, exp_arr[diff].flat):
                 if g != w:
                     votes[(int(g), int(w))] += 1
+            # Count correct pixels per color
+            for v in got_arr[same].flat:
+                correct_counts[int(v)] += 1
 
         if not votes:
             return None
@@ -90,13 +101,18 @@ class ARCEnv(Environment):
                 by_src[g] = Counter()
             by_src[g][w] += count
 
-        # Check consistency: each source color must map to one target >80%
+        # Check consistency and safety for each source color
         remap: dict[int, int] = {}
         for g, tally in by_src.items():
             best_w, best_count = tally.most_common(1)[0]
-            total = sum(tally.values())
-            if best_count / total < 0.80:
-                return None  # ambiguous remap
+            total_wrong = sum(tally.values())
+            if best_count / total_wrong < 0.80:
+                continue  # ambiguous — skip this color, don't reject everything
+            # Safety: only remap if it fixes more than it breaks.
+            # Remapping g→best_w will fix best_count pixels but corrupt
+            # all correct_counts[g] pixels that are already correct.
+            if correct_counts[g] > best_count:
+                continue  # would corrupt more correct pixels than it fixes
             remap[g] = best_w
 
         if not remap:
