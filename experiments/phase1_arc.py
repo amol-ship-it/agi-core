@@ -96,6 +96,25 @@ def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
                  save_culture: str = "",
                  timestamp: str = "") -> ExperimentConfig:
     """Build an ExperimentConfig with ARC-specific defaults."""
+
+    # Compounding mode: reduce exhaustive depth to force library reliance.
+    # With depth=2, the library is the ONLY way to reach depth-3+ solutions.
+    # This is the mechanism that makes compounding work on list_ops.
+    compounding = getattr(args, "compounding", False)
+
+    exhaustive_depth = args.exhaustive_depth
+    rounds = resolved["rounds"]
+    sequential = args.sequential_compounding
+    min_occurrences = 2
+    energy_beta = 0.002
+
+    if compounding:
+        exhaustive_depth = min(exhaustive_depth, 2)  # cap at 2 to force library
+        rounds = max(rounds, 3)                       # need multiple rounds
+        sequential = True                             # immediate concept promotion
+        min_occurrences = 1                           # ARC tasks are diverse
+        energy_beta = 0.01                            # reward library usage more
+
     return ExperimentConfig(
         title=title,
         domain_tag=domain_tag,
@@ -103,7 +122,7 @@ def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
         environment=ARCEnv(),
         grammar=ARCGrammar(seed=args.seed),
         drive=ARCDrive(),
-        rounds=resolved["rounds"],
+        rounds=rounds,
         beam_width=resolved["beam_width"],
         max_generations=resolved["max_generations"],
         workers=resolved["workers"],
@@ -112,12 +131,13 @@ def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
         mutations_per_candidate=2,
         crossover_fraction=0.3,
         energy_alpha=1.0,
-        energy_beta=0.002,
+        energy_beta=energy_beta,
         solve_threshold=0.001,
-        exhaustive_depth=args.exhaustive_depth,
+        exhaustive_depth=exhaustive_depth,
         exhaustive_pair_top_k=args.exhaustive_pair_top_k,
         exhaustive_triple_top_k=args.exhaustive_triple_top_k,
-        sequential_compounding=args.sequential_compounding,
+        sequential_compounding=sequential,
+        min_occurrences=min_occurrences,
         culture_path=culture_path,
         save_culture=save_culture,
         runs_dir=args.runs_dir,

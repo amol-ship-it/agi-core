@@ -207,6 +207,13 @@ for item in COMMON_ITEMS:
 class ZorkEnv(Environment):
     """Execute action-sequence programs in a text adventure world."""
 
+    def __init__(self):
+        self._dynamic_prims: dict[str, Primitive] = {}
+
+    def register_primitive(self, primitive: Primitive) -> None:
+        """Register a library-learned primitive so execute() can resolve it."""
+        self._dynamic_prims[primitive.name] = primitive
+
     def load_task(self, task: Task) -> Observation:
         return Observation(data=task.train_examples)
 
@@ -226,7 +233,7 @@ class ZorkEnv(Environment):
                 state = self.execute(child, state)
 
         # Apply this node's action
-        prim = _ZORK_PRIM_MAP.get(program.root)
+        prim = _ZORK_PRIM_MAP.get(program.root) or self._dynamic_prims.get(program.root)
         if prim and prim.fn:
             try:
                 # Library entries have fn=Program (a stored sub-tree).
@@ -377,11 +384,35 @@ class ZorkDrive(DriveSignal):
     """Score progress toward a goal state.
 
     Measures:
-    - Room match (is the player in the right room?)
+    - Room proximity (graph distance to goal room, with partial credit)
     - Inventory match (does the player have the right items?)
     - Score match (game score vs max possible)
     - Flags match (have required actions been performed?)
     """
+
+    @staticmethod
+    def _bfs_distance(rooms: dict[str, Room], src: str, dst: str) -> int:
+        """Shortest path length between two rooms. Returns -1 if unreachable."""
+        if src == dst:
+            return 0
+        visited = {src}
+        frontier = [src]
+        dist = 0
+        while frontier:
+            dist += 1
+            next_frontier = []
+            for room_name in frontier:
+                room = rooms.get(room_name)
+                if room is None:
+                    continue
+                for neighbor in room.exits.values():
+                    if neighbor == dst:
+                        return dist
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        next_frontier.append(neighbor)
+            frontier = next_frontier
+        return -1  # unreachable
 
     def prediction_error(self, predicted: Any, expected: Any) -> float:
         if not isinstance(predicted, GameState) or not isinstance(expected, GameState):
@@ -389,8 +420,17 @@ class ZorkDrive(DriveSignal):
 
         errors = []
 
-        # Room match (0 or 1)
-        room_match = 1.0 if predicted.player_room == expected.player_room else 0.0
+        # Room proximity: partial credit based on graph distance
+        if predicted.player_room == expected.player_room:
+            room_match = 1.0
+        else:
+            dist = self._bfs_distance(
+                predicted.rooms, predicted.player_room, expected.player_room)
+            if dist < 0:
+                room_match = 0.0  # unreachable
+            else:
+                # Closer = higher match. dist=1 → 0.5, dist=2 → 0.33, etc.
+                room_match = 1.0 / (1.0 + dist)
         errors.append(0.40 * (1.0 - room_match))
 
         # Inventory match (Jaccard distance)
@@ -483,75 +523,406 @@ def _make_locked_world() -> dict[str, Room]:
     }
 
 
+def _make_linear_world(n_rooms: int = 5) -> dict[str, Room]:
+    """A linear chain of rooms: room_0 → room_1 → ... → room_{n-1}."""
+    rooms = {}
+    for i in range(n_rooms):
+        exits = {}
+        if i > 0:
+            exits["south"] = f"room_{i-1}"
+        if i < n_rooms - 1:
+            exits["north"] = f"room_{i+1}"
+        items = []
+        if i == n_rooms - 1:
+            items = ["prize"]
+        rooms[f"room_{i}"] = Room(
+            name=f"room_{i}",
+            description=f"Room {i}.",
+            exits=exits,
+            items=items,
+        )
+    return rooms
+
+
+def _make_branching_world() -> dict[str, Room]:
+    """A world with a central hub and 3 branches, each with an item."""
+    return {
+        "hub": Room(
+            name="hub",
+            description="A crossroads.",
+            exits={"north": "cave", "east": "garden", "west": "library"},
+        ),
+        "cave": Room(
+            name="cave",
+            description="A dark cave.",
+            exits={"south": "hub"},
+            items=["torch"],
+        ),
+        "garden": Room(
+            name="garden",
+            description="A peaceful garden.",
+            exits={"west": "hub"},
+            items=["flower"],
+        ),
+        "library": Room(
+            name="library",
+            description="Shelves of old books.",
+            exits={"east": "hub"},
+            items=["book"],
+        ),
+    }
+
+
+def _make_multi_key_world() -> dict[str, Room]:
+    """World requiring two keys to reach the final room."""
+    return {
+        "foyer": Room(
+            name="foyer",
+            description="Grand entrance.",
+            exits={"north": "hall", "east": "closet"},
+        ),
+        "closet": Room(
+            name="closet",
+            description="A small closet.",
+            exits={"west": "foyer"},
+            items=["silver_key"],
+        ),
+        "hall": Room(
+            name="hall",
+            description="A grand hall.",
+            exits={"south": "foyer", "north": "locked_north", "east": "study"},
+            locked_exits={"north": "silver_key"},
+        ),
+        "study": Room(
+            name="study",
+            description="A quiet study.",
+            exits={"west": "hall"},
+            items=["gold_key"],
+        ),
+        "locked_north": Room(
+            name="locked_north",
+            description="Past the silver door.",
+            exits={"south": "hall", "north": "vault"},
+            locked_exits={"north": "gold_key"},
+        ),
+        "vault": Room(
+            name="vault",
+            description="The final vault!",
+            exits={"south": "locked_north"},
+            items=["diamond"],
+        ),
+    }
+
+
 def get_sample_tasks() -> list[Task]:
-    """Return sample Zork tasks for testing."""
+    """Return sample Zork tasks for testing.
+
+    20 tasks across 4 difficulty levels:
+    - Level 1 (depth 1): single actions (move or take)
+    - Level 2 (depth 2): two-step sequences
+    - Level 3 (depth 3): three-step sequences
+    - Level 4 (depth 4+): multi-step with locked doors
+    """
     tasks = []
 
-    # Task 1: Navigate to treasure room and take treasure
-    world1 = _make_simple_world()
-    start1 = GameState(rooms=world1, player_room="entrance", max_score=1)
-    # Expected: player in treasure_room with treasure in inventory
-    goal1_rooms = _make_simple_world()
-    goal1_rooms["treasure_room"].items = []  # treasure taken
-    goal1 = GameState(
-        rooms=goal1_rooms, player_room="treasure_room",
-        inventory=["treasure"], score=1, max_score=1,
-    )
+    # ---- Level 1: Single actions (difficulty 1.0) ----
+
+    # T1: Go north once
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="entrance", max_score=0)
+    goal = GameState(rooms=_make_simple_world(), player_room="hallway", max_score=0)
     tasks.append(Task(
-        task_id="zork_navigate_take",
-        train_examples=[(start1, goal1)],
-        test_inputs=[start1],
-        test_outputs=[goal1],
+        task_id="zork_go_north",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=1.0,
+    ))
+
+    # T2: Take lamp from entrance
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="entrance", max_score=1)
+    gw = _make_simple_world()
+    gw["entrance"].items = []
+    goal = GameState(rooms=gw, player_room="entrance", inventory=["lamp"], score=1, max_score=1)
+    tasks.append(Task(
+        task_id="zork_take_lamp",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=1.0,
+    ))
+
+    # T3: Go east from hallway to armory
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="hallway", max_score=0)
+    goal = GameState(rooms=_make_simple_world(), player_room="armory", max_score=0)
+    tasks.append(Task(
+        task_id="zork_go_east",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=1.0,
+    ))
+
+    # T4: Take sword from armory
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="armory", max_score=1)
+    gw = _make_simple_world()
+    gw["armory"].items = []
+    goal = GameState(rooms=gw, player_room="armory", inventory=["sword"], score=1, max_score=1)
+    tasks.append(Task(
+        task_id="zork_take_sword",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=1.0,
+    ))
+
+    # T5: Go north in branching world
+    w = _make_branching_world()
+    start = GameState(rooms=w, player_room="hub", max_score=0)
+    goal = GameState(rooms=_make_branching_world(), player_room="cave", max_score=0)
+    tasks.append(Task(
+        task_id="zork_hub_to_cave",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=1.0,
+    ))
+
+    # ---- Level 2: Two-step sequences (difficulty 2.0) ----
+
+    # T6: Take lamp, go north
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="entrance", max_score=1)
+    gw = _make_simple_world()
+    gw["entrance"].items = []
+    goal = GameState(rooms=gw, player_room="hallway", inventory=["lamp"], score=1, max_score=1)
+    tasks.append(Task(
+        task_id="zork_take_and_move",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
         difficulty=2.0,
     ))
 
-    # Task 2: Take lamp, go to hallway
-    world2 = _make_simple_world()
-    start2 = GameState(rooms=world2, player_room="entrance", max_score=1)
-    goal2_rooms = _make_simple_world()
-    goal2_rooms["entrance"].items = []  # lamp taken
-    goal2 = GameState(
-        rooms=goal2_rooms, player_room="hallway",
-        inventory=["lamp"], score=1, max_score=1,
-    )
+    # T7: Go north twice (entrance → hallway → treasure_room)
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="entrance", max_score=0)
+    goal = GameState(rooms=_make_simple_world(), player_room="treasure_room", max_score=0)
     tasks.append(Task(
-        task_id="zork_take_and_move",
-        train_examples=[(start2, goal2)],
-        test_inputs=[start2],
-        test_outputs=[goal2],
-        difficulty=1.5,
+        task_id="zork_navigate_only",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=2.0,
     ))
 
-    # Task 3: Unlock door, reach goal, take gem
-    world3 = _make_locked_world()
-    start3 = GameState(rooms=world3, player_room="start", max_score=2)
-    goal3_rooms = _make_locked_world()
-    goal3_rooms["key_room"].items = []  # key taken
-    goal3_rooms["goal"].items = []  # gem taken
-    del goal3_rooms["start"].locked_exits["north"]  # unlocked
-    goal3 = GameState(
-        rooms=goal3_rooms, player_room="goal",
-        inventory=["key", "gem"], score=2, max_score=2,
-        flags={"unlocked_north_start"},
-    )
+    # T8: Go north, take torch from cave
+    w = _make_branching_world()
+    start = GameState(rooms=w, player_room="hub", max_score=1)
+    gw = _make_branching_world()
+    gw["cave"].items = []
+    goal = GameState(rooms=gw, player_room="cave", inventory=["torch"], score=1, max_score=1)
+    tasks.append(Task(
+        task_id="zork_hub_take_torch",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=2.0,
+    ))
+
+    # T9: Go east, take flower from garden
+    w = _make_branching_world()
+    start = GameState(rooms=w, player_room="hub", max_score=1)
+    gw = _make_branching_world()
+    gw["garden"].items = []
+    goal = GameState(rooms=gw, player_room="garden", inventory=["flower"], score=1, max_score=1)
+    tasks.append(Task(
+        task_id="zork_hub_take_flower",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=2.0,
+    ))
+
+    # T10: Go west, take book from library
+    w = _make_branching_world()
+    start = GameState(rooms=w, player_room="hub", max_score=1)
+    gw = _make_branching_world()
+    gw["library"].items = []
+    goal = GameState(rooms=gw, player_room="library", inventory=["book"], score=1, max_score=1)
+    tasks.append(Task(
+        task_id="zork_hub_take_book",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=2.0,
+    ))
+
+    # ---- Level 3: Three-step sequences (difficulty 3.0) ----
+
+    # T11: Navigate to treasure room and take treasure (N, N, take)
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="entrance", max_score=1)
+    gw = _make_simple_world()
+    gw["treasure_room"].items = []
+    goal = GameState(rooms=gw, player_room="treasure_room",
+                     inventory=["treasure"], score=1, max_score=1)
+    tasks.append(Task(
+        task_id="zork_navigate_take",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=3.0,
+    ))
+
+    # T12: Take lamp, go north, go east (to armory with lamp)
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="entrance", max_score=1)
+    gw = _make_simple_world()
+    gw["entrance"].items = []
+    goal = GameState(rooms=gw, player_room="armory", inventory=["lamp"], score=1, max_score=1)
+    tasks.append(Task(
+        task_id="zork_lamp_to_armory",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=3.0,
+    ))
+
+    # T13: Go north, take sword, go back south (armory round trip)
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="hallway", max_score=1)
+    gw = _make_simple_world()
+    gw["armory"].items = []
+    goal = GameState(rooms=gw, player_room="hallway", inventory=["sword"], score=1, max_score=1)
+    # Note: go east, take sword, go west
+    tasks.append(Task(
+        task_id="zork_sword_roundtrip",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=3.0,
+    ))
+
+    # T14: Linear world - go north 3 times (room_0 → room_3)
+    w = _make_linear_world(5)
+    start = GameState(rooms=w, player_room="room_0", max_score=0)
+    goal = GameState(rooms=_make_linear_world(5), player_room="room_3", max_score=0)
+    tasks.append(Task(
+        task_id="zork_linear_3",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=3.0,
+    ))
+
+    # T15: Get key, unlock door (key_room → start → through locked door)
+    w = _make_locked_world()
+    start = GameState(rooms=w, player_room="start", max_score=1)
+    gw = _make_locked_world()
+    gw["key_room"].items = []
+    del gw["start"].locked_exits["north"]
+    goal = GameState(rooms=gw, player_room="locked_passage",
+                     inventory=["key"], score=1, max_score=1,
+                     flags={"unlocked_north_start"})
+    tasks.append(Task(
+        task_id="zork_get_key_unlock",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=3.0,
+    ))
+
+    # ---- Level 4: Multi-step with complex goals (difficulty 4.0+) ----
+
+    # T16: Unlock door, reach goal, take gem (4+ steps)
+    w = _make_locked_world()
+    start = GameState(rooms=w, player_room="start", max_score=2)
+    gw = _make_locked_world()
+    gw["key_room"].items = []
+    gw["goal"].items = []
+    del gw["start"].locked_exits["north"]
+    goal = GameState(rooms=gw, player_room="goal",
+                     inventory=["key", "gem"], score=2, max_score=2,
+                     flags={"unlocked_north_start"})
     tasks.append(Task(
         task_id="zork_locked_door",
-        train_examples=[(start3, goal3)],
-        test_inputs=[start3],
-        test_outputs=[goal3],
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
         difficulty=4.0,
     ))
 
-    # Task 4: Simple movement only — go north twice
-    world4 = _make_simple_world()
-    start4 = GameState(rooms=world4, player_room="entrance", max_score=0)
-    goal4 = GameState(rooms=_make_simple_world(), player_room="treasure_room", max_score=0)
+    # T17: Linear world - go north 4 times to reach prize
+    w = _make_linear_world(5)
+    start = GameState(rooms=w, player_room="room_0", max_score=1)
+    gw = _make_linear_world(5)
+    gw["room_4"].items = []
+    goal = GameState(rooms=gw, player_room="room_4",
+                     inventory=["prize"], score=1, max_score=1)
     tasks.append(Task(
-        task_id="zork_navigate_only",
-        train_examples=[(start4, goal4)],
-        test_inputs=[start4],
-        test_outputs=[goal4],
-        difficulty=1.0,
+        task_id="zork_linear_take_prize",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=4.0,
+    ))
+
+    # T18: Multi-key world - get silver_key, unlock first door
+    w = _make_multi_key_world()
+    start = GameState(rooms=w, player_room="foyer", max_score=1)
+    gw = _make_multi_key_world()
+    gw["closet"].items = []
+    del gw["hall"].locked_exits["north"]
+    goal = GameState(rooms=gw, player_room="locked_north",
+                     inventory=["silver_key"], score=1, max_score=1,
+                     flags={"unlocked_north_hall"})
+    tasks.append(Task(
+        task_id="zork_silver_key",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=4.0,
+    ))
+
+    # T19: Multi-key world - get both keys, reach vault (6+ steps)
+    w = _make_multi_key_world()
+    start = GameState(rooms=w, player_room="foyer", max_score=3)
+    gw = _make_multi_key_world()
+    gw["closet"].items = []
+    gw["study"].items = []
+    gw["vault"].items = []
+    del gw["hall"].locked_exits["north"]
+    del gw["locked_north"].locked_exits["north"]
+    goal = GameState(rooms=gw, player_room="vault",
+                     inventory=["silver_key", "gold_key", "diamond"],
+                     score=3, max_score=3,
+                     flags={"unlocked_north_hall", "unlocked_north_locked_north"})
+    tasks.append(Task(
+        task_id="zork_vault_heist",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=5.0,
+    ))
+
+    # T20: Take lamp, navigate to treasure room, take treasure, go back
+    w = _make_simple_world()
+    start = GameState(rooms=w, player_room="entrance", max_score=2)
+    gw = _make_simple_world()
+    gw["entrance"].items = []
+    gw["treasure_room"].items = []
+    goal = GameState(rooms=gw, player_room="entrance",
+                     inventory=["lamp", "treasure"], score=2, max_score=2)
+    tasks.append(Task(
+        task_id="zork_roundtrip_loot",
+        train_examples=[(start, goal)],
+        test_inputs=[start],
+        test_outputs=[goal],
+        difficulty=5.0,
     ))
 
     return tasks

@@ -196,7 +196,7 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 |--------|-------|--------|------|-------|
 | ARC-AGI-2 Train | 100/1000 | 10 | 10% | Harder than AGI-1 |
 | ARC-AGI-2 Eval | 120 | 0 | 0% | Cold start, no culture transfer |
-| Zork | 4 | 2 | 50% | Self-contained game engine |
+| Zork | 20 | 10 | 50% | Compounding works: library entries reused 5-11x |
 | List Ops | 28 | ~20 | ~71% | Compounding demonstrated here |
 
 **342 hand-crafted ARC primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
@@ -279,9 +279,9 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 ### Current status: what works and what doesn't
 
-**Compounding is demonstrated on list_ops** (22 primitives, depth-limited to 2). The library learns depth-2 compositions that enable depth-3+ solutions in subsequent rounds, with library reuse counts of 4-11 across tasks.
+**Compounding is demonstrated on list_ops and Zork.** On list_ops (22 primitives, depth-limited to 2), the library learns depth-2 compositions that enable depth-3+ solutions in subsequent rounds, with library reuse counts of 4-11. On Zork (20 tasks across 5 difficulty levels), compounding produces 5 library entries reused 5-11x across rounds, with hierarchical composition (e.g., `take_treasure(go_north(go_north))` built from a promoted depth-2 entry).
 
-**Compounding does not yet work on ARC.** 78/80 ARC solves are depth-1 (a single hand-crafted primitive). The depth-3 exhaustive search already covers the same space that library entries would provide, making them redundant. This is the top priority to fix — see the [Roadmap](#roadmap).
+**Compounding produces library entries on ARC but has limited impact.** With `--compounding` flag (depth-2 + 3 rounds + sequential), the system creates 3-5 library entries with 2x reuse. However, most ARC solves are depth-1 (single primitives), so the library provides little additional coverage beyond what depth-3 exhaustive search already finds.
 
 **The training-eval gap is significant.** ARC-AGI-1 training solves 85/400 (21%), but eval solves only ~20/400 (5%). This 4:1 ratio indicates the hand-crafted primitives are biased toward training task patterns. Improving eval performance requires genuinely general primitives, not more training-specific ones.
 
@@ -368,9 +368,10 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
 - **Phase 1** ✅ ARC-AGI-1 training (342 primitives, exhaustive enumeration, wake-sleep) — 85/400 (21%)
 - **Phase 2** ✅ ARC-AGI-1 eval with culture transfer — ~20/400 (5%)
-- **Phase 3** ✅ Additional domains (Zork, list_ops), same core — compounding demonstrated on list_ops
-- **Phase 4** 🔧 Make compounding work on ARC (reduce exhaustive depth, gap-driven synthesis)
-- **Phase 5** 🔧 ARC-AGI-2 baseline established (10% train, 0% eval) — improve toward parity with AGI-1
+- **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated on list_ops and Zork
+- **Phase 4** ✅ Compounding infrastructure: `--compounding` flag, distance-based drive signals, library primitive execution. Zork: 7/20→10/20 with library reuse 5-11x. ARC: library entries produced but limited impact.
+- **Phase 5** 🔧 Close the ARC train-eval gap (34% train vs 2% eval) — the critical bottleneck
+- **Phase 6** 🔧 ARC-AGI-2 baseline established (10% train, 0% eval) — improve toward parity with AGI-1
 - **Phase 6** Cross-domain library transfer
 - **Phase 7** Continuous mixed-domain learning
 

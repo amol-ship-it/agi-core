@@ -1005,4 +1005,59 @@ Credibility requires honesty about what works and what doesn't. The framework's 
 
 ---
 
+## Session 8 — Claude Code Web (March 12, 2026)
+
+### Decision 50: Custom Zork over Jericho
+
+**Question:** Should we use Jericho (Python wrapper for real Infocom Z-machine games) instead of our custom Zork domain?
+
+**Decision:** Keep custom Zork for now, plan Jericho as a future "hard mode" domain.
+
+**Rationale:**
+- Jericho is a heavyweight dependency (compiled C library + ROM files with licensing issues)
+- Custom domain gives full control over task design for testing specific compounding depths
+- Need to prove compounding on simple domain before scaling to real Zork
+- Can add Jericho later as `domains/zork_jericho/` without touching core
+
+### Decision 51: Distance-Based Room Matching in ZorkDrive
+
+**Problem:** Zork drive signal used binary room matching (correct=0, wrong=0.40). Programs getting 2/3 of the way to the goal room scored identically to programs 1 step away. Depth-3 exhaustive search couldn't distinguish promising depth-2 partial solutions from useless ones.
+
+**Fix:** BFS graph distance with partial credit: `room_match = 1/(1+dist)`. Distance=1→0.5, distance=2→0.33, etc.
+
+**Impact:** Zork solve rate 7/20 (35%) → 10/20 (50%). Three new depth-3 solves including `go_north(go_north(go_north))` and `go_west(take_sword(go_east))`.
+
+### Decision 52: Fix Library Primitive Execution in ZorkEnv
+
+**Problem:** `ZorkEnv.register_primitive()` was a no-op (inherited default). Library entries like `promoted_0` were silently ignored during execution — the environment couldn't find them in `_ZORK_PRIM_MAP`.
+
+**Fix:** Added `__init__` with `_dynamic_prims` dict, `register_primitive()` stores there, `execute()` checks both `_ZORK_PRIM_MAP` and `_dynamic_prims`.
+
+**Impact:** Compounding now works on Zork. Library entries reused 5-11x across rounds. Hierarchical composition demonstrated: `promoted_2 = take_treasure(go_north(go_north))`.
+
+### Decision 53: ARC Compounding A/B Test Results
+
+**Results on 50 ARC tasks with --compounding flag (depth-2, 3 rounds, sequential):**
+- Training: 17/50 (34%) — similar to baseline
+- Eval: 1/50 (2%) — train-eval gap persists
+- Library: 3-5 entries with 2x reuse each
+
+**Analysis:** Compounding produces library entries on ARC, but:
+1. Most ARC solves are depth-1 (single primitive), so library entries rarely help
+2. The train-eval gap (34% vs 2%) is the bigger problem — primitives are engineering-biased toward training tasks
+3. Compounding works much better on Zork where tasks naturally require multi-step solutions
+
+### Updated Results Table
+
+| Domain | Baseline | With Compounding | Library Entries | Reuse |
+|--------|----------|-----------------|-----------------|-------|
+| ARC-AGI-1 Train (50) | ~21% | 34% | 3-5 | 2x |
+| ARC-AGI-1 Eval (50) | ~5% | 2% | 5 | 2x |
+| Zork (20 tasks) | 35% → 50%* | 50% | 5 | 5-11x |
+| List Ops (28) | ~71% | ~78% | 4-8 | 4-11x |
+
+*Drive signal fix (binary→distance-based) accounts for 35%→50% improvement.
+
+---
+
 *This document will be updated with each new session and major decision.*

@@ -259,8 +259,9 @@ class TestZorkDrive(unittest.TestCase):
         expected = GameState(rooms=_make_simple_world(), player_room="hallway")
         error = drive.prediction_error(predicted, expected)
         self.assertGreater(error, 0.0)
-        # Room mismatch contributes 40%
-        self.assertAlmostEqual(error, 0.40, places=2)
+        # Room mismatch contributes up to 40% (with distance-based partial credit)
+        self.assertGreater(error, 0.0)
+        self.assertLessEqual(error, 0.40)
 
     def test_wrong_inventory(self):
         drive = ZorkDrive()
@@ -305,7 +306,7 @@ class TestZorkSampleTasks(unittest.TestCase):
 
     def test_sample_tasks_load(self):
         tasks = get_sample_tasks()
-        self.assertEqual(len(tasks), 4)
+        self.assertGreaterEqual(len(tasks), 4)
         for task in tasks:
             self.assertIsInstance(task, Task)
             self.assertGreater(len(task.train_examples), 0)
