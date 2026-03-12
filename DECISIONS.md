@@ -731,4 +731,53 @@ Net +7 train tasks (+8 new, -1 regression). The 8 newly solved tasks:
 
 ---
 
+### Decision 35: List Operations Domain + Compounding Validation
+
+**Date:** 2026-03-12
+
+**Context:** Needed to validate the core compounding hypothesis: does library learning (sleep) actually help solve harder tasks (wake)? ARC is too complex to isolate the compounding mechanism. Need a simpler domain where the expected behavior is clear.
+
+**Architecture:** New domain `domains/list_ops/` with 22 primitives (reverse, sort, double_all, filter_pos, cumsum, etc.), 28 tasks at 3 difficulty levels:
+- Level 1 (8 tasks): single operations
+- Level 2 (12 tasks): two-step compositions
+- Level 3 (8 tasks): three-step compositions
+
+Experiment script `experiments/list_compounding.py` runs multiple wake-sleep rounds with sequential compounding enabled.
+
+**Result:** Domain works correctly, 51 tests pass. Experiment runs in <1 second.
+
+---
+
+### Decision 36: Fix Critical Library Execution Bug (All Domains)
+
+**Date:** 2026-03-12
+
+**Context:** Compounding experiment showed flat solve rate across rounds (75%→75%→78%). Library was growing but NOT helping solve new tasks. Diagnosed the root cause:
+
+**The bug:** `inject_library()` creates 0-arity Primitives with `fn=Program` (a stored sub-tree). But ALL four environments silently ignored these:
+- **ARCEnv**: `if prim.arity == 0: return grid` (line 122) — returns input unchanged
+- **ListEnv**: No lookup for dynamic primitives with Program fn
+- **SymbolicMathEnv**: Unknown primitives return 0.0
+- **ZorkEnv**: Same pattern
+
+This meant **library entries were NEVER executed in any domain**. The entire compounding mechanism was broken since the beginning.
+
+**Fix:** When a primitive's fn is a `Program` (library entry), recursively execute it:
+```python
+if isinstance(prim.fn, Program):
+    return self.execute(prim.fn, input_data)
+```
+Applied to all 4 environments. Also register library primitives with the environment in the learner so they can be resolved during execution.
+
+**Before fix:** List domain: R1=75%, R5=78% (flat)
+**After fix:** List domain: R1=89%, R5=96.4% (compounding!)
+
+Key evidence of compounding:
+- `list_L3_increment_all_then_double_all_then_sort_asc`: R1 needed 1505 evals (beam search), R2 solved in 32 evals (depth-1 via library entry) — **47x speedup**
+- 7/8 L3 tasks solved by R5 vs 3/8 before fix
+
+471 tests pass.
+
+---
+
 *This document will be updated with each new session and major decision.*

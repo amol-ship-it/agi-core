@@ -181,6 +181,12 @@ class Learner:
         library_prims = self.grammar.inject_library(self.memory.get_library())
         all_prims = base_prims + library_prims
 
+        # Register library primitives with the environment so it can execute them.
+        # Library entries have fn=Program; the environment needs to know how to
+        # resolve these during execution.
+        for lp in library_prims:
+            self.env.register_primitive(lp)
+
         best_so_far: Optional[ScoredProgram] = None
         n_evals = 0
         total_deduped = 0

@@ -229,6 +229,10 @@ class ZorkEnv(Environment):
         prim = _ZORK_PRIM_MAP.get(program.root)
         if prim and prim.fn:
             try:
+                # Library entries have fn=Program (a stored sub-tree).
+                # Execute the stored program recursively.
+                if isinstance(prim.fn, Program):
+                    return self.execute(prim.fn, state)
                 result = prim.fn(state)
                 if isinstance(result, GameState):
                     return result

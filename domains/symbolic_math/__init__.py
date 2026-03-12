@@ -167,6 +167,7 @@ class SymbolicMathEnv(Environment):
 
     def __init__(self):
         self._current_task = None
+        self._dynamic: dict[str, Primitive] = {}
 
     def load_task(self, task: Task) -> Observation:
         self._current_task = task
@@ -178,17 +179,23 @@ class SymbolicMathEnv(Environment):
         x_val = input_data
         return self._eval_tree(program, {"x": x_val})
 
+    def register_primitive(self, primitive: Primitive) -> None:
+        self._dynamic[primitive.name] = primitive
+
     def reset(self):
         self._current_task = None
+        self._dynamic.clear()
 
     def _eval_tree(self, node: Program, ctx: dict) -> float:
-        prim = _PRIM_MAP.get(node.root)
+        prim = _PRIM_MAP.get(node.root) or self._dynamic.get(node.root)
         if prim is None:
-            # It's a learned library entry — treat its children as the program
-            # For now, return 0 (the grammar.inject_library should handle this)
             return 0.0
 
         if prim.arity == 0:
+            # Library entries have fn=Program (a stored sub-tree).
+            # Execute the stored program recursively.
+            if isinstance(prim.fn, Program):
+                return self._eval_tree(prim.fn, ctx)
             if node.root == "const":
                 ctx_with_c = {**ctx, "c": node.params.get("c", 1.0)}
                 return prim.fn(ctx_with_c)
