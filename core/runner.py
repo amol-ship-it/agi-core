@@ -52,7 +52,7 @@ PRESETS = {
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 50,
-        "compute_cap": 5_000_000,   # depth-weighted ops: d1=1, d2=2, d3=3 per eval
+        "compute_cap": 3_000_000,   # 3M depth-weighted ops: 19/50 solves, optimal ROI
     },
     # Default: full dataset. Same cap — forces primitive quality.
     "default": {
@@ -60,7 +60,7 @@ PRESETS = {
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 0,
-        "compute_cap": 5_000_000,   # depth-weighted ops: d1=1, d2=2, d3=3 per eval
+        "compute_cap": 3_000_000,   # 3M depth-weighted ops: optimal ROI
     },
     # Contest: maximum effort. Keeps modest beam in case deeper search
     # helps on the hardest tasks. Still mainly exhaustive.

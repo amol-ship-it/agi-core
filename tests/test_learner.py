@@ -995,7 +995,7 @@ class TestRunnerHelpers(unittest.TestCase):
         resolved = resolve_from_preset(args, PRESETS["quick"])
         self.assertEqual(resolved["rounds"], 1)
         self.assertEqual(resolved["beam_width"], 1)
-        self.assertEqual(resolved["compute_cap"], 5_000_000)
+        self.assertEqual(resolved["compute_cap"], 3_000_000)
 
     def test_resolve_from_preset_overrides(self):
         from core.runner import resolve_from_preset, PRESETS
@@ -1059,8 +1059,8 @@ class TestRunnerHelpers(unittest.TestCase):
     def test_compute_cap_presets(self):
         """All presets have expected compute_cap values."""
         from core.runner import PRESETS
-        self.assertEqual(PRESETS["quick"]["compute_cap"], 5_000_000)
-        self.assertEqual(PRESETS["default"]["compute_cap"], 5_000_000)
+        self.assertEqual(PRESETS["quick"]["compute_cap"], 3_000_000)
+        self.assertEqual(PRESETS["default"]["compute_cap"], 3_000_000)
         self.assertEqual(PRESETS["contest"]["compute_cap"], 100_000_000)
 
 
