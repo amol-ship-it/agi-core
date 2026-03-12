@@ -10,7 +10,7 @@ import os
 from core import Task
 from .primitives import (
     rotate_90_cw, mirror_horizontal, mirror_vertical,
-    crop_to_nonzero, invert_colors, gravity_down, fill_enclosed,
+    crop_to_nonzero, invert_colors, gravity_down,
 )
 
 

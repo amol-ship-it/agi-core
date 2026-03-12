@@ -8,7 +8,7 @@ domain-specific dependencies — just stores and retrieves data.
 from __future__ import annotations
 import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from .types import LibraryEntry, Program, ScoredProgram
 from .interfaces import Memory
@@ -54,7 +54,7 @@ class InMemoryStore(Memory):
 
     # --- Episodic ---
 
-    def record_episode(self, task_id: str, observation: any, program: Optional[Program], score: float) -> None:
+    def record_episode(self, task_id: str, observation: Any, program: Optional[Program], score: float) -> None:
         self._episodes.append({
             "task_id": task_id,
             "observation": observation,

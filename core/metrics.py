@@ -18,7 +18,6 @@ import json
 import csv
 import logging
 from dataclasses import dataclass, asdict
-from typing import TextIO
 
 from .results import RoundResult
 

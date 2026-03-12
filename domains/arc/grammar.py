@@ -9,7 +9,7 @@ import random
 
 from core import Grammar, Primitive, Program, Task
 from .primitives import (
-    ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP, register_prim,
+    ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP,
     _make_replace_color,
 )
 
