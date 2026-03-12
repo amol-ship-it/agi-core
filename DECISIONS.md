@@ -1365,4 +1365,32 @@ The key relationship: transform primitives operate on object primitives. You can
 **Results:** 110/400 train (27.5%), 93/400 combined (23.2%) — same as Decision 63. The new features are structurally correct (506 tests pass, 10 new) but don't add immediate solves. They target task types (iterative propagation, grid-cell operations) that will compound with future work.
 
 ---
+
+### Decision 66: Experimental Validation of Decomposition, Fixed-Point, Grid Partition
+
+**Date:** 2026-03-12
+**Context:** Three features were prototyped and experimentally validated:
+1. Grammar decompose/recompose (Phase 1.15) — generic map-over-parts
+2. Fixed-point iteration (Phase 1.6) — apply-until-stable
+3. Grid partition decomposition — per-cell transforms for separator-line grids
+
+**Experiments run:**
+
+| Experiment | Method | Target | Result |
+|---|---|---|---|
+| A: Grammar decomp | decompose + single prim per part + recompose | 10 identity-best tasks | 0 solves |
+| A2: Grammar decomp vs Phase 1.1 | Compare coverage | 400 tasks | Phase 1.15 adds 0 beyond Phase 1.1 |
+| B: Fixed-point | iterate(prim) on near-misses | 20 nearest misses × 38 key prims | 0 solves |
+| C: Grid partition | output == cell? | 50 near-misses with separators | 0 cell-sized outputs |
+
+**Analysis:**
+- **Phase 1.15 is redundant with Phase 1.1**: `try_object_decomposition` already covers decompose-apply-recompose, and does it more efficiently (includes pairs, conditional recolor).
+- **Fixed-point doesn't converge**: Near-miss programs that use repeated primitives (e.g., `fill_hole_4³`) are already found by depth-3 enumeration. Iterating to convergence doesn't produce correct answers because the fix isn't convergent.
+- **Grid partition tasks don't need per-cell transforms**: 200/290 unsolved tasks have separator lines, but none of the top-50 near-misses have cell-sized outputs. The separators are structural features, not decomposition boundaries.
+
+**Decision:** Code removed. The architecturally sound abstractions (Decomposition type, Grammar.decompose/recompose) should be re-added when there's a concrete use case that validates them. The principle of decomposition-as-dual-of-composition remains correct but the current implementation doesn't find tasks where it helps.
+
+**Lesson:** Apply scientific method — hypothesize, experiment, measure — BEFORE committing. Don't add speculative code; don't remove without evidence either.
+
+---
 *This document will be updated with each new session and major decision.*
