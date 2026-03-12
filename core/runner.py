@@ -41,13 +41,14 @@ from .metrics import extract_metrics, print_compounding_table, save_metrics_json
 PRESETS = {
     # Quick: fast dev loop. Beam search adds 0 solves (verified A/B test on
     # 49 tasks: 17/49 with beam=20 vs 17/49 with beam=1, same tasks solved,
-    # beam adds +13% wall time). Minimal beam kept for future library entries.
+    # beam adds +13% wall time). Exhaustive enumeration is self-limiting
+    # (~7.5K evals/task max), so no compute cap needed.
     "quick": {
         "rounds": 1,
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 50,
-        "compute_cap": 5_000_000,   # 5M ops → ~6K evals/task ceiling
+        "compute_cap": 0,           # unlimited — exhaustive enum self-limits at ~7.5K evals
     },
     # Default: full dataset. Exhaustive enumeration does ~100% of solves.
     # Beam=1 avoids wasting compute on a phase that contributes nothing.
@@ -56,7 +57,7 @@ PRESETS = {
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 0,
-        "compute_cap": 20_000_000,  # 20M ops → ~25K evals/task ceiling
+        "compute_cap": 0,           # unlimited — exhaustive enum self-limits at ~7.5K evals
     },
     # Contest: maximum effort. Keeps modest beam in case deeper search
     # helps on the hardest tasks. Still mainly exhaustive.
@@ -202,8 +203,8 @@ def make_parser(description: str, domain_name: str = "experiment") -> argparse.A
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=f"""
 Presets (the only knob most users need):
-  quick     Fast dev loop (~1 min, 50 tasks, 5M compute cap)
-  default   Full dataset (all tasks, 20M compute cap)
+  quick     Fast dev loop (~1 min, 50 tasks, no compute cap)
+  default   Full dataset (all tasks, no compute cap)
   contest   Maximum accuracy (all tasks, 50M compute cap, beam search)
 
 Compute cap examples:

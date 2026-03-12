@@ -153,15 +153,15 @@ Three modes. Pick one. That's the only knob most users need.
 
 | Mode | Tasks | Beam | Compute Cap | Use case |
 |------|-------|------|-------------|----------|
-| `quick` | 50 | off | 5M | Fast dev loop (~1 min) |
-| `default` | all (400) | off | 20M | Full benchmark (~5 min) |
+| `quick` | 50 | off | none | Fast dev loop (~1 min) |
+| `default` | all (400) | off | none | Full benchmark (~5 min) |
 | `contest` | all (400) | 30×15 | 50M | Maximum accuracy (~30 min) |
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic.
 
 **Why no beam search?** A/B testing on 49 tasks showed beam search (width=20, gens=10) solves **exactly the same tasks** as exhaustive-only, while adding +13% wall time. All solves come from exhaustive enumeration (depth 1-3), object decomposition, conditional search, near-miss refinement, and color fix. Beam is kept in contest mode as a safety net.
 
-**Compute cap** is cell-normalized: small grids (cheap to evaluate) get more search budget, large grids (expensive) get capped. Override with `--compute-cap`:
+**Compute cap** is only relevant for contest mode (beam search). Exhaustive enumeration is self-limiting (~7.5K evals/task), so quick/default need no cap. Override with `--compute-cap`:
 
 ```bash
 python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
@@ -195,7 +195,7 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 | `--max-generations` | from preset | Beam generations. Quick/default: `1` (off), contest: `15` |
 | `--workers` | `0` (perf cores) | Parallel workers. `0` = auto-detect performance cores |
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
-| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick: `5M`, default: `20M`, contest: `50M`. `0` = unlimited |
+| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick/default: `0` (unlimited), contest: `50M`. `0` = unlimited |
 | `--exhaustive-depth` | `3` | Exhaustive enumeration depth (`0`=off, `2`=pairs, `3`=triples) |
 | `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
 | `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |
