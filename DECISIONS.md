@@ -811,4 +811,96 @@ Key evidence of compounding:
 
 ---
 
+## Session — Cell-Normalized Compute Cap (2026-03-12)
+
+### Decision: Aggressive compute cap at 2M ops (~3x median)
+
+**Problem:** Task `0dfd9992` (21×21=441 cells) consumed 69s and 6,580 evals — pure waste on an unsolved task. Large-grid tasks dominated wall time while contributing zero solves.
+
+**Key insight — bimodal solve distribution (400-task training set):**
+- **72 "fast" solves** (depth 0-1, <1K evals): direct primitives or simple pairs
+- **23 "slow" solves** (depth 1+, >1K evals): `per_object_recolor`, `per_object`, or depth-3 triples
+- **305 unsolved**: exhausted full search (5K-7.4K evals each), never found it
+- Grid size is NOT the bottleneck: 30×30 task `1f85a75f` solves in 30 evals (0.0s) with `extract_largest`; 29×29 task `484b58aa` burns 146s unsolved
+- Solved tasks: median 22K ops, max 3.25M ops
+- Overall median ops: 714K
+
+**Philosophy:** If a task needs >3x median ops to solve, the primitives aren't good enough. Brute-forcing deeper search is the wrong investment — better to add the right primitive.
+
+**Implementation:** `compute_cap=2_000_000` for quick/default presets (~3x median ops).
+- Loses 2 solves (both depth-3 compositions on 441-cell grids: `90c28cc7`, `0b148d64`)
+- Caps 49 pathological tasks, saves ~17% of total compute ops
+- Verified on 50-task quick run: still 17/50 solved (no regression)
+- Contest preset remains at 50M for maximum effort
+- Override with `--compute-cap 0` for unlimited
+
+### Decision: Add --task-ids flag for targeted runs
+
+**Rationale:** Debugging specific tasks required running the full dataset. Added `--task-ids` to `make_parser()` (all experiments inherit it) with prefix-match support (e.g., `--task-ids 0dfd` matches `0dfd9992`). Filtering happens in `run_experiment()` so it's domain-agnostic.
+
+---
+
+## Session — JIT Compilation, Compute Budget, Smart Search (March 2026)
+
+### Decision: Numba JIT compilation for ARC primitives
+
+**Problem:** Primitive cost variance was 1000x+ (0.03ms to 37ms/call). Dense grids caused O(n×p²) blowup in drawing/connecting primitives. Task `1190e5a7` took 600s; `0dfd9992` took 35s.
+
+**Solution:** JIT-compile 18 hot primitives with `@nb.njit(cache=True)`. For dict-based color operations, replaced with fixed `int[10]` arrays (ARC has 10 colors). For BFS, replaced deque with pre-allocated numpy arrays.
+
+**Results:**
+| Task | Before | After | Speedup |
+|---|---|---|---|
+| 1190e5a7 | 600s | 2.4s | **250x** |
+| 0dfd9992 | 35s | 3.1s | **11x** |
+| 400-task full | ~40min+ | 7m32s | **~5x** |
+| Median task | ~5-6s | 2.3s | **~2.5x** |
+
+No solves lost: 85/400 (21.2%) before and after.
+
+### Decision: Depth-weighted compute cost proxy
+
+**Problem:** `evals × cells` treats all programs equally, but depth-3 programs apply 3 primitives while depth-1 applies 1. Budget was not a true proxy for compute.
+
+**Solution:** Count depth-weighted ops in exhaustive enumeration: depth-1 = 1 op, depth-2 = 2 ops, depth-3 = 3 ops. Budget is now in "ops" not raw eval count. This makes budget enforcement proportional to actual work.
+
+**Adjusted presets:** quick/default: 2M → 3M ops, contest: 50M → 100M ops (accounts for ~2.6x depth multiplier).
+
+### Decision: Compute cap = 3M ops (ROI-optimized)
+
+**ROI sweep on 50-task training set:**
+| Cap | Solved | Time | ROI |
+|---|---|---|---|
+| 1M | 18/50 | 30s | Best efficiency (1.66s/solve) |
+| **3M** | **19/50** | **80s** | **Best absolute solves** |
+| 5M+ | 19/50 | 91-107s | Zero additional solves |
+
+**Judgement:** Beyond 3M, exhaustive search hits hard diminishing returns. The path to more solves is smarter search, not more compute.
+
+### Decision: Smart search pruning (inner-step filter + adaptive depth skip)
+
+**Problem:** Most depth-2/3 combinations are wasteful. Exhaustive K² pairs enumerate many useless inner steps.
+
+**Two pruning strategies (deterministic, no solve loss):**
+1. **Inner-step quality filter**: Only use depth-1 primitives with error < 0.70 as inner steps. Programs that produce garbage alone rarely improve as intermediate steps.
+2. **Adaptive depth-3 skip**: If best depth-2 error > 0.50, skip depth-3 entirely.
+
+**Impact:** 13% fewer ops, slowest task 10.8s → 6.1s, median 2.3s → 1.6s, same 19/50 solves.
+
+### Analysis: Path to higher solve rates
+
+Near-miss analysis of unsolved tasks (50-task set):
+- 3 tasks with <5% error (almost solved — need color fix or small adjustment)
+- 15 tasks with 5-15% error (found partial structure)
+- 9 tasks with 15-30% error
+- 4 tasks with >30% error
+
+**Next steps for increasing solves:**
+1. **Per-example error vectors**: Track which examples each program solves. Compose programs that solve complementary examples.
+2. **Wider near-miss refinement**: Current refinement tries ±1 step on top-5 near misses. Could try deeper refinement chains.
+3. **More primitives**: The 3 almost-solved tasks likely need a specific primitive we don't have.
+4. **Cross-task transfer**: Library learning across tasks (the compounding loop).
+
+---
+
 *This document will be updated with each new session and major decision.*

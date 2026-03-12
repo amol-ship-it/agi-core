@@ -14,6 +14,7 @@ from collections import Counter
 from typing import Optional
 
 import numpy as np
+import numba as nb
 
 from core import Primitive
 
@@ -33,6 +34,618 @@ def to_np(grid: Grid) -> np.ndarray:
 def from_np(arr: np.ndarray) -> Grid:
     """Convert numpy array back to list-of-lists."""
     return arr.tolist()
+
+
+# =============================================================================
+# Numba JIT kernels — accelerate hot inner loops for all expensive primitives.
+# ARC grids have at most 10 colors (0-9), so dict-based color counting is
+# replaced with fixed int[10] arrays.  BFS queues use pre-allocated arrays.
+# =============================================================================
+
+@nb.njit(cache=True)
+def _jit_draw_cross(arr, result):
+    """Fill entire row and column for each non-zero pixel."""
+    h, w = arr.shape
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                color = arr[r, c]
+                for cc in range(w):
+                    if result[r, cc] == 0:
+                        result[r, cc] = color
+                for rr in range(h):
+                    if result[rr, c] == 0:
+                        result[rr, c] = color
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_draw_cross_to_contact(arr, result):
+    """Extend cross lines from pixels until hitting another non-zero pixel."""
+    h, w = arr.shape
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                color = arr[r, c]
+                # 4 cardinal directions
+                for d in range(4):
+                    dr = (-1, 1, 0, 0)[d]
+                    dc = (0, 0, -1, 1)[d]
+                    nr, nc = r + dr, c + dc
+                    while 0 <= nr < h and 0 <= nc < w:
+                        if arr[nr, nc] != 0:
+                            break
+                        result[nr, nc] = color
+                        nr += dr
+                        nc += dc
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_draw_diagonal(arr, result):
+    """Extend diagonal lines from each non-zero pixel to grid edges."""
+    h, w = arr.shape
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                color = arr[r, c]
+                for d in range(4):
+                    dr = (-1, -1, 1, 1)[d]
+                    dc = (-1, 1, -1, 1)[d]
+                    nr, nc = r + dr, c + dc
+                    while 0 <= nr < h and 0 <= nc < w:
+                        if result[nr, nc] == 0:
+                            result[nr, nc] = color
+                        nr += dr
+                        nc += dc
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_draw_diagonal_nearest(arr, result, dist):
+    """Diagonal lines with nearest-source priority (BFS-like)."""
+    h, w = arr.shape
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                dist[r, c] = 0.0
+                color = arr[r, c]
+                for d in range(4):
+                    dr = (-1, -1, 1, 1)[d]
+                    dc = (-1, 1, -1, 1)[d]
+                    nr, nc = r + dr, c + dc
+                    step = 1.0
+                    while 0 <= nr < h and 0 <= nc < w:
+                        if result[nr, nc] == 0 and step < dist[nr, nc]:
+                            result[nr, nc] = color
+                            dist[nr, nc] = step
+                        elif result[nr, nc] != 0:
+                            break
+                        step += 1.0
+                        nr += dr
+                        nc += dc
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_extend_diagonal_lines(arr, result):
+    """Extend isolated non-zero cells diagonally."""
+    h, w = arr.shape
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                color = arr[r, c]
+                # Check if isolated (no same-color orthogonal neighbors)
+                has_neighbor = False
+                for d in range(4):
+                    dr = (-1, 1, 0, 0)[d]
+                    dc = (0, 0, -1, 1)[d]
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and arr[nr, nc] == color:
+                        has_neighbor = True
+                        break
+                if not has_neighbor:
+                    for d in range(4):
+                        dr = (-1, -1, 1, 1)[d]
+                        dc = (-1, 1, -1, 1)[d]
+                        nr, nc = r + dr, c + dc
+                        while 0 <= nr < h and 0 <= nc < w and result[nr, nc] == 0:
+                            result[nr, nc] = color
+                            nr += dr
+                            nc += dc
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_surround_3x3(arr, result, ring_color):
+    """Draw 3x3 ring around each non-zero pixel."""
+    h, w = arr.shape
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                for dr in range(-1, 2):
+                    for dc in range(-1, 2):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < h and 0 <= nc < w and result[nr, nc] == 0:
+                            result[nr, nc] = ring_color
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_connect_color_h(arr, result):
+    """Fill horizontal gaps between same-colored pixels using int[10] arrays."""
+    h, w = arr.shape
+    for r in range(h):
+        # For each color 1-9, track min and max column
+        for color in range(1, 10):
+            c_min = w
+            c_max = -1
+            for c in range(w):
+                if arr[r, c] == color:
+                    if c < c_min:
+                        c_min = c
+                    if c > c_max:
+                        c_max = c
+            if c_max > c_min:
+                for c in range(c_min + 1, c_max):
+                    if result[r, c] == 0:
+                        result[r, c] = color
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_connect_color_v(arr, result):
+    """Fill vertical gaps between same-colored pixels using int[10] arrays."""
+    h, w = arr.shape
+    for c in range(w):
+        for color in range(1, 10):
+            r_min = h
+            r_max = -1
+            for r in range(h):
+                if arr[r, c] == color:
+                    if r < r_min:
+                        r_min = r
+                    if r > r_max:
+                        r_max = r
+            if r_max > r_min:
+                for r in range(r_min + 1, r_max):
+                    if result[r, c] == 0:
+                        result[r, c] = color
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_fill_between_h(arr, result):
+    """Fill horizontal gaps between same-colored objects."""
+    h, w = arr.shape
+    for r in range(h):
+        for color in range(1, 10):
+            c_min = w
+            c_max = -1
+            for c in range(w):
+                if arr[r, c] == color:
+                    if c < c_min:
+                        c_min = c
+                    if c > c_max:
+                        c_max = c
+            if c_max > c_min:
+                for c in range(c_min, c_max + 1):
+                    if result[r, c] == 0:
+                        result[r, c] = color
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_fill_between_v(arr, result):
+    """Fill vertical gaps between same-colored objects."""
+    h, w = arr.shape
+    for c in range(w):
+        for color in range(1, 10):
+            r_min = h
+            r_max = -1
+            for r in range(h):
+                if arr[r, c] == color:
+                    if r < r_min:
+                        r_min = r
+                    if r > r_max:
+                        r_max = r
+            if r_max > r_min:
+                for r in range(r_min, r_max + 1):
+                    if result[r, c] == 0:
+                        result[r, c] = color
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_fill_between_diagonal(arr, result):
+    """Fill diagonal lines between same-colored pixels.
+
+    For each color and each diagonal index (r-c and r+c), find pixels
+    on that diagonal and fill between adjacent pairs.
+    """
+    h, w = arr.shape
+    max_diag = h + w  # max possible diagonal index offset
+
+    # For r-c diagonals (backslash \): index range [-(w-1), h-1]
+    # Offset by (w-1) so index is always >= 0
+    # For r+c diagonals (forward /): index range [0, h+w-2]
+    for pass_type in range(2):  # 0 = r-c, 1 = r+c
+        for color in range(1, 10):
+            # Collect pixels on each diagonal for this color
+            # Use a flat buffer: for each diagonal, store (row, col) pairs
+            # Max pixels per diagonal = min(h, w)
+            for diag_idx in range(max_diag):
+                # Collect pixels on this diagonal with this color
+                n_pts = 0
+                # Pre-allocated arrays for up to max(h,w) points
+                buf_r = np.empty(max(h, w), dtype=np.int32)
+                buf_c = np.empty(max(h, w), dtype=np.int32)
+
+                for r in range(h):
+                    for c in range(w):
+                        if arr[r, c] == color:
+                            if pass_type == 0:
+                                d = r - c + (w - 1)
+                            else:
+                                d = r + c
+                            if d == diag_idx:
+                                buf_r[n_pts] = r
+                                buf_c[n_pts] = c
+                                n_pts += 1
+
+                if n_pts < 2:
+                    continue
+
+                # Sort by row (already in order since we iterate r ascending)
+                # Fill between adjacent pairs
+                for k in range(n_pts - 1):
+                    r1, c1 = buf_r[k], buf_c[k]
+                    r2, c2 = buf_r[k + 1], buf_c[k + 1]
+                    dr = abs(r2 - r1)
+                    if dr <= 1:
+                        continue
+                    sr = 1 if r2 > r1 else -1
+                    sc = 1 if c2 > c1 else -1
+                    for step in range(1, dr):
+                        rr = r1 + step * sr
+                        cc = c1 + step * sc
+                        if result[rr, cc] == 0:
+                            result[rr, cc] = color
+
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_denoise_5x5(arr, result):
+    """Replace each cell with 5x5 neighborhood majority using int[10] counts."""
+    h, w = arr.shape
+    for r in range(h):
+        for c in range(w):
+            counts = np.zeros(10, dtype=np.int32)
+            total = 0
+            for dr in range(-2, 3):
+                for dc in range(-2, 3):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w:
+                        v = arr[nr, nc]
+                        if 0 <= v < 10:
+                            counts[v] += 1
+                        total += 1
+            best = 0
+            best_count = 0
+            for v in range(10):
+                if counts[v] > best_count:
+                    best_count = counts[v]
+                    best = v
+            if best_count > total // 2:
+                result[r, c] = best
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_fill_tile_pattern(arr, h, w):
+    """Infer repeating tile from visible cells and fill zeros."""
+    for th in range(1, h + 1):
+        if h % th != 0:
+            continue
+        for tw in range(1, w + 1):
+            if w % tw != 0:
+                continue
+            if th == h and tw == w:
+                continue
+            # Vote: use int[10] counts per tile cell
+            votes = np.zeros((th, tw, 10), dtype=np.int32)
+            for r in range(h):
+                for c in range(w):
+                    v = arr[r, c]
+                    if v != 0 and 0 <= v < 10:
+                        votes[r % th, c % tw, v] += 1
+            # Resolve tile
+            tile = np.zeros((th, tw), dtype=np.int32)
+            n_resolved = 0
+            for tr in range(th):
+                for tc in range(tw):
+                    best = 0
+                    best_count = 0
+                    for v in range(10):
+                        if votes[tr, tc, v] > best_count:
+                            best_count = votes[tr, tc, v]
+                            best = v
+                    if best_count > 0:
+                        tile[tr, tc] = best
+                        n_resolved += 1
+            if n_resolved < th * tw * 0.5:
+                continue
+            # Verify agreement
+            n_agree = 0
+            n_nz = 0
+            for r in range(h):
+                for c in range(w):
+                    v = arr[r, c]
+                    if v != 0:
+                        n_nz += 1
+                        if tile[r % th, c % tw] == v:
+                            n_agree += 1
+            if n_nz > 0 and n_agree < n_nz * 0.9:
+                continue
+            # Build result
+            result = np.zeros((h, w), dtype=np.int32)
+            for r in range(h):
+                for c in range(w):
+                    result[r, c] = tile[r % th, c % tw]
+            return result
+    # No tile found, return copy
+    return arr.copy()
+
+
+@nb.njit(cache=True)
+def _jit_fill_holes_in_objects(arr, bg, h, w):
+    """Fill enclosed zero-regions with surrounding color via BFS + raycast."""
+    result = arr.copy()
+    reachable = np.zeros((h, w), dtype=nb.boolean)
+
+    # BFS queue (pre-allocated, max size = h*w)
+    queue_r = np.empty(h * w, dtype=np.int32)
+    queue_c = np.empty(h * w, dtype=np.int32)
+    head = 0
+    tail = 0
+
+    # Seed borders
+    for r in range(h):
+        for c_idx in range(2):
+            c = 0 if c_idx == 0 else w - 1
+            if c < w and arr[r, c] == bg and not reachable[r, c]:
+                reachable[r, c] = True
+                queue_r[tail] = r
+                queue_c[tail] = c
+                tail += 1
+    for c in range(w):
+        for r_idx in range(2):
+            r = 0 if r_idx == 0 else h - 1
+            if r < h and arr[r, c] == bg and not reachable[r, c]:
+                reachable[r, c] = True
+                queue_r[tail] = r
+                queue_c[tail] = c
+                tail += 1
+
+    # BFS flood fill
+    while head < tail:
+        r = queue_r[head]
+        c = queue_c[head]
+        head += 1
+        for d in range(4):
+            dr = (-1, 1, 0, 0)[d]
+            dc = (0, 0, -1, 1)[d]
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and not reachable[nr, nc] and arr[nr, nc] == bg:
+                reachable[nr, nc] = True
+                queue_r[tail] = nr
+                queue_c[tail] = nc
+                tail += 1
+
+    # Fill unreachable bg cells by raycasting to find surrounding color
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] == bg and not reachable[r, c]:
+                for d in range(4):
+                    dr = (-1, 1, 0, 0)[d]
+                    dc = (0, 0, -1, 1)[d]
+                    for dist in range(1, max(h, w)):
+                        nr = r + dr * dist
+                        nc = c + dc * dist
+                        if not (0 <= nr < h and 0 <= nc < w):
+                            break
+                        if arr[nr, nc] != bg:
+                            result[r, c] = arr[nr, nc]
+                            break
+                    if result[r, c] != bg:
+                        break
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_extend_lines_h(arr, result):
+    """Extend non-zero pixels horizontally to fill their row."""
+    h, w = arr.shape
+    for r in range(h):
+        # Find most common non-zero color in this row
+        counts = np.zeros(10, dtype=np.int32)
+        for c in range(w):
+            v = arr[r, c]
+            if v != 0 and 0 <= v < 10:
+                counts[v] += 1
+        mc = 0
+        best = 0
+        for v in range(1, 10):
+            if counts[v] > best:
+                best = counts[v]
+                mc = v
+        if mc > 0:
+            for c in range(w):
+                if result[r, c] == 0:
+                    result[r, c] = mc
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_extend_lines_v(arr, result):
+    """Extend non-zero pixels vertically to fill their column."""
+    h, w = arr.shape
+    for c in range(w):
+        counts = np.zeros(10, dtype=np.int32)
+        for r in range(h):
+            v = arr[r, c]
+            if v != 0 and 0 <= v < 10:
+                counts[v] += 1
+        mc = 0
+        best = 0
+        for v in range(1, 10):
+            if counts[v] > best:
+                best = counts[v]
+                mc = v
+        if mc > 0:
+            for r in range(h):
+                if result[r, c] == 0:
+                    result[r, c] = mc
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_most_common_overall(arr):
+    """Find most common color overall (including bg=0)."""
+    h, w = arr.shape
+    counts = np.zeros(10, dtype=np.int32)
+    for r in range(h):
+        for c in range(w):
+            v = arr[r, c]
+            if 0 <= v < 10:
+                counts[v] += 1
+    best = 0
+    best_count = 0
+    for v in range(10):
+        if counts[v] > best_count:
+            best_count = counts[v]
+            best = v
+    return best
+
+
+@nb.njit(cache=True)
+def _jit_extend_lines_to_contact(arr, result, bg):
+    """Extend colored segments to fill gaps within row/column, per color."""
+    h, w = arr.shape
+    # Horizontal
+    for r in range(h):
+        for color in range(10):
+            if color == bg:
+                continue
+            c_min = w
+            c_max = -1
+            for c in range(w):
+                if arr[r, c] == color:
+                    if c < c_min:
+                        c_min = c
+                    if c > c_max:
+                        c_max = c
+            if c_max > c_min:
+                for c in range(c_min, c_max + 1):
+                    if result[r, c] == bg:
+                        result[r, c] = color
+    # Vertical
+    for c in range(w):
+        for color in range(10):
+            if color == bg:
+                continue
+            r_min = h
+            r_max = -1
+            for r in range(h):
+                if arr[r, c] == color:
+                    if r < r_min:
+                        r_min = r
+                    if r > r_max:
+                        r_max = r
+            if r_max > r_min:
+                for r in range(r_min, r_max + 1):
+                    if result[r, c] == bg:
+                        result[r, c] = color
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_fill_grid_intersections(arr, result):
+    """Fill bg cells at row/col intersections with matching colors."""
+    h, w = arr.shape
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0:
+                continue
+            # Collect row and col colors using bitmask (colors 0-9)
+            row_mask = 0
+            col_mask = 0
+            for cc in range(w):
+                if arr[r, cc] != 0:
+                    row_mask |= (1 << arr[r, cc])
+            for rr in range(h):
+                if arr[rr, c] != 0:
+                    col_mask |= (1 << arr[rr, c])
+            common = row_mask & col_mask
+            if common:
+                # Find minimum color in common
+                for v in range(1, 10):
+                    if common & (1 << v):
+                        result[r, c] = v
+                        break
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_complete_sym_90(arr):
+    """Complete 90-degree rotational symmetry."""
+    h, w = arr.shape
+    result = arr.copy()
+    if h != w:
+        return result
+    n = h
+    for _iter in range(4):
+        changed = False
+        for r in range(n):
+            for c in range(n):
+                if result[r, c] != 0:
+                    r2, c2 = c, n - 1 - r
+                    if 0 <= r2 < n and 0 <= c2 < n and result[r2, c2] == 0:
+                        result[r2, c2] = result[r, c]
+                        changed = True
+                    r3, c3 = n - 1 - r, n - 1 - c
+                    if 0 <= r3 < n and 0 <= c3 < n and result[r3, c3] == 0:
+                        result[r3, c3] = result[r, c]
+                        changed = True
+                    r4, c4 = n - 1 - c, r
+                    if 0 <= r4 < n and 0 <= c4 < n and result[r4, c4] == 0:
+                        result[r4, c4] = result[r, c]
+                        changed = True
+        if not changed:
+            break
+    return result
+
+
+@nb.njit(cache=True)
+def _jit_complete_sym_180(arr):
+    """Complete 180-degree rotational symmetry."""
+    h, w = arr.shape
+    result = arr.copy()
+    for _iter in range(2):
+        changed = False
+        for r in range(h):
+            for c in range(w):
+                if result[r, c] != 0:
+                    r2, c2 = h - 1 - r, w - 1 - c
+                    if 0 <= r2 < h and 0 <= c2 < w and result[r2, c2] == 0:
+                        result[r2, c2] = result[r, c]
+                        changed = True
+        if not changed:
+            break
+    return result
 
 
 def grid_shape(grid: Grid) -> tuple[int, int]:
@@ -631,31 +1244,13 @@ def recolor_by_size_rank(grid: Grid) -> Grid:
 def extend_lines_h(grid: Grid) -> Grid:
     """Extend non-zero pixels horizontally to fill their row."""
     arr = to_np(grid)
-    result = arr.copy()
-    rows, cols = arr.shape
-    for r in range(rows):
-        colors = arr[r, arr[r] != 0]
-        if len(colors) > 0:
-            mc = Counter(colors.tolist()).most_common(1)[0][0]
-            for c in range(cols):
-                if result[r, c] == 0:
-                    result[r, c] = mc
-    return from_np(result)
+    return from_np(_jit_extend_lines_h(arr, arr.copy()))
 
 
 def extend_lines_v(grid: Grid) -> Grid:
     """Extend non-zero pixels vertically to fill their column."""
     arr = to_np(grid)
-    result = arr.copy()
-    rows, cols = arr.shape
-    for c in range(cols):
-        colors = arr[arr[:, c] != 0, c]
-        if len(colors) > 0:
-            mc = Counter(colors.tolist()).most_common(1)[0][0]
-            for r in range(rows):
-                if result[r, c] == 0:
-                    result[r, c] = mc
-    return from_np(result)
+    return from_np(_jit_extend_lines_v(arr, arr.copy()))
 
 
 # --- Object detection helpers ---
@@ -1080,30 +1675,7 @@ def extend_lines(grid: Grid) -> Grid:
 def extend_diagonal_lines(grid: Grid) -> Grid:
     """Extend isolated non-zero cells diagonally (both main and anti-diag)."""
     arr = to_np(grid)
-    h, w = arr.shape
-    result = arr.copy()
-
-    for r in range(h):
-        for c in range(w):
-            if arr[r, c] != 0:
-                color = int(arr[r, c])
-                # Check if isolated (no same-color orthogonal neighbors)
-                has_neighbor = False
-                for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-                    nr, nc = r + dr, c + dc
-                    if 0 <= nr < h and 0 <= nc < w and arr[nr, nc] == color:
-                        has_neighbor = True
-                        break
-                if not has_neighbor:
-                    # Extend along all 4 diagonals until hitting non-zero or edge
-                    for dr, dc in [(-1,-1),(-1,1),(1,-1),(1,1)]:
-                        nr, nc = r + dr, c + dc
-                        while 0 <= nr < h and 0 <= nc < w and result[nr, nc] == 0:
-                            result[nr, nc] = color
-                            nr += dr
-                            nc += dc
-
-    return from_np(result)
+    return from_np(_jit_extend_diagonal_lines(arr, arr.copy()))
 
 
 def binarize(grid: Grid) -> Grid:
@@ -1510,22 +2082,8 @@ def denoise_5x5(grid: Grid) -> Grid:
     """Replace each cell with 5x5 neighborhood majority."""
     if not grid or not grid[0]:
         return grid
-    h, w = len(grid), len(grid[0])
-    result = [row[:] for row in grid]
-    for r in range(h):
-        for c in range(w):
-            counts: dict[int, int] = {}
-            for dr in range(-2, 3):
-                for dc in range(-2, 3):
-                    nr, nc = r + dr, c + dc
-                    if 0 <= nr < h and 0 <= nc < w:
-                        v = grid[nr][nc]
-                        counts[v] = counts.get(v, 0) + 1
-            majority = max(counts, key=lambda k: counts[k])
-            total = sum(counts.values())
-            if counts[majority] > total // 2:
-                result[r][c] = majority
-    return result
+    arr = to_np(grid)
+    return from_np(_jit_denoise_5x5(arr, arr.copy()))
 
 
 def fill_holes_per_color(grid: Grid) -> Grid:
@@ -1568,97 +2126,24 @@ def fill_holes_in_objects(grid: Grid) -> Grid:
     """Fill enclosed zero-regions inside objects with surrounding color."""
     if not grid or not grid[0]:
         return grid
-    from collections import deque
-    h, w = len(grid), len(grid[0])
-    bg = _most_common_overall(grid)
-    result = [row[:] for row in grid]
-    reachable = [[False] * w for _ in range(h)]
-    queue: deque[tuple[int, int]] = deque()
-    for r in range(h):
-        for c in [0, w - 1]:
-            if grid[r][c] == bg and not reachable[r][c]:
-                reachable[r][c] = True
-                queue.append((r, c))
-    for c in range(w):
-        for r in [0, h - 1]:
-            if grid[r][c] == bg and not reachable[r][c]:
-                reachable[r][c] = True
-                queue.append((r, c))
-    while queue:
-        r, c = queue.popleft()
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < h and 0 <= nc < w and not reachable[nr][nc] and grid[nr][nc] == bg:
-                reachable[nr][nc] = True
-                queue.append((nr, nc))
-    for r in range(h):
-        for c in range(w):
-            if grid[r][c] == bg and not reachable[r][c]:
-                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    for dist in range(1, max(h, w)):
-                        nr, nc = r + dr * dist, c + dc * dist
-                        if not (0 <= nr < h and 0 <= nc < w):
-                            break
-                        if grid[nr][nc] != bg:
-                            result[r][c] = grid[nr][nc]
-                            break
-                    if result[r][c] != bg:
-                        break
-    return result
+    arr = to_np(grid)
+    h, w = arr.shape
+    bg = np.int32(_jit_most_common_overall(arr))
+    return from_np(_jit_fill_holes_in_objects(arr, bg, h, w))
 
 
 def _most_common_overall(grid: Grid) -> int:
     """Find the most common color overall (including bg)."""
-    counts: dict[int, int] = {}
-    for row in grid:
-        for v in row:
-            counts[v] = counts.get(v, 0) + 1
-    return max(counts, key=lambda k: counts[k]) if counts else 0
+    return int(_jit_most_common_overall(to_np(grid)))
 
 
 def fill_tile_pattern(grid: Grid) -> Grid:
     """Infer a repeating tile from visible cells and fill zeros with it."""
     if not grid or not grid[0]:
         return grid
-    h, w = len(grid), len(grid[0])
-    for th in range(1, h + 1):
-        if h % th != 0:
-            continue
-        for tw in range(1, w + 1):
-            if w % tw != 0:
-                continue
-            if th == h and tw == w:
-                continue
-            votes: list[list[dict[int, int]]] = [
-                [{} for _ in range(tw)] for _ in range(th)
-            ]
-            for r in range(h):
-                for c in range(w):
-                    v = grid[r][c]
-                    if v != 0:
-                        d = votes[r % th][c % tw]
-                        d[v] = d.get(v, 0) + 1
-            tile = [[0] * tw for _ in range(th)]
-            n_resolved = 0
-            for tr in range(th):
-                for tc in range(tw):
-                    if votes[tr][tc]:
-                        tile[tr][tc] = max(votes[tr][tc], key=lambda k: votes[tr][tc][k])
-                        n_resolved += 1
-            if n_resolved < th * tw * 0.5:
-                continue
-            n_agree = n_nz = 0
-            for r in range(h):
-                for c in range(w):
-                    v = grid[r][c]
-                    if v != 0:
-                        n_nz += 1
-                        if tile[r % th][c % tw] == v:
-                            n_agree += 1
-            if n_nz > 0 and n_agree / n_nz < 0.90:
-                continue
-            return [[tile[r % th][c % tw] for c in range(w)] for r in range(h)]
-    return [row[:] for row in grid]
+    arr = to_np(grid)
+    h, w = arr.shape
+    return from_np(_jit_fill_tile_pattern(arr, h, w))
 
 
 def fill_by_symmetry(grid: Grid) -> Grid:
@@ -2809,18 +3294,8 @@ def fill_grid_intersections(grid: Grid) -> Grid:
     """Fill bg cells at row/col intersections with matching colors."""
     if not grid or not grid[0]:
         return grid
-    h, w = len(grid), len(grid[0])
-    result = [row[:] for row in grid]
-    for r in range(h):
-        for c in range(w):
-            if grid[r][c] != 0:
-                continue
-            row_colors = set(grid[r][cc] for cc in range(w) if grid[r][cc] != 0)
-            col_colors = set(grid[rr][c] for rr in range(h) if grid[rr][c] != 0)
-            common = row_colors & col_colors
-            if common:
-                result[r][c] = min(common)
-    return result
+    arr = to_np(grid)
+    return from_np(_jit_fill_grid_intersections(arr, arr.copy()))
 
 
 def tile_grid_2x1(grid: Grid) -> Grid:
@@ -3167,49 +3642,12 @@ def repeat_pattern_to_size(grid: Grid) -> Grid:
 
 
 def extend_lines_to_contact(grid: Grid) -> Grid:
-    """Extend non-bg colored segments to fill gaps within their row or column.
-
-    Handles each color independently: if a row has color A at cols 2,5 and
-    color B at cols 7,9, fills A between 2-5 and B between 7-9.
-    """
+    """Extend non-bg colored segments to fill gaps within their row or column."""
     if not grid or not grid[0]:
         return grid
-    h, w = len(grid), len(grid[0])
-    from collections import Counter
-    flat = [v for row in grid for v in row]
-    bg = Counter(flat).most_common(1)[0][0]
-    result = [row[:] for row in grid]
-    # Extend horizontally — per color
-    for r in range(h):
-        by_color: dict[int, list[int]] = {}
-        for c in range(w):
-            if grid[r][c] != bg:
-                color = grid[r][c]
-                if color not in by_color:
-                    by_color[color] = []
-                by_color[color].append(c)
-        for color, cols in by_color.items():
-            if len(cols) >= 2:
-                min_c, max_c = cols[0], cols[-1]
-                for c in range(min_c, max_c + 1):
-                    if result[r][c] == bg:
-                        result[r][c] = color
-    # Extend vertically — per color
-    for c in range(w):
-        by_color2: dict[int, list[int]] = {}
-        for r in range(h):
-            if grid[r][c] != bg:
-                color = grid[r][c]
-                if color not in by_color2:
-                    by_color2[color] = []
-                by_color2[color].append(r)
-        for color, rows in by_color2.items():
-            if len(rows) >= 2:
-                min_r, max_r = rows[0], rows[-1]
-                for r in range(min_r, max_r + 1):
-                    if result[r][c] == bg:
-                        result[r][c] = color
-    return result
+    arr = to_np(grid)
+    bg = np.int32(_jit_most_common_overall(arr))
+    return from_np(_jit_extend_lines_to_contact(arr, arr.copy(), bg))
 
 
 def recolor_2nd_to_dominant(grid: Grid) -> Grid:
@@ -3979,123 +4417,42 @@ def select_least_filled_cell(grid: Grid) -> Grid:
 def surround_pixels_3x3(grid: Grid) -> Grid:
     """Draw a 3x3 ring around each non-zero pixel using the next available color."""
     arr = to_np(grid)
-    h, w = arr.shape
-    result = arr.copy()
-
     # Find the ring color: most common nonzero, or 1
     colors = set(arr[arr != 0].tolist())
     ring_color = max(colors) + 1 if colors else 1
     if ring_color > 9:
         ring_color = 1
-
-    nz_positions = list(zip(*np.where(arr != 0)))
-    for r, c in nz_positions:
-        for dr in range(-1, 2):
-            for dc in range(-1, 2):
-                if dr == 0 and dc == 0:
-                    continue
-                nr, nc = r + dr, c + dc
-                if 0 <= nr < h and 0 <= nc < w and result[nr, nc] == 0:
-                    result[nr, nc] = ring_color
-    return from_np(result)
+    return from_np(_jit_surround_3x3(arr, arr.copy(), np.int32(ring_color)))
 
 
 def draw_cross_from_pixels(grid: Grid) -> Grid:
     """From each non-zero pixel, draw cross lines (up/down/left/right) to grid edge."""
     arr = to_np(grid)
-    h, w = arr.shape
-    result = arr.copy()
-
-    nz_positions = list(zip(*np.where(arr != 0)))
-    for r, c in nz_positions:
-        color = arr[r, c]
-        # Extend in 4 cardinal directions
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nr, nc = r + dr, c + dc
-            while 0 <= nr < h and 0 <= nc < w:
-                if result[nr, nc] == 0:
-                    result[nr, nc] = color
-                nr += dr
-                nc += dc
-    return from_np(result)
+    return from_np(_jit_draw_cross(arr, arr.copy()))
 
 
 def draw_cross_to_contact(grid: Grid) -> Grid:
     """From each non-zero pixel, draw cross lines until hitting another non-zero pixel."""
     arr = to_np(grid)
-    h, w = arr.shape
-    result = arr.copy()
-
-    nz_positions = list(zip(*np.where(arr != 0)))
-    for r, c in nz_positions:
-        color = arr[r, c]
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nr, nc = r + dr, c + dc
-            while 0 <= nr < h and 0 <= nc < w:
-                if arr[nr, nc] != 0:
-                    break
-                result[nr, nc] = color
-                nr += dr
-                nc += dc
-    return from_np(result)
+    return from_np(_jit_draw_cross_to_contact(arr, arr.copy()))
 
 
 def draw_diagonal_from_pixels(grid: Grid) -> Grid:
     """From each non-zero pixel, draw diagonal lines to grid edge."""
     arr = to_np(grid)
-    h, w = arr.shape
-    result = arr.copy()
-
-    nz_positions = list(zip(*np.where(arr != 0)))
-    for r, c in nz_positions:
-        color = arr[r, c]
-        for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-            nr, nc = r + dr, c + dc
-            while 0 <= nr < h and 0 <= nc < w:
-                if result[nr, nc] == 0:
-                    result[nr, nc] = color
-                nr += dr
-                nc += dc
-    return from_np(result)
+    return from_np(_jit_draw_diagonal(arr, arr.copy()))
 
 
 def connect_same_color_h(grid: Grid) -> Grid:
     """Draw horizontal lines between same-colored pixels in each row."""
     arr = to_np(grid)
-    h, w = arr.shape
-    result = arr.copy()
-
-    for r in range(h):
-        # Find colored pixels in this row
-        colored = [(c, arr[r, c]) for c in range(w) if arr[r, c] != 0]
-        for i in range(len(colored)):
-            for j in range(i + 1, len(colored)):
-                if colored[i][1] == colored[j][1]:
-                    c1, c2 = colored[i][0], colored[j][0]
-                    color = colored[i][1]
-                    for c in range(c1 + 1, c2):
-                        if result[r, c] == 0:
-                            result[r, c] = color
-    return from_np(result)
+    return from_np(_jit_connect_color_h(arr, arr.copy()))
 
 
 def connect_same_color_v(grid: Grid) -> Grid:
     """Draw vertical lines between same-colored pixels in each column."""
     arr = to_np(grid)
-    h, w = arr.shape
-    result = arr.copy()
-
-    for c in range(w):
-        colored = [(r, arr[r, c]) for r in range(h) if arr[r, c] != 0]
-        for i in range(len(colored)):
-            for j in range(i + 1, len(colored)):
-                if colored[i][1] == colored[j][1]:
-                    r1, r2 = colored[i][0], colored[j][0]
-                    color = colored[i][1]
-                    for r in range(r1 + 1, r2):
-                        if result[r, c] == 0:
-                            result[r, c] = color
-    return from_np(result)
+    return from_np(_jit_connect_color_v(arr, arr.copy()))
 
 
 # --- Additional scaling primitives ---
@@ -4103,45 +4460,13 @@ def connect_same_color_v(grid: Grid) -> Grid:
 def fill_between_objects_h(grid: Grid) -> Grid:
     """Fill horizontal gaps between same-colored objects in each row."""
     arr = to_np(grid)
-    h, w = arr.shape
-    result = arr.copy()
-    for r in range(h):
-        # Find spans of colored pixels
-        color_ranges: dict[int, list[int]] = {}
-        for c in range(w):
-            v = arr[r, c]
-            if v != 0:
-                if v not in color_ranges:
-                    color_ranges[v] = []
-                color_ranges[v].append(c)
-        # Fill between first and last occurrence of each color
-        for color, cols in color_ranges.items():
-            if len(cols) >= 2:
-                for c in range(min(cols), max(cols) + 1):
-                    if result[r, c] == 0:
-                        result[r, c] = color
-    return from_np(result)
+    return from_np(_jit_fill_between_h(arr, arr.copy()))
 
 
 def fill_between_objects_v(grid: Grid) -> Grid:
     """Fill vertical gaps between same-colored objects in each column."""
     arr = to_np(grid)
-    h, w = arr.shape
-    result = arr.copy()
-    for c in range(w):
-        color_ranges: dict[int, list[int]] = {}
-        for r in range(h):
-            v = arr[r, c]
-            if v != 0:
-                if v not in color_ranges:
-                    color_ranges[v] = []
-                color_ranges[v].append(r)
-        for color, rows in color_ranges.items():
-            if len(rows) >= 2:
-                for r in range(min(rows), max(rows) + 1):
-                    if result[r, c] == 0:
-                        result[r, c] = color
-    return from_np(result)
+    return from_np(_jit_fill_between_v(arr, arr.copy()))
 
 
 def fill_bbox_per_object(grid: Grid) -> Grid:
@@ -4774,35 +5099,8 @@ def draw_diagonal_nearest(grid: Grid) -> Grid:
     """
     arr = to_np(grid)
     h, w = arr.shape
-    result = arr.copy()
     dist = np.full((h, w), np.inf)
-
-    # Initialize distances: non-zero cells have distance 0
-    from collections import deque
-    queue: deque[tuple[int, int, int]] = deque()
-    for r in range(h):
-        for c in range(w):
-            if arr[r, c] != 0:
-                dist[r, c] = 0
-
-    # BFS from all non-zero pixels along diagonals
-    for r in range(h):
-        for c in range(w):
-            if arr[r, c] != 0:
-                color = arr[r, c]
-                for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                    nr, nc = r + dr, c + dc
-                    d = 1
-                    while 0 <= nr < h and 0 <= nc < w:
-                        if result[nr, nc] == 0 and d < dist[nr, nc]:
-                            result[nr, nc] = color
-                            dist[nr, nc] = d
-                        elif result[nr, nc] != 0:
-                            break  # stop at existing pixels
-                        d += 1
-                        nr += dr
-                        nc += dc
-    return from_np(result)
+    return from_np(_jit_draw_diagonal_nearest(arr, arr.copy(), dist))
 
 
 def keep_minority_color_only(grid: Grid) -> Grid:
@@ -5111,43 +5409,13 @@ def stamp_pattern_at_markers(grid: Grid) -> Grid:
 def fill_between_diagonal(grid: Grid) -> Grid:
     """Fill diagonal lines between same-colored pixels.
 
-    For each pair of same-colored pixels, if they form a diagonal
-    (same distance in row and column), fill the diagonal between them.
+    For each pair of same-colored pixels on the same diagonal, fill between them.
     """
-    h, w = len(grid), len(grid[0]) if grid else 0
+    arr = to_np(grid)
+    h, w = arr.shape
     if h == 0 or w == 0:
         return grid
-
-    result = [row[:] for row in grid]
-
-    # Group non-zero pixels by color
-    by_color: dict[int, list[tuple[int, int]]] = {}
-    for r in range(h):
-        for c in range(w):
-            if grid[r][c] != 0:
-                color = grid[r][c]
-                if color not in by_color:
-                    by_color[color] = []
-                by_color[color].append((r, c))
-
-    # For each color, connect diagonal pairs
-    for color, pixels in by_color.items():
-        for i in range(len(pixels)):
-            for j in range(i + 1, len(pixels)):
-                r1, c1 = pixels[i]
-                r2, c2 = pixels[j]
-                dr = abs(r2 - r1)
-                dc = abs(c2 - c1)
-                if dr == dc and dr > 1:
-                    # Fill diagonal
-                    sr = 1 if r2 > r1 else -1
-                    sc = 1 if c2 > c1 else -1
-                    for step in range(1, dr):
-                        nr, nc = r1 + step * sr, c1 + step * sc
-                        if result[nr][nc] == 0:
-                            result[nr][nc] = color
-
-    return result
+    return from_np(_jit_fill_between_diagonal(arr, arr.copy()))
 
 
 def complete_border_pattern(grid: Grid) -> Grid:

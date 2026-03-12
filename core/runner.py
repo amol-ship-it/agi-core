@@ -39,25 +39,28 @@ from .metrics import extract_metrics, print_compounding_table, save_metrics_json
 # =============================================================================
 
 PRESETS = {
-    # Quick: fast dev loop. Beam search adds 0 solves (verified A/B test on
-    # 49 tasks: 17/49 with beam=20 vs 17/49 with beam=1, same tasks solved,
-    # beam adds +13% wall time). Exhaustive enumeration is self-limiting
-    # (~7.5K evals/task max), so no compute cap needed.
+    # Quick: fast dev loop. Cell-normalized compute cap (~3x median ops).
+    # Analysis on 400-task training set:
+    #   - Solved tasks are bimodal: 72 "fast" (depth 0-1, <1K evals) vs
+    #     23 "slow" (depth 1+, >1K evals from per_object_recolor/triples).
+    #   - 30x30 grids solve in 30 evals when we have the right primitive;
+    #     146s on wrong primitive = wasted compute, not useful search.
+    #   - 2M cap: loses 2 depth-3 solves, caps 49 pathological tasks, ~17% faster.
+    #   - Philosophy: if it takes >3x median ops, fix the primitives, don't brute force.
     "quick": {
         "rounds": 1,
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 50,
-        "compute_cap": 0,           # unlimited — exhaustive enum self-limits at ~7.5K evals
+        "compute_cap": 3_000_000,   # 3M depth-weighted ops: 19/50 solves, optimal ROI
     },
-    # Default: full dataset. Exhaustive enumeration does ~100% of solves.
-    # Beam=1 avoids wasting compute on a phase that contributes nothing.
+    # Default: full dataset. Same cap — forces primitive quality.
     "default": {
         "rounds": 1,
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 0,
-        "compute_cap": 0,           # unlimited — exhaustive enum self-limits at ~7.5K evals
+        "compute_cap": 3_000_000,   # 3M depth-weighted ops: optimal ROI
     },
     # Contest: maximum effort. Keeps modest beam in case deeper search
     # helps on the hardest tasks. Still mainly exhaustive.
@@ -66,7 +69,7 @@ PRESETS = {
         "beam_width": 30,
         "max_generations": 15,
         "max_tasks": 0,
-        "compute_cap": 50_000_000,  # 50M ops — beam search safety net
+        "compute_cap": 100_000_000,  # 100M ops — beam search safety net
     },
 }
 
@@ -253,6 +256,9 @@ Examples:
                         help="Path to culture file to load (cross-run knowledge transfer)")
     parser.add_argument("--save-culture", type=str, default="",
                         help="Override auto culture save path (e.g. culture_train.json)")
+    parser.add_argument("--task-ids", type=str, default="",
+                        help="Comma-separated task IDs to run (e.g. '0dfd9992,1190e5a7'). "
+                             "Overrides --max-tasks. Prefix match supported.")
     return parser
 
 
@@ -468,6 +474,9 @@ class ExperimentConfig:
     verbose: bool = False
     mode: str = "default"
 
+    # Task filtering
+    task_ids: str = ""  # comma-separated task IDs (prefix match supported)
+
     # Shared timestamp (for pipeline mode — reuse across train+eval)
     timestamp: str = ""
 
@@ -549,6 +558,15 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     max_gens = cfg.max_generations
     tasks = cfg.tasks
     compute_cap = cfg.compute_cap
+
+    # Filter by task IDs if specified (prefix match)
+    if cfg.task_ids:
+        id_prefixes = [t.strip() for t in cfg.task_ids.split(",") if t.strip()]
+        tasks = [t for t in tasks
+                 if any(t.task_id.startswith(p) for p in id_prefixes)]
+        if not tasks:
+            print(f"  ERROR: No tasks matched --task-ids '{cfg.task_ids}'")
+            sys.exit(1)
 
     # --- Header ---
     hline("═")
