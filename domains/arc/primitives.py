@@ -5377,11 +5377,16 @@ def project_color_to_object_face(grid: Grid) -> Grid:
     if len(objects) < 2:
         return grid
 
-    # Find the largest object and single-pixel markers
+    # Find the largest object — all non-largest pixels are potential markers
     objects.sort(key=len, reverse=True)
     main_obj = objects[0]
     main_cells = {(r, c) for r, c, v in main_obj}
-    markers = [(r, c, v) for obj in objects[1:] if len(obj) == 1 for r, c, v in obj]
+
+    # Collect individual marker pixels from all non-main objects
+    markers = []
+    for obj in objects[1:]:
+        for r, c, v in obj:
+            markers.append((r, c, v))
 
     if not markers:
         return grid
@@ -5397,7 +5402,7 @@ def project_color_to_object_face(grid: Grid) -> Grid:
                 edge_cells.add((r, c))
                 break
 
-    # For each marker, find the nearest edge cell in same row or column
+    # For each marker pixel, find the nearest edge cell in same row or column
     for mr, mc, mv in markers:
         best_r, best_c = -1, -1
         best_dist = float('inf')
