@@ -1519,7 +1519,7 @@ class Learner:
 
         avg_error = total_error / n if n > 0 else total_error
         # Blend average and max: penalizes inconsistent programs
-        effective_error = max(avg_error, max_error * 0.5)
+        effective_error = max(avg_error, max_error * 0.3)
         comp_cost = self.drive.complexity_cost(program)
         energy = self.search_cfg.energy_alpha * effective_error + self.search_cfg.energy_beta * comp_cost
 

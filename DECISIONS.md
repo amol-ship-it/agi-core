@@ -1103,6 +1103,33 @@ Worst: 26 primitives appear only in overfit solutions.
 
 **Verdict:** Overfitting halved (16→8, 16%→9%), but true solves also dropped (85→77). The 0.5 blending coefficient is too aggressive — it rejects some genuinely correct deeper programs. The coefficient needs tuning (probably 0.3 or lower). But the approach is directionally correct and now produces reliable eval numbers (15/400 truly solved with proper test evaluation).
 
+### Decision 56: Max-Error Coefficient is Binary — 0.3 Chosen as Default
+
+**Experiment:** Swept max-error blending coefficient across {0.15, 0.3, 0.5} on full 400-task ARC-AGI-1 training set.
+
+**Results:**
+
+| Coefficient | Truly Solved | Overfit | Overfit Rate |
+|-------------|-------------|---------|-------------|
+| None (avg only) | 85/400 (21%) | 16 | 16% |
+| 0.15 | 77/400 (19%) | 8 | 9% |
+| 0.30 | 77/400 (19%) | 8 | 9% |
+| 0.50 | 77/400 (19%) | 8 | 9% |
+
+**Full pipeline with 0.3 (train + eval, 400 tasks each):**
+- Train: 77/400 (19.2%) truly solved, 8 overfit (9%)
+- Eval: 15/400 (3.8%) truly solved, 1 overfit
+- Library: 2 abstractions learned
+
+**Key insight:** The max-error blending acts as a **binary filter**, not a gradient. Overfit solutions have very high max_error values relative to avg_error (catastrophic failure on one or more examples), so any coefficient in [0.15, 0.5] blocks the same set of programs. The coefficient choice within this range doesn't matter.
+
+**Decision:** Keep coefficient at 0.3 — a moderate default that's robust across the tested range. The original 0.5 was not "too aggressive" as hypothesized in Decision 55; rather, all coefficient values produce the same outcome because the overfitting programs fail dramatically on at least one example.
+
+**Implication:** To recover the 8 lost true solves (85→77), we need a different approach than coefficient tuning. Options:
+1. Per-example thresholding (flag only if max_error > k * avg_error for some k)
+2. Leave-one-out validation within training examples
+3. Accept the 8-solve cost as the price of halving overfitting
+
 ---
 
 *This document will be updated with each new session and major decision.*
