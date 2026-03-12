@@ -1363,7 +1363,6 @@ The key relationship: transform primitives operate on object primitives. You can
 3. **Grid partition decomposition** (`grammar.py`): New strategy in `decompose()` — detects separator lines, splits into cells, with `recompose` that reassembles cells with separator lines restored.
 
 **Results:** 110/400 train (27.5%), 93/400 combined (23.2%) — same as Decision 63. The new features are structurally correct (506 tests pass, 10 new) but don't add immediate solves. They target task types (iterative propagation, grid-cell operations) that will compound with future work.
-
 ---
 
 *This document will be updated with each new session and major decision.*
