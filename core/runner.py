@@ -327,7 +327,7 @@ class ProgressTracker:
         slow_tag = ""
         if len(self.times) >= 5:
             med = statistics.median(self.times)
-            if wr.wall_time > med * 3:
+            if wr.wall_time > med * 10:
                 slow_tag = "  *** SLOW ***"
 
         print(
