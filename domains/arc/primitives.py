@@ -4918,6 +4918,282 @@ def fill_zero_regions_with_neighbor_color(grid: Grid) -> Grid:
 
 
 # =============================================================================
+# Batch 6: Targeted near-miss improvements
+# =============================================================================
+
+def move_objects_toward_each_other(grid: Grid) -> Grid:
+    """Move objects toward the nearest other object (gravity between objects).
+
+    Find connected components, then move each toward its nearest neighbor
+    by 1 step. Useful for tasks where objects need to be adjacent.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+    arr = to_np(grid)
+
+    # Find connected components
+    visited = set()
+    objects = []
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and (r, c) not in visited:
+                obj = []
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop(0)
+                    obj.append((cr, cc, int(arr[cr, cc])))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in visited and arr[nr, nc] != 0:
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                objects.append(obj)
+
+    if len(objects) < 2:
+        return grid
+
+    # For each object, find direction to nearest other object and shift by 1
+    result = np.zeros_like(arr)
+    for i, obj in enumerate(objects):
+        # Object center of mass
+        cr = sum(r for r, c, v in obj) / len(obj)
+        cc = sum(c for r, c, v in obj) / len(obj)
+
+        # Find nearest other object's center
+        min_dist = float('inf')
+        best_dr, best_dc = 0, 0
+        for j, other in enumerate(objects):
+            if i == j:
+                continue
+            or_ = sum(r for r, c, v in other) / len(other)
+            oc = sum(c for r, c, v in other) / len(other)
+            dist = abs(cr - or_) + abs(cc - oc)
+            if dist < min_dist:
+                min_dist = dist
+                dr = 1 if or_ > cr else (-1 if or_ < cr else 0)
+                dc = 1 if oc > cc else (-1 if oc < cc else 0)
+                best_dr, best_dc = dr, dc
+
+        # Shift object by 1 step toward nearest
+        for r, c, v in obj:
+            nr, nc = r + best_dr, c + best_dc
+            if 0 <= nr < h and 0 <= nc < w:
+                result[nr, nc] = v
+            else:
+                result[r, c] = v  # keep in place if out of bounds
+
+    return from_np(result)
+
+
+def stamp_pattern_at_markers(grid: Grid) -> Grid:
+    """Find a small pattern/template and stamp it at marker positions.
+
+    Identifies the largest connected region as the template and isolated
+    single pixels as markers. Places the template centered at each marker.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+    arr = to_np(grid)
+
+    # Find connected components
+    visited = set()
+    objects = []
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and (r, c) not in visited:
+                obj = []
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop(0)
+                    obj.append((cr, cc, int(arr[cr, cc])))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in visited and arr[nr, nc] != 0:
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                objects.append(obj)
+
+    if len(objects) < 2:
+        return grid
+
+    # Find template (largest object) and markers (single pixels)
+    objects.sort(key=len, reverse=True)
+    template = objects[0]
+    markers = [(obj[0][0], obj[0][1], obj[0][2]) for obj in objects[1:] if len(obj) == 1]
+
+    if not markers:
+        return grid
+
+    # Template relative to its center
+    tr = sum(r for r, c, v in template) / len(template)
+    tc = sum(c for r, c, v in template) / len(template)
+    rel_template = [(r - tr, c - tc, v) for r, c, v in template]
+
+    # Stamp at each marker position
+    result = arr.copy()
+    for mr, mc, mv in markers:
+        for dr, dc, v in rel_template:
+            nr, nc = int(round(mr + dr)), int(round(mc + dc))
+            if 0 <= nr < h and 0 <= nc < w:
+                result[nr, nc] = v
+
+    return from_np(result)
+
+
+def fill_between_diagonal(grid: Grid) -> Grid:
+    """Fill diagonal lines between same-colored pixels.
+
+    For each pair of same-colored pixels, if they form a diagonal
+    (same distance in row and column), fill the diagonal between them.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+
+    result = [row[:] for row in grid]
+
+    # Group non-zero pixels by color
+    by_color: dict[int, list[tuple[int, int]]] = {}
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                color = grid[r][c]
+                if color not in by_color:
+                    by_color[color] = []
+                by_color[color].append((r, c))
+
+    # For each color, connect diagonal pairs
+    for color, pixels in by_color.items():
+        for i in range(len(pixels)):
+            for j in range(i + 1, len(pixels)):
+                r1, c1 = pixels[i]
+                r2, c2 = pixels[j]
+                dr = abs(r2 - r1)
+                dc = abs(c2 - c1)
+                if dr == dc and dr > 1:
+                    # Fill diagonal
+                    sr = 1 if r2 > r1 else -1
+                    sc = 1 if c2 > c1 else -1
+                    for step in range(1, dr):
+                        nr, nc = r1 + step * sr, c1 + step * sc
+                        if result[nr][nc] == 0:
+                            result[nr][nc] = color
+
+    return result
+
+
+def complete_border_pattern(grid: Grid) -> Grid:
+    """Complete a partially filled border pattern.
+
+    If the grid has non-zero pixels on some border positions,
+    extend the pattern to fill the entire border consistently.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+
+    result = [row[:] for row in grid]
+
+    # Collect border pixels
+    border_colors = []
+    for c in range(w):
+        border_colors.append(grid[0][c])
+        border_colors.append(grid[h-1][c])
+    for r in range(1, h-1):
+        border_colors.append(grid[r][0])
+        border_colors.append(grid[r][w-1])
+
+    non_zero = [c for c in border_colors if c != 0]
+    if not non_zero:
+        return grid
+
+    # Most common border color
+    fill = Counter(non_zero).most_common(1)[0][0]
+
+    # Fill border with the dominant color where it's bg
+    for c in range(w):
+        if result[0][c] == 0:
+            result[0][c] = fill
+        if result[h-1][c] == 0:
+            result[h-1][c] = fill
+    for r in range(1, h-1):
+        if result[r][0] == 0:
+            result[r][0] = fill
+        if result[r][w-1] == 0:
+            result[r][w-1] = fill
+
+    return result
+
+
+def replicate_small_object_to_large(grid: Grid) -> Grid:
+    """Find the smallest object and tile it to fill the largest object's bbox.
+
+    Common pattern: a small 2x2 or 3x3 template is replicated to fill
+    a larger rectangular region.
+    """
+    h, w = len(grid), len(grid[0]) if grid else 0
+    if h == 0 or w == 0:
+        return grid
+    arr = to_np(grid)
+
+    # Find connected components
+    visited = set()
+    objects = []
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] != 0 and (r, c) not in visited:
+                obj = []
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop(0)
+                    obj.append((cr, cc))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in visited and arr[nr, nc] != 0:
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                objects.append(obj)
+
+    if len(objects) < 2:
+        return grid
+
+    objects.sort(key=len)
+    small = objects[0]
+    large = objects[-1]
+
+    # Extract small object as a sub-grid
+    s_min_r = min(r for r, c in small)
+    s_max_r = max(r for r, c in small)
+    s_min_c = min(c for r, c in small)
+    s_max_c = max(c for r, c in small)
+    sh = s_max_r - s_min_r + 1
+    sw = s_max_c - s_min_c + 1
+    if sh == 0 or sw == 0:
+        return grid
+
+    # Large object bbox
+    l_min_r = min(r for r, c in large)
+    l_max_r = max(r for r, c in large)
+    l_min_c = min(c for r, c in large)
+    l_max_c = max(c for r, c in large)
+
+    # Tile small into large bbox
+    result = arr.copy()
+    for r in range(l_min_r, l_max_r + 1):
+        for c in range(l_min_c, l_max_c + 1):
+            sr = s_min_r + (r - l_min_r) % sh
+            sc = s_min_c + (c - l_min_c) % sw
+            result[r, c] = arr[sr, sc]
+
+    return from_np(result)
+
+
+# =============================================================================
 # Build the ARC primitive registry
 # =============================================================================
 
@@ -5158,6 +5434,12 @@ def _build_arc_primitives() -> list[Primitive]:
         ("gravity_nearest",         gravity_to_nearest_pixel),
         ("shift_to_center",         shift_nonzero_to_gravity_center),
         ("fill_enclosed_neighbor",  fill_zero_regions_with_neighbor_color),
+        # --- Batch 6: targeted near-miss improvements ---
+        ("move_obj_together",       move_objects_toward_each_other),
+        ("stamp_pattern",           stamp_pattern_at_markers),
+        ("fill_between_diag",       fill_between_diagonal),
+        ("complete_border_pattern", complete_border_pattern),
+        ("replicate_small_obj",     replicate_small_object_to_large),
     ]
 
     for name, fn in unary_ops:
