@@ -194,14 +194,13 @@ class Learner:
         enum_candidates: list[ScoredProgram] = []
 
         # Cell-normalized compute budget (deterministic, reproducible).
-        # The eval_budget from the runner is based on DEFAULT_CELLS=800.
-        # Scale inversely with actual grid size: larger grids get fewer evals
-        # because each eval is more expensive (more cells to transform/compare).
+        # Budget is in "ops" = depth-weighted evaluations × cell factor.
+        # A depth-2 eval costs 2 ops (applies 2 primitives), depth-3 costs 3.
+        # This makes the budget a true proxy for compute, not just eval count.
         DEFAULT_CELLS = 800
         cells = self._avg_cells(task)
         if cfg.eval_budget > 0:
-            # Scale: budget * (DEFAULT / actual_cells)
-            # Large grids (>800 cells) get fewer evals; small grids get more.
+            # Scale inversely with grid size: larger grids get fewer evals.
             eval_budget = max(cfg.eval_budget * DEFAULT_CELLS // max(cells, 1), 500)
             eval_budget = min(eval_budget, cfg.eval_budget * 4)  # cap at 4x base
         else:
@@ -1244,8 +1243,9 @@ class Learner:
         This catches solutions where the first step scores low individually
         but is critical as a structural setup (e.g. crop, fill, compress).
 
-        eval_budget: max evaluations (0 = unlimited). Budget is checked
-        between depth phases and within inner loops.
+        eval_budget: max depth-weighted ops (0 = unlimited). A depth-d
+        evaluation costs d ops. Budget is checked between depth phases
+        and within inner loops.
 
         Returns (scored_programs, num_evaluations).
         """
@@ -1258,14 +1258,14 @@ class Learner:
         def _budget_ok() -> bool:
             return eval_budget <= 0 or n_evals < eval_budget
 
-        # --- Depth 1: all single primitives ---
+        # --- Depth 1: all single primitives (cost: 1 op each) ---
         unary_prims = [p for p in primitives if p.arity <= 1]
         prim_by_name: dict[str, Primitive] = {p.name: p for p in unary_prims}
         for prim in unary_prims:
             prog = Program(root=prim.name)
             sp = self._evaluate_program(prog, task)
             scored.append(sp)
-            n_evals += 1
+            n_evals += 1  # depth 1 = 1 op
             if sp.prediction_error <= solve_thresh:
                 return scored, n_evals
 
@@ -1320,7 +1320,7 @@ class Learner:
                 pair_pool.append(name)
                 seen_names.add(name)
 
-        # --- Depth 2: exhaustive K² pairs ---
+        # --- Depth 2: exhaustive K² pairs (cost: 2 ops each) ---
         for outer_name in pair_pool:
             if not _budget_ok():
                 break
@@ -1331,7 +1331,7 @@ class Learner:
                     Program(root=inner_name)])
                 sp = self._evaluate_program(prog, task)
                 scored.append(sp)
-                n_evals += 1
+                n_evals += 2  # depth 2 = 2 primitive applications
                 if sp.prediction_error <= solve_thresh:
                     return scored, n_evals
 
@@ -1377,7 +1377,7 @@ class Learner:
             if len(triple_pool) >= triple_top_k:
                 break
 
-        # --- Depth 3: exhaustive K³ triples ---
+        # --- Depth 3: exhaustive K³ triples (cost: 3 ops each) ---
         for a in triple_pool:
             if not _budget_ok():
                 break
@@ -1395,7 +1395,7 @@ class Learner:
                             Program(root=c)])])
                     sp = self._evaluate_program(prog, task)
                     scored.append(sp)
-                    n_evals += 1
+                    n_evals += 3  # depth 3 = 3 primitive applications
                     if sp.prediction_error <= solve_thresh:
                         return scored, n_evals
 

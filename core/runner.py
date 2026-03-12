@@ -52,15 +52,15 @@ PRESETS = {
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 50,
-        "compute_cap": 2_000_000,   # ~3x median ops; 2 solves lost, 17% faster
+        "compute_cap": 5_000_000,   # depth-weighted ops: d1=1, d2=2, d3=3 per eval
     },
-    # Default: full dataset. Same aggressive cap — forces primitive quality.
+    # Default: full dataset. Same cap — forces primitive quality.
     "default": {
         "rounds": 1,
         "beam_width": 1,
         "max_generations": 1,
         "max_tasks": 0,
-        "compute_cap": 2_000_000,   # ~3x median ops; 2 solves lost, 17% faster
+        "compute_cap": 5_000_000,   # depth-weighted ops: d1=1, d2=2, d3=3 per eval
     },
     # Contest: maximum effort. Keeps modest beam in case deeper search
     # helps on the hardest tasks. Still mainly exhaustive.
@@ -69,7 +69,7 @@ PRESETS = {
         "beam_width": 30,
         "max_generations": 15,
         "max_tasks": 0,
-        "compute_cap": 50_000_000,  # 50M ops — beam search safety net
+        "compute_cap": 100_000_000,  # 100M ops — beam search safety net
     },
 }
 
