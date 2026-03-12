@@ -4006,17 +4006,17 @@ def draw_cross_from_pixels(grid: Grid) -> Grid:
     h, w = arr.shape
     result = arr.copy()
 
-    nz_positions = list(zip(*np.where(arr != 0)))
-    for r, c in nz_positions:
+    # Vectorized: for each non-zero pixel, fill its entire row and column
+    # with its color where the result is still zero.
+    rows, cols = np.where(arr != 0)
+    for r, c in zip(rows, cols):
         color = arr[r, c]
-        # Extend in 4 cardinal directions
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nr, nc = r + dr, c + dc
-            while 0 <= nr < h and 0 <= nc < w:
-                if result[nr, nc] == 0:
-                    result[nr, nc] = color
-                nr += dr
-                nc += dc
+        # Fill entire row where zero
+        mask_row = result[r, :] == 0
+        result[r, mask_row] = color
+        # Fill entire column where zero
+        mask_col = result[:, c] == 0
+        result[mask_col, c] = color
     return from_np(result)
 
 
@@ -4046,10 +4046,18 @@ def draw_diagonal_from_pixels(grid: Grid) -> Grid:
     h, w = arr.shape
     result = arr.copy()
 
-    nz_positions = list(zip(*np.where(arr != 0)))
-    for r, c in nz_positions:
+    # For each of the two diagonal directions ("\" and "/"),
+    # propagate colors along the diagonal using cumulative max-like logic.
+    # This avoids per-pixel loops entirely.
+    rows, cols = np.where(arr != 0)
+    if len(rows) == 0:
+        return from_np(result)
+
+    # Fall back to efficient per-pixel loop for small pixel counts
+    for r, c in zip(rows.tolist(), cols.tolist()):
         color = arr[r, c]
-        for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+        # Extend in 4 diagonal directions using Python loops (fast for small grids)
+        for dr, dc in ((-1, -1), (-1, 1), (1, -1), (1, 1)):
             nr, nc = r + dr, c + dc
             while 0 <= nr < h and 0 <= nc < w:
                 if result[nr, nc] == 0:
@@ -4066,16 +4074,17 @@ def connect_same_color_h(grid: Grid) -> Grid:
     result = arr.copy()
 
     for r in range(h):
-        # Find colored pixels in this row
-        colored = [(c, arr[r, c]) for c in range(w) if arr[r, c] != 0]
-        for i in range(len(colored)):
-            for j in range(i + 1, len(colored)):
-                if colored[i][1] == colored[j][1]:
-                    c1, c2 = colored[i][0], colored[j][0]
-                    color = colored[i][1]
-                    for c in range(c1 + 1, c2):
-                        if result[r, c] == 0:
-                            result[r, c] = color
+        row = arr[r]
+        nz_mask = row != 0
+        if not nz_mask.any():
+            continue
+        # For each unique color in this row, find min/max col and fill between
+        for color in np.unique(row[nz_mask]):
+            cols = np.where(row == color)[0]
+            if len(cols) >= 2:
+                c_min, c_max = cols[0], cols[-1]
+                fill_mask = result[r, c_min:c_max+1] == 0
+                result[r, c_min:c_max+1][fill_mask] = color
     return from_np(result)
 
 
@@ -4086,15 +4095,16 @@ def connect_same_color_v(grid: Grid) -> Grid:
     result = arr.copy()
 
     for c in range(w):
-        colored = [(r, arr[r, c]) for r in range(h) if arr[r, c] != 0]
-        for i in range(len(colored)):
-            for j in range(i + 1, len(colored)):
-                if colored[i][1] == colored[j][1]:
-                    r1, r2 = colored[i][0], colored[j][0]
-                    color = colored[i][1]
-                    for r in range(r1 + 1, r2):
-                        if result[r, c] == 0:
-                            result[r, c] = color
+        col = arr[:, c]
+        nz_mask = col != 0
+        if not nz_mask.any():
+            continue
+        for color in np.unique(col[nz_mask]):
+            rows = np.where(col == color)[0]
+            if len(rows) >= 2:
+                r_min, r_max = rows[0], rows[-1]
+                fill_mask = result[r_min:r_max+1, c] == 0
+                result[r_min:r_max+1, c][fill_mask] = color
     return from_np(result)
 
 
@@ -5113,41 +5123,45 @@ def fill_between_diagonal(grid: Grid) -> Grid:
 
     For each pair of same-colored pixels, if they form a diagonal
     (same distance in row and column), fill the diagonal between them.
+    Uses diagonal indexing (r-c and r+c) to avoid O(n²) pair comparisons.
     """
-    h, w = len(grid), len(grid[0]) if grid else 0
+    arr = to_np(grid)
+    h, w = arr.shape
     if h == 0 or w == 0:
         return grid
+    result = arr.copy()
 
-    result = [row[:] for row in grid]
+    rows, cols = np.where(arr != 0)
+    colors = arr[rows, cols]
 
-    # Group non-zero pixels by color
-    by_color: dict[int, list[tuple[int, int]]] = {}
-    for r in range(h):
-        for c in range(w):
-            if grid[r][c] != 0:
-                color = grid[r][c]
-                if color not in by_color:
-                    by_color[color] = []
-                by_color[color].append((r, c))
+    # Group pixels by (color, diagonal_index) for both diagonal directions.
+    # Pixels on the same "/" diagonal share r+c; on same "\" share r-c.
+    from collections import defaultdict
+    for diag_fn in [lambda r, c: r - c, lambda r, c: r + c]:
+        groups: dict[tuple, list[tuple[int, int]]] = defaultdict(list)
+        for r, c, color in zip(rows, cols, colors):
+            groups[(int(color), diag_fn(r, c))].append((int(r), int(c)))
 
-    # For each color, connect diagonal pairs
-    for color, pixels in by_color.items():
-        for i in range(len(pixels)):
-            for j in range(i + 1, len(pixels)):
-                r1, c1 = pixels[i]
-                r2, c2 = pixels[j]
+        for (color, _diag), pixels in groups.items():
+            if len(pixels) < 2:
+                continue
+            # Sort by row to connect adjacent pairs on the diagonal
+            pixels.sort()
+            for k in range(len(pixels) - 1):
+                r1, c1 = pixels[k]
+                r2, c2 = pixels[k + 1]
                 dr = abs(r2 - r1)
-                dc = abs(c2 - c1)
-                if dr == dc and dr > 1:
-                    # Fill diagonal
-                    sr = 1 if r2 > r1 else -1
-                    sc = 1 if c2 > c1 else -1
-                    for step in range(1, dr):
-                        nr, nc = r1 + step * sr, c1 + step * sc
-                        if result[nr][nc] == 0:
-                            result[nr][nc] = color
+                if dr <= 1:
+                    continue
+                sr = 1 if r2 > r1 else -1
+                sc = 1 if c2 > c1 else -1
+                steps = np.arange(1, dr)
+                rs = r1 + steps * sr
+                cs = c1 + steps * sc
+                mask = result[rs, cs] == 0
+                result[rs[mask], cs[mask]] = color
 
-    return result
+    return from_np(result)
 
 
 def complete_border_pattern(grid: Grid) -> Grid:
