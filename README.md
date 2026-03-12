@@ -175,7 +175,7 @@ Times measured on M1 Max with 8 workers. Scale inversely with worker count and C
 | `default` | **~108/400 (~27%)** | **~35/400 (~9%)** | **~11 min** |
 | `contest` | higher | TBD | ~3-4 hr |
 
-**330 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
+**342 primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
 
@@ -275,7 +275,7 @@ agi-core/
 │   └── phase1_arc.py        # ARC curriculum training (dataset loading + ARC wiring)
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
-│   ├── arc/                 # ARC-AGI grid transformations (330 primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (342 primitives)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv

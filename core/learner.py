@@ -207,9 +207,19 @@ class Learner:
         else:
             eval_budget = 0  # unlimited
 
+        # Wall-time cap per task: 60 seconds for quick mode, 120 for default,
+        # 300 for contest. Prevents single tasks from dominating run time.
+        wall_time_cap = {
+            30: 60, 80: 120, 250: 300  # beam_width -> seconds
+        }.get(cfg.beam_width, 120)
+
         def _budget_ok() -> bool:
-            """Check whether we've exceeded the per-task eval budget."""
-            return eval_budget <= 0 or n_evals < eval_budget
+            """Check whether we've exceeded the per-task eval or time budget."""
+            if eval_budget > 0 and n_evals >= eval_budget:
+                return False
+            if time.time() - t0 > wall_time_cap:
+                return False
+            return True
 
         def _record_solve():
             """Record solution in memory if record=True."""
@@ -225,7 +235,8 @@ class Learner:
         if cfg.exhaustive_depth >= 1:
             enum_candidates, n_enum_evals = self._exhaustive_enumerate(
                 all_prims, task, cfg.exhaustive_depth,
-                eval_budget=eval_budget)
+                eval_budget=eval_budget,
+                wall_time_cap=wall_time_cap, t_start=t0)
             n_evals += n_enum_evals
             for sp in enum_candidates:
                 self._update_pareto_front(pareto, sp)
@@ -1228,6 +1239,8 @@ class Learner:
         max_depth: int = 2,
         top_k: int = 15,
         eval_budget: int = 0,
+        wall_time_cap: float = 0,
+        t_start: float = 0,
     ) -> tuple[list[ScoredProgram], int]:
         """
         Enumerate ALL programs up to max_depth and evaluate them.
@@ -1244,6 +1257,8 @@ class Learner:
 
         eval_budget: max evaluations (0 = unlimited). Budget is checked
         between depth phases and within inner loops.
+        wall_time_cap: max wall time in seconds (0 = unlimited).
+        t_start: start time for wall time cap.
 
         Returns (scored_programs, num_evaluations).
         """
@@ -1254,7 +1269,11 @@ class Learner:
         triple_top_k = self.search_cfg.exhaustive_triple_top_k
 
         def _budget_ok() -> bool:
-            return eval_budget <= 0 or n_evals < eval_budget
+            if eval_budget > 0 and n_evals >= eval_budget:
+                return False
+            if wall_time_cap > 0 and t_start > 0 and time.time() - t_start > wall_time_cap:
+                return False
+            return True
 
         # --- Depth 1: all single primitives ---
         unary_prims = [p for p in primitives if p.arity <= 1]

@@ -192,4 +192,14 @@
 
 ---
 
+## Session 6 — Claude Code Web (March 12, 2026)
+
+### Prompt 30: Continue
+
+> continue
+
+[User asked to continue improving the system. Claude analyzed near-miss and overfit tasks, added 12 new primitives (Batches 6-7), fixed 3 overfit tasks, and improved training solve rate from 26% to 32% on 50-task quick mode.]
+
+---
+
 *This document will be updated with each new session.*
