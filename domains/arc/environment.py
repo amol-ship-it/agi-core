@@ -59,6 +59,8 @@ class ARCEnv(Environment):
         self,
         program_outputs: list[Any],
         expected_outputs: list[Any],
+        max_rules: int = 50,
+        try_5x5: bool = False,
     ) -> Optional[Program]:
         """Infer a correction that fixes mismatches between program outputs
         and expected outputs.
@@ -67,6 +69,7 @@ class ARCEnv(Environment):
         1. Color remapping: consistent color→color substitutions
         2. Adjacency-based correction: pixel changes conditioned on neighbors
         3. Neighborhood patch: full 3x3 context-based pixel correction
+        4. (optional) 5x5 neighborhood patch for longer-range dependencies
 
         Returns a single best correction, or None. The caller (_try_color_fix)
         evaluates whether the correction actually improves accuracy.
@@ -82,9 +85,22 @@ class ARCEnv(Environment):
             return adj_fix
 
         # Strategy 3: Neighborhood patch (3x3 context)
-        nbr_fix = self._infer_neighborhood_correction(program_outputs, expected_outputs)
+        nbr_fix = self._infer_neighborhood_correction(
+            program_outputs, expected_outputs, max_rules=max_rules)
         if nbr_fix is not None:
             return nbr_fix
+
+        # Strategy 4: 5x5 neighborhood patch (longer-range dependencies)
+        if try_5x5:
+            nbr5_fix = self._infer_neighborhood_correction_5x5(
+                program_outputs, expected_outputs, max_rules=min(max_rules, 30))
+            if nbr5_fix is not None:
+                return nbr5_fix
+
+        # Strategy 5: Row/column-level corrections (spatial rearrangement)
+        rc_fix = self._infer_row_col_correction(program_outputs, expected_outputs)
+        if rc_fix is not None:
+            return rc_fix
 
         return None
 
@@ -249,13 +265,14 @@ class ARCEnv(Environment):
         self,
         program_outputs: list[Any],
         expected_outputs: list[Any],
+        max_rules: int = 50,
     ) -> Optional[Program]:
         """Infer 3x3 neighborhood-based pixel correction.
 
         For each mismatched pixel, encodes the full 3x3 neighborhood as
         a feature and learns a mapping to the correct output color.
         More specific than adjacency rules but catches more patterns.
-        Bounded to <=50 rules to avoid overfitting.
+        Bounded to <=max_rules rules to avoid overfitting.
         """
         rules: dict[tuple, int] = {}
 
@@ -288,7 +305,7 @@ class ARCEnv(Environment):
                         return None  # inconsistent
                     rules[key] = out_color
 
-        if not rules or len(rules) > 50:
+        if not rules or len(rules) > max_rules:
             return None  # too many rules → likely overfitting
 
         # Verify on all training examples
@@ -340,6 +357,172 @@ class ARCEnv(Environment):
         prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
         _PRIM_MAP[name] = prim
         return Program(root=name)
+
+    def _infer_neighborhood_correction_5x5(
+        self,
+        program_outputs: list[Any],
+        expected_outputs: list[Any],
+        max_rules: int = 30,
+    ) -> Optional[Program]:
+        """Infer 5x5 neighborhood-based pixel correction.
+
+        Like 3x3 but uses a larger 5x5 patch to capture longer-range
+        dependencies (e.g., color depends on pixel 2 cells away).
+        Stricter default rule cap (30) since 5x5 has higher overfitting risk.
+        """
+        rules: dict[tuple, int] = {}
+
+        for got, expected in zip(program_outputs, expected_outputs):
+            got_arr = np.array(got, dtype=np.int32)
+            exp_arr = np.array(expected, dtype=np.int32)
+            if got_arr.shape != exp_arr.shape:
+                return None
+            h, w = got_arr.shape
+            diff = got_arr != exp_arr
+            if not diff.any():
+                continue
+
+            for r in range(h):
+                for c in range(w):
+                    if not diff[r, c]:
+                        continue
+                    # 5x5 neighborhood (use -1 for out-of-bounds)
+                    patch = []
+                    for dr in (-2, -1, 0, 1, 2):
+                        for dc in (-2, -1, 0, 1, 2):
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < h and 0 <= nc < w:
+                                patch.append(int(got_arr[nr, nc]))
+                            else:
+                                patch.append(-1)
+                    key = tuple(patch)
+                    out_color = int(exp_arr[r, c])
+                    if key in rules and rules[key] != out_color:
+                        return None  # inconsistent
+                    rules[key] = out_color
+
+        if not rules or len(rules) > max_rules:
+            return None
+
+        # Verify on all training examples
+        for got, expected in zip(program_outputs, expected_outputs):
+            got_arr = np.array(got, dtype=np.int32)
+            exp_arr = np.array(expected, dtype=np.int32)
+            h, w = got_arr.shape
+            result = got_arr.copy()
+            for r in range(h):
+                for c in range(w):
+                    patch = []
+                    for dr in (-2, -1, 0, 1, 2):
+                        for dc in (-2, -1, 0, 1, 2):
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < h and 0 <= nc < w:
+                                patch.append(int(got_arr[nr, nc]))
+                            else:
+                                patch.append(-1)
+                    key = tuple(patch)
+                    if key in rules:
+                        result[r, c] = rules[key]
+            if not np.array_equal(result, exp_arr):
+                return None
+
+        # Build correction primitive
+        def _make_nbr5_fix(nbr_rules):
+            def neighborhood_5x5_fix(grid: Grid) -> Grid:
+                arr = np.array(grid, dtype=np.int32)
+                result = arr.copy()
+                h, w = arr.shape
+                for r in range(h):
+                    for c in range(w):
+                        patch = []
+                        for dr in (-2, -1, 0, 1, 2):
+                            for dc in (-2, -1, 0, 1, 2):
+                                nr, nc = r + dr, c + dc
+                                if 0 <= nr < h and 0 <= nc < w:
+                                    patch.append(int(arr[nr, nc]))
+                                else:
+                                    patch.append(-1)
+                        key = tuple(patch)
+                        if key in nbr_rules:
+                            result[r, c] = nbr_rules[key]
+                return result.tolist()
+            return neighborhood_5x5_fix
+
+        name = f"nbr5_fix_{len(rules)}r"
+        fn = _make_nbr5_fix(dict(rules))
+        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+        _PRIM_MAP[name] = prim
+        return Program(root=name)
+
+    def _infer_row_col_correction(
+        self,
+        program_outputs: list[Any],
+        expected_outputs: list[Any],
+    ) -> Optional[Program]:
+        """Infer row/column-level corrections.
+
+        Detects systematic row/column transforms in the diff pattern:
+        - Row reversal, column reversal
+        - Row/column shifting (cyclic rotation)
+        - Row/column swaps
+
+        These catch near-misses where the content is right but the
+        spatial arrangement is wrong.
+        """
+        # Only works on same-shape grids, and there must be actual diffs
+        has_diff = False
+        for got, expected in zip(program_outputs, expected_outputs):
+            got_arr = np.array(got, dtype=np.int32)
+            exp_arr = np.array(expected, dtype=np.int32)
+            if got_arr.shape != exp_arr.shape:
+                return None
+            if not np.array_equal(got_arr, exp_arr):
+                has_diff = True
+
+        if not has_diff:
+            return None
+
+        # Try each row/column transform and check if it fixes ALL examples
+        transforms = [
+            ("row_reverse", lambda arr: arr[::-1].copy()),
+            ("col_reverse", lambda arr: arr[:, ::-1].copy()),
+            ("transpose", lambda arr: arr.T.copy() if arr.shape[0] == arr.shape[1] else None),
+        ]
+
+        # Add cyclic row/column shifts
+        for shift in range(1, 5):
+            s = shift  # capture
+            transforms.append(
+                (f"row_shift_{s}", lambda arr, s=s: np.roll(arr, s, axis=0)))
+            transforms.append(
+                (f"col_shift_{s}", lambda arr, s=s: np.roll(arr, s, axis=1)))
+
+        for name, transform_fn in transforms:
+            all_match = True
+            for got, expected in zip(program_outputs, expected_outputs):
+                got_arr = np.array(got, dtype=np.int32)
+                exp_arr = np.array(expected, dtype=np.int32)
+                result = transform_fn(got_arr)
+                if result is None or not np.array_equal(result, exp_arr):
+                    all_match = False
+                    break
+            if all_match:
+                def _make_rc_fix(tfn):
+                    def rc_fix(grid: Grid) -> Grid:
+                        arr = np.array(grid, dtype=np.int32)
+                        result = tfn(arr)
+                        if result is None:
+                            return grid
+                        return result.tolist()
+                    return rc_fix
+
+                prim_name = f"rc_fix_{name}"
+                fn = _make_rc_fix(transform_fn)
+                prim = Primitive(name=prim_name, arity=1, fn=fn, domain="arc")
+                _PRIM_MAP[prim_name] = prim
+                return Program(root=prim_name)
+
+        return None
 
     # Maximum intermediate grid size (pixels). Grid-expanding primitives
     # (tile_3x3=9x, scale_5x=25x) composed at depth 2-3 can create grids

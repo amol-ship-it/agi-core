@@ -268,6 +268,18 @@
 
 **Results:** +100 total solves (120→220 in contest mode). Phase B (diff-and-patch) drove 89% of gains — `nbr_fix` alone added 84 new solves with 91% generalization rate. Train-eval gap narrowed from 3.8x to 2.0x. See Decisions 82-83 for full attribution.]
 
+### Prompt 42: Cross-Domain Validation + Path to 320/800
+
+> Implement the strategic plan: (1) Cross-domain validation runs for ARC-AGI-2, Zork, ARC-AGI-1, (2) Document results, (3) Generalization gap analysis (nbr_fix cap tuning, complexity penalty, ensemble agreement), (4) Near-miss goldmine mining (identity-seeded correction, 5x5 neighborhoods, row/column corrections), (5) ARC compounding re-test, (6) Jericho assessment (deferred).
+
+[Implemented 4 new correction strategies: (a) 5x5 neighborhood patches for longer-range dependencies, (b) identity-seeded correction for same-shape tasks, (c) row/column-level corrections, (d) ensemble agreement for test prediction. Fixed CurriculumConfig bug that dropped sequential_compounding/adaptive_realloc when resolving workers=0.
+
+**Cross-domain validation:** ARC-AGI-2 train improved from 14% to 21.7% without AGI-2-specific work. Zork stable at 10/20.
+
+**Results:** ARC-AGI-1 default mode improved from 207/800 to **273/800 (+66 solves)**. Train: 173/400 (43.2%), Eval: 100/400 (25.0%). Train/eval ratio narrowed from 2.0x to 1.7x. Cap tuning validated 50 as optimal default.
+
+547 tests pass (14 new). See Decision 84 for full details.]
+
 ---
 
 *This document will be updated with each new session.*

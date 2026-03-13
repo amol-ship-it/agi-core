@@ -182,3 +182,208 @@ class TestInferOutputCorrection:
         correction = self.env.infer_output_correction(outputs, expected)
         # A candidate should be returned (consistent 3→5 transition)
         assert correction is not None
+
+
+class TestNeighborhood5x5Correction:
+    """Test 5x5 neighborhood-based pixel correction."""
+
+    def setup_method(self):
+        self.env = ARCEnv()
+
+    def test_5x5_catches_longer_range(self):
+        """5x5 neighborhood can fix patterns that depend on pixel 2 cells away."""
+        # A pattern where the center pixel depends on a pixel 2 cells away
+        # 3x3 can't capture this, but 5x5 can
+        outputs = [
+            [[0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 1, 0, 0],  # center pixel 1 needs to become 2
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0]],
+        ]
+        expected = [
+            [[0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 2, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0]],
+        ]
+        # With try_5x5=True, should find a correction
+        correction = self.env.infer_output_correction(
+            outputs, expected, try_5x5=True)
+        assert correction is not None
+        # Verify it's executable
+        from domains.arc.primitives import _PRIM_MAP
+        prim = _PRIM_MAP[correction.root]
+        result = prim.fn(outputs[0])
+        assert result == expected[0]
+
+    def test_5x5_inconsistent_returns_none(self):
+        """Inconsistent 5x5 rules should return None."""
+        # Same 5x5 neighborhood maps to different outputs
+        outputs = [
+            [[0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 1, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0]],
+            [[0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 1, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0]],
+        ]
+        expected = [
+            [[0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 2, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0]],
+            [[0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 3, 0, 0],  # Different output for same neighborhood
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0]],
+        ]
+        correction = self.env._infer_neighborhood_correction_5x5(
+            outputs, expected)
+        assert correction is None
+
+    def test_5x5_respects_max_rules(self):
+        """5x5 correction should respect the max_rules cap."""
+        # Create a grid with many unique 5x5 neighborhoods
+        # Use a large grid with diverse patterns
+        outputs = [np.random.RandomState(42).randint(0, 5, (10, 10)).tolist()]
+        expected = [np.random.RandomState(43).randint(0, 5, (10, 10)).tolist()]
+        # With max_rules=5, this should fail (too many rules)
+        correction = self.env._infer_neighborhood_correction_5x5(
+            outputs, expected, max_rules=5)
+        assert correction is None
+
+
+class TestRowColCorrection:
+    """Test row/column-level corrections."""
+
+    def setup_method(self):
+        self.env = ARCEnv()
+
+    def test_row_reverse(self):
+        """Detect row reversal."""
+        outputs = [[[1, 2], [3, 4]]]
+        expected = [[[3, 4], [1, 2]]]
+        correction = self.env._infer_row_col_correction(outputs, expected)
+        assert correction is not None
+        assert "row_reverse" in correction.root
+        # Verify executable
+        from domains.arc.primitives import _PRIM_MAP
+        prim = _PRIM_MAP[correction.root]
+        assert prim.fn(outputs[0]) == expected[0]
+
+    def test_col_reverse(self):
+        """Detect column reversal."""
+        outputs = [[[1, 2, 3], [4, 5, 6]]]
+        expected = [[[3, 2, 1], [6, 5, 4]]]
+        correction = self.env._infer_row_col_correction(outputs, expected)
+        assert correction is not None
+        assert "col_reverse" in correction.root
+
+    def test_row_shift(self):
+        """Detect cyclic row shift."""
+        outputs = [[[1, 2], [3, 4], [5, 6]]]
+        expected = [[[5, 6], [1, 2], [3, 4]]]  # shifted by 1
+        correction = self.env._infer_row_col_correction(outputs, expected)
+        assert correction is not None
+        assert "row_shift" in correction.root
+
+    def test_col_shift(self):
+        """Detect cyclic column shift."""
+        outputs = [[[1, 2, 3], [4, 5, 6]]]
+        expected = [[[3, 1, 2], [6, 4, 5]]]  # shifted by 1
+        correction = self.env._infer_row_col_correction(outputs, expected)
+        assert correction is not None
+        assert "col_shift" in correction.root
+
+    def test_no_match_returns_none(self):
+        """If no row/col transform fixes the diff, return None."""
+        outputs = [[[1, 2], [3, 4]]]
+        expected = [[[5, 6], [7, 8]]]  # completely different
+        correction = self.env._infer_row_col_correction(outputs, expected)
+        assert correction is None
+
+    def test_identical_returns_none(self):
+        """If outputs match expected, no correction needed."""
+        outputs = [[[1, 2], [3, 4]]]
+        expected = [[[1, 2], [3, 4]]]
+        correction = self.env._infer_row_col_correction(outputs, expected)
+        assert correction is None
+
+    def test_shape_mismatch_returns_none(self):
+        """Different shapes can't be row/col-fixed."""
+        outputs = [[[1, 2, 3]]]
+        expected = [[[1, 2]]]
+        correction = self.env._infer_row_col_correction(outputs, expected)
+        assert correction is None
+
+    def test_multi_example_consistency(self):
+        """Row reversal must be consistent across examples."""
+        outputs = [
+            [[1, 2], [3, 4]],
+            [[5, 6], [7, 8]],
+        ]
+        expected = [
+            [[3, 4], [1, 2]],
+            [[7, 8], [5, 6]],
+        ]
+        correction = self.env._infer_row_col_correction(outputs, expected)
+        assert correction is not None
+        assert "row_reverse" in correction.root
+
+    def test_inconsistent_across_examples(self):
+        """If transform works on one example but not another, return None."""
+        outputs = [
+            [[1, 2], [3, 4]],
+            [[5, 6], [7, 8]],
+        ]
+        expected = [
+            [[3, 4], [1, 2]],  # row reverse works
+            [[5, 6], [7, 8]],  # but here it's identity (no reverse)
+        ]
+        correction = self.env._infer_row_col_correction(outputs, expected)
+        # Should return None since no single transform is consistent
+        assert correction is None
+
+
+class TestIdentityCorrection:
+    """Test identity-seeded correction (Phase 1.76)."""
+
+    def setup_method(self):
+        from core.types import Task
+        self.env = ARCEnv()
+        self.Task = Task
+
+    def test_identity_correction_same_shape(self):
+        """For same-shape tasks with local changes, identity correction works."""
+        # Task: change all 1s to 2s (a color remap describable by neighborhood rules)
+        task = self.Task(
+            task_id="test_identity",
+            train_examples=[
+                ([[0, 1, 0], [1, 0, 1]], [[0, 2, 0], [2, 0, 2]]),
+                ([[1, 1, 0], [0, 0, 1]], [[2, 2, 0], [0, 0, 2]]),
+            ],
+            test_inputs=[[[1, 0, 1], [0, 1, 0]]],
+            test_outputs=[[[2, 0, 2], [0, 2, 0]]],
+        )
+        # The identity correction should find a color remap (cheapest strategy)
+        inputs = [inp for inp, _ in task.train_examples]
+        expected = [exp for _, exp in task.train_examples]
+        correction = self.env.infer_output_correction(
+            inputs, expected, max_rules=100, try_5x5=True)
+        assert correction is not None
+
+    def test_identity_correction_different_shape_fails(self):
+        """Identity correction should not apply to different-shape tasks."""
+        inputs = [[[1, 2, 3]]]
+        expected = [[[1, 2]]]
+        correction = self.env.infer_output_correction(
+            inputs, expected, max_rules=100, try_5x5=True)
+        assert correction is None

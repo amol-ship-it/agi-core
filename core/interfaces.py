@@ -89,12 +89,15 @@ class Environment(ABC):
         self,
         program_outputs: list[Any],
         expected_outputs: list[Any],
+        **kwargs,
     ) -> Optional[Program]:
         """Given a program's outputs and expected outputs, try to infer a
         simple correction transform (e.g., color remapping for ARC grids).
 
         Returns a Program node that should be composed on top of the original
         program, or None if no consistent correction is found.
+
+        Keyword args are domain-specific (e.g., max_rules, try_5x5 for ARC).
 
         Default: no correction (returns None).
         """

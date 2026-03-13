@@ -393,6 +393,25 @@ class Learner:
 
         logger.debug(f"  [wake] Phase 1.75 color fix: {time.time()-t_phase:.2f}s")
 
+        # --- Phase 1.76: Identity-seeded correction ---
+        # For same-shape tasks, try learning the ENTIRE transformation as
+        # neighborhood rules from input→output directly (identity base).
+        # This catches tasks where no enumerated program is close but the
+        # transformation is describable as local cellular automaton rules.
+        t_phase = time.time()
+        identity_result = self._try_identity_correction(task)
+        if identity_result is not None:
+            n_evals += 1
+            enum_candidates.append(identity_result)
+            self._update_pareto_front(pareto, identity_result)
+            if best_so_far is None or identity_result.energy < best_so_far.energy:
+                best_so_far = identity_result
+
+            if best_so_far.prediction_error <= cfg.solve_threshold:
+                return _make_solved_result("identity correction")
+
+        logger.debug(f"  [wake] Phase 1.76 identity correction: {time.time()-t_phase:.2f}s")
+
         # --- Phase 2: Beam search (seeded with top enumeration results) ---
         # Adaptive: reduce beam effort when enumeration found nothing promising.
         # If best error > 0.3, beam search rarely recovers — cap at 25% gens.
@@ -651,10 +670,35 @@ class Learner:
                 key = repr(sp.program)
                 loocv_scores[key] = self._loocv_score(sp, task)
 
-        # Sort by: LOOCV score (desc), program size (asc), energy (asc)
+        # Ensemble agreement: when multiple training-perfect candidates exist,
+        # compute test outputs for all and prefer candidates whose output
+        # matches the consensus (majority vote). Zero additional search cost.
+        agreement_scores: dict[str, int] = {}
+        if n_train_perfect > 2 and task.test_inputs:
+            test_output_strs: dict[str, str] = {}
+            for sp in perfect[:min(len(perfect), top_k * 3)]:
+                key = repr(sp.program)
+                try:
+                    outputs = []
+                    for inp in task.test_inputs:
+                        out = self.env.execute(sp.program, inp)
+                        outputs.append(str(out))
+                    test_output_strs[key] = "|".join(outputs)
+                except Exception:
+                    pass
+
+            # Count how many candidates produce each output
+            from collections import Counter
+            output_counts = Counter(test_output_strs.values())
+            for key, out_str in test_output_strs.items():
+                agreement_scores[key] = output_counts[out_str]
+
+        # Sort by: agreement (desc), LOOCV score (desc), program size (asc), energy (asc)
+        # Ensemble agreement breaks ties: prefer the candidate most others agree with.
         # LOOCV-passing candidates are tried first; failures are demoted
         # but not eliminated (they still get a chance on test)
         perfect.sort(key=lambda sp: (
+            -agreement_scores.get(repr(sp.program), 0),
             -loocv_scores.get(repr(sp.program), 1.0),
             sp.program.size,
             sp.energy,
@@ -844,11 +888,7 @@ class Learner:
 
         # Resolve worker count: 0 = performance cores (not all cores)
         if cfg.workers <= 0:
-            cfg = CurriculumConfig(
-                sort_by_difficulty=cfg.sort_by_difficulty,
-                wake_sleep_rounds=cfg.wake_sleep_rounds,
-                workers=self.performance_core_count(),
-            )
+            cfg.workers = self.performance_core_count()
 
         results = []
         for round_num in range(cfg.wake_sleep_rounds):
@@ -1505,8 +1545,9 @@ class Learner:
             if not ok:
                 continue
 
-            # Ask environment for a correction
-            correction = self.env.infer_output_correction(outputs, expected)
+            # Ask environment for a correction (with 5x5 fallback)
+            correction = self.env.infer_output_correction(
+                outputs, expected, try_5x5=True)
             if correction is None:
                 continue
 
@@ -1528,6 +1569,56 @@ class Learner:
                 best_fix = sp
 
         return best_fix
+
+    def _try_identity_correction(
+        self,
+        task: Task,
+    ) -> Optional[ScoredProgram]:
+        """Try learning the entire transformation as neighborhood correction
+        on the identity function (input → output directly).
+
+        For same-shape tasks, if the transformation can be described as local
+        cellular automaton rules (3x3 or 5x5 neighborhoods), we don't need
+        a base program at all — the correction IS the solution.
+
+        Uses a higher rule cap (100) since identity-seeded corrections need
+        to capture the full transformation, not just residual errors.
+        Also tries 5x5 neighborhoods for longer-range dependencies.
+        """
+        # Check if all training examples are same-shape
+        for inp, exp in task.train_examples:
+            try:
+                inp_arr = self._to_array(inp)
+                exp_arr = self._to_array(exp)
+                if inp_arr.shape != exp_arr.shape:
+                    return None
+            except (ValueError, TypeError):
+                return None
+
+        # Use inputs directly as "program outputs" (identity function)
+        inputs = [inp for inp, _ in task.train_examples]
+        expected = [exp for _, exp in task.train_examples]
+
+        # Try correction with higher rule cap and 5x5 fallback
+        correction = self.env.infer_output_correction(
+            inputs, expected, max_rules=100, try_5x5=True)
+        if correction is None:
+            return None
+
+        # The correction IS the full program (no base program needed)
+        sp = self._evaluate_program(correction, task)
+
+        # Only accept if it actually solves
+        if sp.prediction_error <= self.search_cfg.solve_threshold:
+            return sp
+
+        return None
+
+    @staticmethod
+    def _to_array(grid):
+        """Convert a grid to a numpy array for shape comparison."""
+        import numpy as np
+        return np.array(grid, dtype=np.int32)
 
     def _try_fixed_point(
         self,
