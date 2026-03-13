@@ -97,7 +97,7 @@ class Environment(ABC):
         Returns a Program node that should be composed on top of the original
         program, or None if no consistent correction is found.
 
-        Keyword args are domain-specific (e.g., max_rules, try_5x5 for ARC).
+        Keyword args are domain-specific (e.g., max_rules for ARC).
 
         Default: no correction (returns None).
         """

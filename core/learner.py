@@ -399,25 +399,6 @@ class Learner:
 
         logger.debug(f"  [wake] Phase 1.75 color fix: {time.time()-t_phase:.2f}s")
 
-        # --- Phase 1.76: Identity-seeded correction ---
-        # For same-shape tasks, try learning the ENTIRE transformation as
-        # neighborhood rules from input→output directly (identity base).
-        # This catches tasks where no enumerated program is close but the
-        # transformation is describable as local cellular automaton rules.
-        t_phase = time.time()
-        identity_result = self._try_identity_correction(task)
-        if identity_result is not None:
-            n_evals += 1
-            enum_candidates.append(identity_result)
-            self._update_pareto_front(pareto, identity_result)
-            if best_so_far is None or identity_result.energy < best_so_far.energy:
-                best_so_far = identity_result
-
-            if best_so_far.prediction_error <= cfg.solve_threshold:
-                return _make_solved_result("identity correction")
-
-        logger.debug(f"  [wake] Phase 1.76 identity correction: {time.time()-t_phase:.2f}s")
-
         # --- Phase 2: Beam search (seeded with top enumeration results) ---
         # Adaptive: reduce beam effort when enumeration found nothing promising.
         # If best error > 0.3, beam search rarely recovers — cap at 25% gens.
@@ -1582,9 +1563,9 @@ class Learner:
             if not ok:
                 continue
 
-            # Ask environment for a correction (with 5x5 fallback)
+            # Ask environment for a correction
             correction = self.env.infer_output_correction(
-                outputs, expected, try_5x5=True)
+                outputs, expected)
             if correction is None:
                 continue
 
@@ -1611,82 +1592,6 @@ class Learner:
                 best_fix = sp
 
         return best_fix
-
-    def _try_identity_correction(
-        self,
-        task: Task,
-    ) -> Optional[ScoredProgram]:
-        """Try learning the entire transformation as neighborhood correction
-        on the identity function (input → output directly).
-
-        For same-shape tasks, if the transformation can be described as local
-        cellular automaton rules (3x3 or 5x5 neighborhoods), we don't need
-        a base program at all — the correction IS the solution.
-
-        Uses a higher rule cap (100) since identity-seeded corrections need
-        to capture the full transformation, not just residual errors.
-        Also tries 5x5+ neighborhoods for longer-range dependencies.
-
-        LOOCV: When there are 3+ training examples, holds out each example
-        and verifies the correction learned from the others still works.
-        This prevents accepting corrections that memorize training patterns
-        (e.g., large neighborhood patches) without generalizing.
-        """
-        # Check if all training examples are same-shape
-        for inp, exp in task.train_examples:
-            try:
-                inp_arr = self._to_array(inp)
-                exp_arr = self._to_array(exp)
-                if inp_arr.shape != exp_arr.shape:
-                    return None
-            except (ValueError, TypeError):
-                return None
-
-        # Use inputs directly as "program outputs" (identity function)
-        inputs = [inp for inp, _ in task.train_examples]
-        expected = [exp for _, exp in task.train_examples]
-
-        # Try correction with higher rule cap and 5x5+ fallback
-        correction = self.env.infer_output_correction(
-            inputs, expected, max_rules=100, try_5x5=True)
-        if correction is None:
-            return None
-
-        # The correction IS the full program (no base program needed)
-        sp = self._evaluate_program(correction, task)
-
-        # Only accept if it actually solves on training
-        if sp.prediction_error > self.search_cfg.solve_threshold:
-            return None
-
-        # LOOCV: hold out each training example and verify generalization.
-        # Skip if only 2 examples (too few for meaningful holdout).
-        if len(task.train_examples) >= 3:
-            for i in range(len(task.train_examples)):
-                loo_inputs = inputs[:i] + inputs[i+1:]
-                loo_expected = expected[:i] + expected[i+1:]
-
-                loo_correction = self.env.infer_output_correction(
-                    loo_inputs, loo_expected, max_rules=100, try_5x5=True)
-                if loo_correction is None:
-                    return None
-
-                # Test on held-out example
-                try:
-                    pred = self.env.execute(loo_correction, inputs[i])
-                    err = self.drive.prediction_error(pred, expected[i])
-                    if err > self.search_cfg.solve_threshold:
-                        return None  # correction doesn't generalize
-                except Exception:
-                    return None
-
-        return sp
-
-    @staticmethod
-    def _to_array(grid):
-        """Convert a grid to a numpy array for shape comparison."""
-        import numpy as np
-        return np.array(grid, dtype=np.int32)
 
     def _try_fixed_point(
         self,

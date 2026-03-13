@@ -184,83 +184,6 @@ class TestInferOutputCorrection:
         assert correction is not None
 
 
-class TestNeighborhood5x5Correction:
-    """Test 5x5 neighborhood-based pixel correction."""
-
-    def setup_method(self):
-        self.env = ARCEnv()
-
-    def test_5x5_catches_longer_range(self):
-        """5x5 neighborhood can fix patterns that depend on pixel 2 cells away."""
-        # A pattern where the center pixel depends on a pixel 2 cells away
-        # 3x3 can't capture this, but 5x5 can
-        outputs = [
-            [[0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 1, 0, 0],  # center pixel 1 needs to become 2
-             [0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0]],
-        ]
-        expected = [
-            [[0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 2, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0]],
-        ]
-        # With try_5x5=True, should find a correction
-        correction = self.env.infer_output_correction(
-            outputs, expected, try_5x5=True)
-        assert correction is not None
-        # Verify it's executable
-        from domains.arc.primitives import _PRIM_MAP
-        prim = _PRIM_MAP[correction.root]
-        result = prim.fn(outputs[0])
-        assert result == expected[0]
-
-    def test_5x5_inconsistent_returns_none(self):
-        """Inconsistent 5x5 rules should return None."""
-        # Same 5x5 neighborhood maps to different outputs
-        outputs = [
-            [[0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 1, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0]],
-            [[0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 1, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0]],
-        ]
-        expected = [
-            [[0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 2, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0]],
-            [[0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0],
-             [0, 0, 3, 0, 0],  # Different output for same neighborhood
-             [0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0]],
-        ]
-        correction = self.env._infer_neighborhood_correction_5x5(
-            outputs, expected)
-        assert correction is None
-
-    def test_5x5_respects_max_rules(self):
-        """5x5 correction should respect the max_rules cap."""
-        # Create a grid with many unique 5x5 neighborhoods
-        # Use a large grid with diverse patterns
-        outputs = [np.random.RandomState(42).randint(0, 5, (10, 10)).tolist()]
-        expected = [np.random.RandomState(43).randint(0, 5, (10, 10)).tolist()]
-        # With max_rules=5, this should fail (too many rules)
-        correction = self.env._infer_neighborhood_correction_5x5(
-            outputs, expected, max_rules=5)
-        assert correction is None
-
-
 class TestRowColCorrection:
     """Test row/column-level corrections."""
 
@@ -353,44 +276,8 @@ class TestRowColCorrection:
         assert correction is None
 
 
-class TestIdentityCorrection:
-    """Test identity-seeded correction (Phase 1.76)."""
-
-    def setup_method(self):
-        from core.types import Task
-        self.env = ARCEnv()
-        self.Task = Task
-
-    def test_identity_correction_same_shape(self):
-        """For same-shape tasks with local changes, identity correction works."""
-        # Task: change all 1s to 2s (a color remap describable by neighborhood rules)
-        task = self.Task(
-            task_id="test_identity",
-            train_examples=[
-                ([[0, 1, 0], [1, 0, 1]], [[0, 2, 0], [2, 0, 2]]),
-                ([[1, 1, 0], [0, 0, 1]], [[2, 2, 0], [0, 0, 2]]),
-            ],
-            test_inputs=[[[1, 0, 1], [0, 1, 0]]],
-            test_outputs=[[[2, 0, 2], [0, 2, 0]]],
-        )
-        # The identity correction should find a color remap (cheapest strategy)
-        inputs = [inp for inp, _ in task.train_examples]
-        expected = [exp for _, exp in task.train_examples]
-        correction = self.env.infer_output_correction(
-            inputs, expected, max_rules=100, try_5x5=True)
-        assert correction is not None
-
-    def test_identity_correction_different_shape_fails(self):
-        """Identity correction should not apply to different-shape tasks."""
-        inputs = [[[1, 2, 3]]]
-        expected = [[[1, 2]]]
-        correction = self.env.infer_output_correction(
-            inputs, expected, max_rules=100, try_5x5=True)
-        assert correction is None
-
-
-class TestCorrectionChaining:
-    """Test multi-step correction chaining (Step 1)."""
+class TestCorrectionSimplified:
+    """Test that correction is single-step and uses no 5x5+ neighborhoods."""
 
     def setup_method(self):
         self.env = ARCEnv()
@@ -402,47 +289,24 @@ class TestCorrectionChaining:
         correction = self.env.infer_output_correction(outputs, expected)
         assert correction is not None
         assert "3to5" in correction.root
-
-    def test_chained_correction_color_then_neighborhood(self):
-        """Two-step correction: color remap then neighborhood fix.
-
-        First step: remap 3→5. Second step: fix remaining pixel via 3x3 patch.
-        The chained correction should compose both steps.
-        """
-        # After remap 3→5, there's still a residual pixel needing neighborhood fix
-        # Output: [[0, 3, 0], [3, 1, 0]]
-        # After remap 3→5: [[0, 5, 0], [5, 1, 0]]
-        # Expected: [[0, 5, 0], [5, 5, 0]]  (pixel [1][1] still wrong: 1→5)
-        # Need: remap 3→5, then neighborhood fix for (1→5 in context of surrounding 5s)
-        outputs = [[[0, 3, 0], [3, 1, 0]]]
-        expected = [[[0, 5, 0], [5, 5, 0]]]
-
-        # With chaining (default max_chain_depth=2), should compose corrections
-        correction = self.env.infer_output_correction(
-            outputs, expected, max_chain_depth=2)
-
-        if correction is not None:
-            # Verify the chained correction produces the right output
-            result = self.env.execute(correction, outputs[0])
-            assert np.array(result, dtype=np.int32).tolist() == expected[0]
-
-    def test_no_chaining_when_depth_1(self):
-        """max_chain_depth=1 disables chaining."""
-        outputs = [[[0, 3, 0], [3, 1, 0]]]
-        expected = [[[0, 5, 0], [5, 5, 0]]]
-        correction = self.env.infer_output_correction(
-            outputs, expected, max_chain_depth=1)
-        # Should return single correction (may not fully fix)
-        # This is just a regression test — the important thing is no recursion
-
-    def test_no_chaining_when_first_is_perfect(self):
-        """If first correction is perfect, don't try second."""
-        outputs = [[[0, 3, 0], [3, 3, 0]]]
-        expected = [[[0, 5, 0], [5, 5, 0]]]
-        correction = self.env.infer_output_correction(
-            outputs, expected, max_chain_depth=2)
-        assert correction is not None
         # Should be a simple correction, not chained
         assert correction.children == []
+
+    def test_shape_mismatch_returns_none(self):
+        """Different shapes can't be corrected."""
+        inputs = [[[1, 2, 3]]]
+        expected = [[[1, 2]]]
+        correction = self.env.infer_output_correction(inputs, expected)
+        assert correction is None
+
+    def test_3x3_respects_max_rules_cap(self):
+        """3x3 neighborhood correction respects the default max_rules=10 cap."""
+        # Create a grid with many unique 3x3 neighborhoods — should exceed cap
+        outputs = [np.random.RandomState(42).randint(0, 5, (10, 10)).tolist()]
+        expected = [np.random.RandomState(43).randint(0, 5, (10, 10)).tolist()]
+        # Default max_rules=10, so this should fail (too many rules)
+        correction = self.env.infer_output_correction(outputs, expected)
+        # Should be None — too many neighborhood rules for the cap
+        assert correction is None
 
 

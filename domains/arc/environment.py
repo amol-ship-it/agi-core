@@ -77,61 +77,21 @@ class ARCEnv(Environment):
         self,
         program_outputs: list[Any],
         expected_outputs: list[Any],
-        max_rules: int = 50,
-        try_5x5: bool = False,
-        max_chain_depth: int = 2,
+        max_rules: int = 10,
+        **kwargs,
     ) -> Optional[Program]:
         """Infer a correction that fixes mismatches between program outputs
         and expected outputs.
 
-        Tries strategies in order: color remap → adjacency → 3x3 neighborhood
-        → 5x5 neighborhood → row/column transforms.
+        Tries strategies in order: color remap -> adjacency -> 3x3 neighborhood
+        -> row/column transforms.
 
-        If a correction reduces but doesn't eliminate error, recursively tries
-        a second correction on the residual (max depth 2).
+        Single correction only (no chaining).
         """
-        correction = self._infer_single_correction(
-            program_outputs, expected_outputs, max_rules, try_5x5)
-        if correction is None:
-            return None
-
-        if max_chain_depth <= 1:
-            return correction
-
-        # Apply correction and check for residual error
-        corrected_outputs = []
-        has_residual = False
-        for got, expected in zip(program_outputs, expected_outputs):
-            try:
-                result = self.execute(correction, got)
-                corrected_outputs.append(result)
-                if np.array(result, dtype=np.int32).tolist() != np.array(expected, dtype=np.int32).tolist():
-                    has_residual = True
-            except Exception:
-                return correction
-
-        if not has_residual:
-            return correction
-
-        # Try a second correction on the residual
-        second = self._infer_single_correction(
-            corrected_outputs, expected_outputs, max_rules, try_5x5)
-        if second is None:
-            return correction
-
-        return Program(root=second.root, children=[correction], params=second.params)
-
-    def _infer_single_correction(self, program_outputs, expected_outputs,
-                                  max_rules=50, try_5x5=False):
-        """Try each correction strategy in order of specificity."""
         for strategy in [
             lambda: self._infer_color_correction(program_outputs, expected_outputs),
             lambda: self._infer_adjacency_correction(program_outputs, expected_outputs),
             lambda: self._infer_neighborhood_correction(program_outputs, expected_outputs, radius=1, max_rules=max_rules),
-            lambda: (self._infer_neighborhood_correction(program_outputs, expected_outputs, radius=2, max_rules=max_rules) if try_5x5 else None),
-            lambda: (self._infer_neighborhood_correction(program_outputs, expected_outputs, radius=3, max_rules=max_rules) if try_5x5 else None),
-            lambda: (self._infer_neighborhood_correction(program_outputs, expected_outputs, radius=4, max_rules=max_rules) if try_5x5 else None),
-            lambda: (self._infer_neighborhood_correction(program_outputs, expected_outputs, radius=5, max_rules=max_rules) if try_5x5 else None),
             lambda: self._infer_row_col_correction(program_outputs, expected_outputs),
         ]:
             result = strategy()
@@ -336,10 +296,6 @@ class ARCEnv(Environment):
         fn = _make_nbr_fix(dict(rules), patch_radius)
         _PRIM_MAP[patch_name] = Primitive(name=patch_name, arity=1, fn=fn, domain="arc")
         return Program(root=patch_name)
-
-    # Keep legacy names so tests that call them directly still work
-    _infer_neighborhood_correction_5x5 = lambda self, po, eo, max_rules=30: \
-        self._infer_neighborhood_correction(po, eo, radius=2, max_rules=max_rules)
 
     def _infer_row_col_correction(self, program_outputs, expected_outputs):
         """Infer row/column-level corrections (reversal, cyclic shift, transpose)."""

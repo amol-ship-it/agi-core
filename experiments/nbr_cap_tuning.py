@@ -43,9 +43,9 @@ def main():
         original_infer = ARCEnv.infer_output_correction
 
         def patched_infer(self, program_outputs, expected_outputs,
-                          max_rules=cap, try_5x5=False):
+                          max_rules=cap, **kwargs):
             return original_infer(self, program_outputs, expected_outputs,
-                                  max_rules=max_rules, try_5x5=try_5x5)
+                                  max_rules=max_rules)
 
         ARCEnv.infer_output_correction = patched_infer
 

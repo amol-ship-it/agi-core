@@ -258,7 +258,7 @@ def check_extraction_then_correct(task: Task, env: ARCEnv, prim_name: str) -> tu
     # Try the correction pipeline
     correction = env.infer_output_correction(
         extracted_outputs, expected_outputs,
-        max_rules=100, try_5x5=True)
+        max_rules=10)
 
     if correction is not None:
         # LOOCV: hold out each example and verify
@@ -273,7 +273,7 @@ def check_extraction_then_correct(task: Task, env: ARCEnv, prim_name: str) -> tu
                 continue
 
             loo_correction = env.infer_output_correction(
-                train_ext, train_exp, max_rules=100, try_5x5=True)
+                train_ext, train_exp, max_rules=10)
 
             if loo_correction is None:
                 return False, 1.0
