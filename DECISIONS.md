@@ -1894,4 +1894,37 @@ Fixed a bug where `run_curriculum` dropped `sequential_compounding` and `adaptiv
 **Files:** `domains/arc/environment.py:132`
 
 ---
+
+### Decision 93: Multi-Scale Neighborhood Cascade (9x9 + 11x11)
+
+**Date:** 2026-03-13
+**Context:** After 7x7 (Decision 92), analysis showed 30 more tasks solvable by 9x9 and 17 by 11x11.
+
+**Change:** Extended the correction cascade to include radius=4 (9x9) and radius=5 (11x11) as additional fallbacks.
+
+**Results:**
+- Default train: 225→250/400 (+25)
+- Contest pipeline: 398→444/800 (+46) — 49.8%→55.5%
+- Eval: 185/400 (46.2%)
+- All 551 tests pass, no regression, wall time unchanged (~8 min contest)
+
+**Diminishing returns analysis:**
+| Radius | Label | Incremental tasks | Total |
+|--------|-------|-------------------|-------|
+| r=2→uncapped | 5x5 fix | +33 | 325/800 |
+| r=3 | 7x7 | +73 | 398/800 |
+| r=4 | 9x9 | +30 predicted | 444/800 |
+| r=5 | 11x11 | +17 predicted | (included above) |
+
+**Files:** `domains/arc/environment.py:132-133`
+
+---
+
+### Session 11 Summary
+
+**Total session impact:** ARC-AGI-1 contest 292→444/800 (+152 solves, 36.5%→55.5%)
+
+The entire gain came from one architectural insight: the 5x5 neighborhood rule cap was artificially low (30 vs 100 for 3x3), and adding larger neighborhoods (7x7, 9x9, 11x11) resolves false positives where smaller patches can't distinguish changed from unchanged pixels. This confirms Decision 78: **it's a vocabulary problem, not a search problem** — but the "vocabulary" that matters here is the correction vocabulary (neighborhood radius), not the program primitive vocabulary.
+
+---
 *This document will be updated with each new session and major decision.*
