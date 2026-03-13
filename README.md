@@ -163,9 +163,9 @@ Three modes. Pick one. That's the only knob most users need.
 
 | Mode | Tasks | Beam | Compute Cap | Eval accuracy | Use case |
 |------|-------|------|-------------|---------------|----------|
-| `quick` | 50 | off | 500K | ~22% (11/50) | Fast dev loop (~8s) |
-| `default` | all (400) | off | 3M | ~25% (98/400) | Full benchmark (~3.5 min) |
-| `contest` | all (400) | 30×15 | 100M | ~26% (105/400) | Maximum accuracy (~8.5 min) |
+| `quick` | 50 | off | 500K | ~68% train (34/50) | Fast dev loop (~8s) |
+| `default` | all (400) | off | 3M | ~63% train (250/400) | Full benchmark (~3.5 min) |
+| `contest` | all (400) | 30×15 | 100M | ~46% eval (185/400) | Maximum accuracy (~8.5 min) |
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
 
@@ -183,9 +183,9 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 | Mode | Training | Eval (culture transfer) | Total | Wall time |
 |------|----------|------------------------|-------|-----------|
-| `quick` | 27/50 (54.0%) | 11/50 (22.0%) | 38/100 (38.0%) | **~8s** |
-| `default` | 180/400 (45.0%) | 98/400 (24.5%) | 278/800 (34.8%) | **~3.5 min** |
-| `contest` | 187/400 (46.8%) | 105/400 (26.2%) | 292/800 (36.5%) | **~8.5 min** |
+| `quick` | 34/50 (68.0%) | — | — | **~8s** |
+| `default` | 250/400 (62.5%) | — | — | **~3.5 min** |
+| `contest` | 259/400 (64.8%) | 185/400 (46.2%) | 444/800 (55.5%) | **~8.5 min** |
 
 **Other domains:**
 
@@ -372,7 +372,8 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated on list_ops and Zork
 - **Phase 4** ✅ Compounding infrastructure: `--compounding` flag, distance-based drive signals, library primitive execution. Zork: 7/20→10/20 with library reuse 5-11x. ARC: library entries produced but limited impact.
 - **Phase 5** ✅ Narrowed ARC train-eval gap from 3.8x to 1.8x (45% train, 24.5% eval) via LOOCV + 3x3/5x5 diff-and-patch + identity correction
-- **Phase 6** 🔧 ARC-AGI-2 improved to 31.2% train, 7.5% eval — corrections transfer cross-domain
+- **Phase 6** ✅ Multi-scale neighborhood correction (3x3→11x11): ARC-AGI-1 contest 444/800 (55.5%), eval 185/400 (46.2%)
+- **Phase 7** 🔧 ARC-AGI-2 improved to 31.2% train, 7.5% eval — corrections transfer cross-domain
 - **Phase 6** Cross-domain library transfer
 - **Phase 7** Continuous mixed-domain learning
 
