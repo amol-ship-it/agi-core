@@ -177,11 +177,11 @@ Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, 
 
 Three modes. Pick one. That's the only knob most users need.
 
-| Mode | Tasks | Beam | Compute Cap | Solve rate (test-verified) | Use case |
-|------|-------|------|-------------|---------------------------|----------|
-| `quick` | 50 | off | 500K | ~40% train (20/50) | Fast dev loop (~5s) |
-| `default` | all (400) | off | 3M | ~26% train (105/400) | Full benchmark (~4 min) |
-| `contest` | all (400) | 30×15 | 100M | ~27% train, ~9% eval (141/800) | Maximum accuracy (~9 min) |
+| Mode | Tasks | Beam | Compute Cap | Eval accuracy | Use case |
+|------|-------|------|-------------|---------------|----------|
+| `quick` | 50 | off | 500K | 6.0% (3/50) | Fast dev loop (~5s) |
+| `default` | all (400) | off | 3M | 8.2% (33/400) | Full benchmark (~4 min) |
+| `contest` | all (400) | 30×15 | 100M | 8.5% (34/400) | Maximum accuracy (~9 min) |
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
 
@@ -195,20 +195,21 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 ### Expected performance
 
-**ARC-AGI-1** (test-verified solves):
+**ARC-AGI-1** — eval accuracy (test-verified solves on held-out evaluation set):
 
-| Mode | Training | Eval (culture transfer) | Total | Wall time |
-|------|----------|------------------------|-------|-----------|
-| `quick` | 20/50 (40.0%) | 3/50 (6.0%) | 23/100 (23.0%) | **~5s** |
-| `default` | 105/400 (26.2%) | 33/400 (8.2%) | 138/800 (17.2%) | **~4 min** |
-| `contest` | 107/400 (26.8%) | 34/400 (8.5%) | 141/800 (17.6%) | **~9 min** |
+| Mode | Eval (400 tasks) | Wall time |
+|------|-----------------|-----------|
+| `quick` | 3/50 (6.0%) | **~5s** |
+| `default` | 33/400 (8.2%) | **~4 min** |
+| `contest` | 34/400 (8.5%) | **~9 min** |
+
+Note: training accuracy is much higher (e.g. contest: 107/400 = 26.8%) but this reflects overfitting — 170/277 train-solved programs fail on held-out test examples (61% overfit rate). Eval is the real metric.
 
 **Other domains:**
 
-| Domain | Tasks | Solved | Rate | Notes |
-|--------|-------|--------|------|-------|
-| ARC-AGI-2 Train | 1000 | 131 | 13.1% | test-verified (550 train_solved, high overfit) |
-| ARC-AGI-2 Eval | 120 | 0 | 0.0% | With culture transfer from training |
+| Domain | Eval Tasks | Solved | Rate | Notes |
+|--------|-----------|--------|------|-------|
+| ARC-AGI-2 | 120 | 0 | 0.0% | With culture transfer from 1000 training tasks |
 | Zork | 20 | 10 | 50% | 5 library entries, reuse 2-6x (5 rounds) |
 | List Ops | 28 | 20 | 71.4% | 8 library entries, reuse 2-6x (3 rounds) |
 
@@ -376,7 +377,7 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated
 - **Phase 4** ✅ Compounding infrastructure: Zork 10/20, list_ops 20/28 with library reuse 2-6x
 - **Phase 5** ✅ Correction cascade: LOOCV + multi-scale neighborhood correction (3x3→11x11) + identity correction
-- **Phase 6** ✅ Current: ARC-AGI-1 contest 141/800 (17.6%), eval 34/400 (8.5%). ARC-AGI-2: 131/1000 train (13.1%)
+- **Phase 6** ✅ Current: ARC-AGI-1 eval 34/400 (8.5%), ARC-AGI-2 eval 0/120 (0%)
 - **Phase 7** 🔧 Reduce overfitting (61% overfit rate on corrections)
 - **Phase 8** Cross-domain library transfer
 - **Phase 9** Continuous mixed-domain learning
