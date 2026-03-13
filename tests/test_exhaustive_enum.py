@@ -175,9 +175,9 @@ class TestNewPrimitives(unittest.TestCase):
                 self.assertTrue(len(result) > 0, f"{prim.name} returned empty")
                 self.assertIsInstance(result[0], list, f"{prim.name} not list of lists")
 
-    def test_primitive_count_increased(self):
-        """Should have 199 base primitives after pruning unused ones."""
-        self.assertGreaterEqual(len(ARC_PRIMITIVES), 190)
+    def test_primitive_count(self):
+        """Should have 180 base primitives after pruning unused ones."""
+        self.assertGreaterEqual(len(ARC_PRIMITIVES), 170)
 
 
 # =============================================================================

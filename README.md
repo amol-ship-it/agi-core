@@ -213,7 +213,7 @@ Note: training accuracy is much higher (e.g. contest: 107/400 = 26.8%) but this 
 | Zork | 20 | 10 | 50% | 5 library entries, reuse 2-6x (5 rounds) |
 | List Ops | 28 | 20 | 71.4% | 8 library entries, reuse 2-6x (3 rounds) |
 
-**199 base ARC primitives** plus task-specific color/role primitives (~260-390 total per task, ~9,000 lines of domain code) including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
+**180 base ARC primitives** plus task-specific color/role primitives (~260-390 total per task, ~9,000 lines of domain code) including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
 **Diff-and-patch correction** learns neighborhood-based corrections on near-miss programs; powerful for training but prone to overfitting (see "Current status" below).
