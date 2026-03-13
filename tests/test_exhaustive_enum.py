@@ -310,7 +310,7 @@ class TestSequentialCompounding(unittest.TestCase):
             search_config=SearchConfig(beam_width=10, max_generations=5, seed=42),
         )
         # Create a depth-2 solved program
-        prog = Program(root="mirror_h", children=[Program(root="rot90cw")])
+        prog = Program(root="mirror_horizontal", children=[Program(root="rotate_90_clockwise")])
         scored = ScoredProgram(
             program=prog, energy=0.0, prediction_error=0.0,
             complexity_cost=2.0, task_id="test_task",
@@ -331,7 +331,7 @@ class TestSequentialCompounding(unittest.TestCase):
             memory=InMemoryStore(),
             search_config=SearchConfig(beam_width=10, max_generations=5, seed=42),
         )
-        prog = Program(root="rot90cw")  # depth 1, size 1
+        prog = Program(root="rotate_90_clockwise")  # depth 1, size 1
         scored = ScoredProgram(
             program=prog, energy=0.0, prediction_error=0.0,
             complexity_cost=1.0, task_id="test_task",
@@ -349,8 +349,8 @@ class TestSequentialCompounding(unittest.TestCase):
             search_config=SearchConfig(beam_width=10, max_generations=5, seed=42),
             sleep_config=SleepConfig(max_library_size=1),
         )
-        prog = Program(root="mirror_h", children=[
-            Program(root="rot90cw", children=[Program(root="transpose")])])
+        prog = Program(root="mirror_horizontal", children=[
+            Program(root="rotate_90_clockwise", children=[Program(root="transpose")])])
         scored = ScoredProgram(
             program=prog, energy=0.0, prediction_error=0.0,
             complexity_cost=3.0, task_id="test",
@@ -368,20 +368,20 @@ class TestCulturePersistence(unittest.TestCase):
     """Test save/load culture with proper program reconstruction."""
 
     def test_program_to_dict_leaf(self):
-        prog = Program(root="rot90cw")
+        prog = Program(root="rotate_90_clockwise")
         d = _program_to_dict(prog)
-        self.assertEqual(d, {"root": "rot90cw"})
+        self.assertEqual(d, {"root": "rotate_90_clockwise"})
 
     def test_program_to_dict_tree(self):
-        prog = Program(root="mirror_h", children=[Program(root="rot90cw")])
+        prog = Program(root="mirror_horizontal", children=[Program(root="rotate_90_clockwise")])
         d = _program_to_dict(prog)
-        self.assertEqual(d["root"], "mirror_h")
+        self.assertEqual(d["root"], "mirror_horizontal")
         self.assertEqual(len(d["children"]), 1)
-        self.assertEqual(d["children"][0]["root"], "rot90cw")
+        self.assertEqual(d["children"][0]["root"], "rotate_90_clockwise")
 
     def test_program_roundtrip(self):
         prog = Program(root="overlay", children=[
-            Program(root="mirror_h", children=[Program(root="rot90cw")]),
+            Program(root="mirror_horizontal", children=[Program(root="rotate_90_clockwise")]),
             Program(root="transpose"),
         ])
         d = _program_to_dict(prog)
@@ -391,7 +391,7 @@ class TestCulturePersistence(unittest.TestCase):
     def test_save_load_culture(self):
         memory = InMemoryStore()
         # Add a library entry
-        prog = Program(root="mirror_h", children=[Program(root="rot90cw")])
+        prog = Program(root="mirror_horizontal", children=[Program(root="rotate_90_clockwise")])
         entry = LibraryEntry(
             name="learned_0", program=prog, usefulness=5.0,
             reuse_count=3, source_tasks=["t1", "t2"], domain="arc",
@@ -400,7 +400,7 @@ class TestCulturePersistence(unittest.TestCase):
 
         # Add a solution
         sp = ScoredProgram(
-            program=Program(root="crop_nonzero"), energy=0.001,
+            program=Program(root="crop_to_nonzero"), energy=0.001,
             prediction_error=0.0, complexity_cost=1.0, task_id="t1",
         )
         memory.store_solution("t1", sp)
@@ -427,7 +427,7 @@ class TestCulturePersistence(unittest.TestCase):
             # Verify solutions
             sols = memory2.get_solutions()
             self.assertIn("t1", sols)
-            self.assertEqual(sols["t1"].program.root, "crop_nonzero")
+            self.assertEqual(sols["t1"].program.root, "crop_to_nonzero")
         finally:
             os.unlink(path)
 

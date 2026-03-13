@@ -290,7 +290,7 @@ class TestARCEnvironment(unittest.TestCase):
 
     def test_execute_single_primitive(self):
         env = ARCEnv()
-        prog = Program(root="rot90cw")
+        prog = Program(root="rotate_90_clockwise")
         grid = [[1, 2], [3, 4]]
         result = env.execute(prog, grid)
         expected = rotate_90_cw(grid)
@@ -299,7 +299,7 @@ class TestARCEnvironment(unittest.TestCase):
     def test_execute_composition(self):
         env = ARCEnv()
         # mirror_h(rot90cw(input))
-        prog = Program(root="mirror_h", children=[Program(root="rot90cw")])
+        prog = Program(root="mirror_horizontal", children=[Program(root="rotate_90_clockwise")])
         grid = [[1, 2], [3, 4]]
         result = env.execute(prog, grid)
         expected = mirror_horizontal(rotate_90_cw(grid))
@@ -356,7 +356,7 @@ class TestARCEnvironment(unittest.TestCase):
         """Exception in primitive should return input grid."""
         env = ARCEnv()
         # Execute a composition that might fail gracefully
-        prog = Program(root="rot90cw", children=[Program(root="nonexistent")])
+        prog = Program(root="rotate_90_clockwise", children=[Program(root="nonexistent")])
         grid = [[1, 2], [3, 4]]
         result = env.execute(prog, grid)
         self.assertIsInstance(result, list)
@@ -402,29 +402,29 @@ class TestARCGrammarMethods(unittest.TestCase):
 
     def test_mutate(self):
         grammar = ARCGrammar(seed=42)
-        prog = Program(root="rot90cw")
+        prog = Program(root="rotate_90_clockwise")
         prims = grammar.base_primitives()
         mutated = grammar.mutate(prog, prims)
         self.assertIsInstance(mutated, Program)
 
     def test_mutate_tree(self):
         grammar = ARCGrammar(seed=42)
-        prog = Program(root="mirror_h", children=[Program(root="rot90cw")])
+        prog = Program(root="mirror_horizontal", children=[Program(root="rotate_90_clockwise")])
         prims = grammar.base_primitives()
         mutated = grammar.mutate(prog, prims)
         self.assertIsInstance(mutated, Program)
 
     def test_crossover(self):
         grammar = ARCGrammar(seed=42)
-        a = Program(root="mirror_h", children=[Program(root="rot90cw")])
-        b = Program(root="transpose", children=[Program(root="mirror_v")])
+        a = Program(root="mirror_horizontal", children=[Program(root="rotate_90_clockwise")])
+        b = Program(root="transpose", children=[Program(root="mirror_vertical")])
         child = grammar.crossover(a, b)
         self.assertIsInstance(child, Program)
 
     def test_crossover_leaves(self):
         grammar = ARCGrammar(seed=42)
-        a = Program(root="rot90cw")
-        b = Program(root="mirror_h")
+        a = Program(root="rotate_90_clockwise")
+        b = Program(root="mirror_horizontal")
         child = grammar.crossover(a, b)
         self.assertIsInstance(child, Program)
 
@@ -437,7 +437,7 @@ class TestARCGrammarMethods(unittest.TestCase):
     def test_mutate_unknown_primitive(self):
         """Mutating a node with an unknown primitive should still work."""
         grammar = ARCGrammar(seed=42)
-        prog = Program(root="unknown_op", children=[Program(root="rot90cw")])
+        prog = Program(root="unknown_op", children=[Program(root="rotate_90_clockwise")])
         prims = grammar.base_primitives()
         mutated = grammar.mutate(prog, prims)
         self.assertIsInstance(mutated, Program)
@@ -445,8 +445,8 @@ class TestARCGrammarMethods(unittest.TestCase):
     def test_crossover_empty_nodes(self):
         """Crossover with no collectable nodes should return copy."""
         grammar = ARCGrammar(seed=42)
-        a = Program(root="rot90cw")
-        b = Program(root="mirror_h")
+        a = Program(root="rotate_90_clockwise")
+        b = Program(root="mirror_horizontal")
         # Both are single nodes, crossover should work
         child = grammar.crossover(a, b)
         self.assertIsInstance(child, Program)
@@ -1871,10 +1871,10 @@ class TestVocabPruning(unittest.TestCase):
         prims = build_task_color_primitives({0, 1, 3})
         names = [p.name for p in prims]
         # Should have keep_c1, keep_c3 but NOT keep_c2, keep_c4, etc.
-        self.assertIn("keep_c1", names)
-        self.assertIn("keep_c3", names)
-        self.assertNotIn("keep_c2", names)
-        self.assertNotIn("keep_c4", names)
+        self.assertIn("keep_color_1", names)
+        self.assertIn("keep_color_3", names)
+        self.assertNotIn("keep_color_2", names)
+        self.assertNotIn("keep_color_4", names)
 
     def test_prepare_for_task_generates_color_prims(self):
         """prepare_for_task should generate color-specific primitives."""
@@ -1889,12 +1889,12 @@ class TestVocabPruning(unittest.TestCase):
         grammar.prepare_for_task(task)
         prims = grammar.base_primitives()
         names = [p.name for p in prims]
-        self.assertIn("keep_c1", names)
-        self.assertIn("keep_c2", names)
+        self.assertIn("keep_color_1", names)
+        self.assertIn("keep_color_2", names)
         self.assertIn("swap_1_2", names)
         # Colors not in the task should NOT appear
-        self.assertNotIn("keep_c5", names)
-        self.assertNotIn("keep_c9", names)
+        self.assertNotIn("keep_color_5", names)
+        self.assertNotIn("keep_color_9", names)
 
 
 class TestLOOCV(unittest.TestCase):

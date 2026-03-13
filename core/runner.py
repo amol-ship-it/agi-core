@@ -284,9 +284,8 @@ class ProgressTracker:
 
     SCOREBOARD_INTERVAL = 10
 
-    def __init__(self, jsonl_path: str, t0: float, split_label: str = "",
-                 suppress_file: bool = False):
-        self._file = open(os.devnull, "w") if suppress_file else open(jsonl_path, "w")
+    def __init__(self, jsonl_path: str, t0: float, split_label: str = ""):
+        self._file = open(jsonl_path, "w")
         self._t0 = t0
         self._split_label = split_label  # e.g. "TRAIN" or "EVAL"
 
@@ -623,18 +622,18 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     else:
         print(f"  Compute cap: unlimited")
 
+    print()
+    hline("─")
+    print("  Output files (available now for tail -f):")
+    hline("─")
+    print(f"  Results (live):   {jsonl_path}")
     if not cfg.suppress_files:
-        print()
-        hline("─")
-        print("  Output files (available now for tail -f):")
-        hline("─")
-        print(f"  Results (live):   {jsonl_path}")
         print(f"  Results (final):  {results_path}")
         print(f"  Metrics:          {metrics_json_path}")
         print(f"  Library:          {library_path}")
         if not cfg.no_log:
             print(f"  Console log:      {log_path}")
-        print()
+    print()
 
     if not tasks:
         print("  ERROR: No tasks loaded.")
@@ -707,8 +706,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         _split = "TRAIN"
     else:
         _split = ""
-    tracker = ProgressTracker(jsonl_path, time.time(), split_label=_split,
-                              suppress_file=cfg.suppress_files)
+    tracker = ProgressTracker(jsonl_path, time.time(), split_label=_split)
 
     hline("─")
     print(f"  Running {len(tasks)} tasks × {rounds} rounds on {workers} workers")
@@ -941,8 +939,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     hline("─")
     print("  Artifacts:")
     hline("─")
+    print(f"  Results (live):   {jsonl_path}")
     if not cfg.suppress_files:
-        print(f"  Results (live):   {jsonl_path}")
         print(f"  Results (final):  {results_path}")
         print(f"  Metrics JSON:     {metrics_json_path}")
         print(f"  Metrics CSV:      {metrics_csv_path}")
