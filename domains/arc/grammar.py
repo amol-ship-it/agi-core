@@ -14,6 +14,7 @@ from core import Grammar, Primitive, Program, Task, Decomposition
 from .primitives import (
     ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP, register_prim,
     _detect_any_separator_lines, _split_grid_cells, Grid,
+    build_task_color_primitives,
 )
 from .objects import (
     find_foreground_shapes, find_multicolor_objects, place_subgrid,
@@ -97,16 +98,25 @@ class ARCGrammar(Grammar):
         return list(ARC_PRIMITIVES) + self._task_prims
 
     def prepare_for_task(self, task: Task) -> None:
-        """Generate parameterized color primitives from training examples.
+        """Generate task-specific primitives from training examples.
 
-        Unlike the old approach (Decision 72, absolute color mappings like
-        swap_3_to_5), these learn STRUCTURAL roles — e.g. "replace rare color
-        with dominant color". At test time, roles are re-determined from the
-        input grid, so the mapping generalizes to new color palettes.
-
-        Ported from agi-mvp-general's param_search module.
+        Two categories:
+        1. Color-parameterized primitives: keep_cN, erase_N, swap_A_B, etc.
+           Only instantiated for colors present in this task's grids.
+           Reduces search space from ~350 to ~150-200 per task.
+        2. Structural role primitives: param_role_recolor, param_rank_recolor,
+           etc. Learn generalizable role-based mappings from training pairs.
         """
         self._task_prims = []
+
+        # 1. Task-specific color primitives
+        task_colors = _extract_task_colors(task)
+        color_prims = build_task_color_primitives(task_colors)
+        for p in color_prims:
+            self._task_prims.append(p)
+            register_prim(p)
+
+        # 2. Learned structural primitives
         prims = _learn_parameterized_prims(task)
         for p in prims:
             self._task_prims.append(p)
@@ -371,6 +381,19 @@ class ARCGrammar(Grammar):
 # =============================================================================
 # Parameterized primitive learning (structural color roles)
 # =============================================================================
+
+def _extract_task_colors(task: Task) -> set[int]:
+    """Extract all colors appearing in a task's training inputs and outputs."""
+    colors: set[int] = set()
+    for inp, out in task.train_examples:
+        if inp:
+            for row in inp:
+                colors.update(row)
+        if out:
+            for row in out:
+                colors.update(row)
+    return colors
+
 
 def _assign_color_roles(grid: Grid) -> dict[int, str]:
     """Assign structural roles to colors based on frequency.

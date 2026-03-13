@@ -260,6 +260,12 @@
 
 [User proposes that decomposition (breaking complex problems into simpler ones) is the flip side of composition, and that with the right primitives, solutions should be simple. Wants skeptical validation and cross-domain application (ARC-AGI-1, ARC-AGI-2, Zork). Claude validated with data: 95% of ARC solutions are depth 0-1, confirming that right vocabulary → shallow composition. The bottleneck is discovering the right vocabulary, not deeper search.]
 
+### Prompt 41: Implement Strategic Plan — Path Forward for ARC-AGI-1 Solve Rates
+
+> Implement the full strategic plan: (A) Generalized LOOCV for all training-perfect candidates, (B) Diff-and-patch phase for near-misses with spatial corrections, (C) Same-shape few-changes specialization, (D) Vocabulary pruning — task-specific color primitives, (E) Output-shape prediction.
+
+[Implemented Phases A, B, and D. Phase A: Added `_loocv_score` method to Learner — re-prepares grammar with N-1 examples and validates held-out for each candidate. Phase B: Extended `infer_output_correction` with adjacency-based and 3x3 neighborhood correction strategies beyond color remapping. Phase D: Moved ~120 parameterized color primitives to runtime generation in `prepare_for_task`, reducing per-task primitives from ~349 to ~235. All 527 tests pass.]
+
 ---
 
 *This document will be updated with each new session.*

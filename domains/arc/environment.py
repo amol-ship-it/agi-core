@@ -60,18 +60,44 @@ class ARCEnv(Environment):
         program_outputs: list[Any],
         expected_outputs: list[Any],
     ) -> Optional[Program]:
-        """Infer a color remapping that fixes mismatches between outputs.
+        """Infer a correction that fixes mismatches between program outputs
+        and expected outputs.
+
+        Tries multiple strategies in order:
+        1. Color remapping: consistent color→color substitutions
+        2. Adjacency-based correction: pixel changes conditioned on neighbors
+        3. Neighborhood patch: full 3x3 context-based pixel correction
+
+        Returns a single best correction, or None. The caller (_try_color_fix)
+        evaluates whether the correction actually improves accuracy.
+        """
+        # Strategy 1: Color remapping (cheapest, most general)
+        color_fix = self._infer_color_correction(program_outputs, expected_outputs)
+        if color_fix is not None:
+            return color_fix
+
+        # Strategy 2: Adjacency-based correction
+        adj_fix = self._infer_adjacency_correction(program_outputs, expected_outputs)
+        if adj_fix is not None:
+            return adj_fix
+
+        # Strategy 3: Neighborhood patch (3x3 context)
+        nbr_fix = self._infer_neighborhood_correction(program_outputs, expected_outputs)
+        if nbr_fix is not None:
+            return nbr_fix
+
+        return None
+
+    def _infer_color_correction(
+        self,
+        program_outputs: list[Any],
+        expected_outputs: list[Any],
+    ) -> Optional[Program]:
+        """Infer a color remapping that fixes mismatches.
 
         For each (got, expected) grid pair, collects pixel-level color
         mismatches.  If a consistent remap exists (>80% agreement per
         source color), creates a correction Program.
-
-        Returns a single best correction, or None. The caller (_try_color_fix)
-        evaluates whether the correction actually improves accuracy.
-
-        Safety: remaps are validated by trial evaluation in the caller,
-        not by heuristic pixel counting here. This allows the system to
-        try corrections that a conservative heuristic would reject.
         """
         votes: Counter = Counter()
 
@@ -109,11 +135,213 @@ class ARCEnv(Environment):
         if not remap:
             return None
 
+        # Verify: applying the remap must fix ALL diffs (not just the ones
+        # it covers). If the remap overgeneralizes, fall through to spatial.
+        remap_fn = _make_color_remap(remap)
+        for got, expected in zip(program_outputs, expected_outputs):
+            result = remap_fn(got)
+            if np.array(result, dtype=np.int32).tolist() != np.array(expected, dtype=np.int32).tolist():
+                return None  # remap doesn't fully fix — try spatial strategies
+
         # Register the remap as a primitive and return a Program node
         name = f"color_remap_{'_'.join(f'{k}to{v}' for k, v in sorted(remap.items()))}"
         if name not in _PRIM_MAP:
-            prim = Primitive(name=name, arity=1, fn=_make_color_remap(remap), domain="arc")
+            prim = Primitive(name=name, arity=1, fn=remap_fn, domain="arc")
             _PRIM_MAP[name] = prim
+        return Program(root=name)
+
+    def _infer_adjacency_correction(
+        self,
+        program_outputs: list[Any],
+        expected_outputs: list[Any],
+    ) -> Optional[Program]:
+        """Infer adjacency-based pixel correction.
+
+        Learns rules of the form: "if pixel is color A and has a
+        4-neighbor of color B, change to color C".  This covers many
+        same-shape tasks where a program gets the geometry right but
+        the local context-dependent coloring wrong.
+        """
+        # Collect adjacency rules: (center_color, neighbor_color_set) → out_color
+        rules: dict[tuple[int, frozenset], int] = {}
+
+        for got, expected in zip(program_outputs, expected_outputs):
+            got_arr = np.array(got, dtype=np.int32)
+            exp_arr = np.array(expected, dtype=np.int32)
+            if got_arr.shape != exp_arr.shape:
+                return None
+            h, w = got_arr.shape
+            diff = got_arr != exp_arr
+            if not diff.any():
+                continue
+
+            for r in range(h):
+                for c in range(w):
+                    if not diff[r, c]:
+                        continue
+                    center = int(got_arr[r, c])
+                    # 4-neighbor colors
+                    nbrs = set()
+                    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < h and 0 <= nc < w:
+                            nbrs.add(int(got_arr[nr, nc]))
+                    key = (center, frozenset(nbrs))
+                    out_color = int(exp_arr[r, c])
+                    if key in rules and rules[key] != out_color:
+                        return None  # inconsistent
+                    rules[key] = out_color
+
+        if not rules:
+            return None
+
+        # Verify: applying the rules should fix ALL diffs in training
+        for got, expected in zip(program_outputs, expected_outputs):
+            got_arr = np.array(got, dtype=np.int32)
+            exp_arr = np.array(expected, dtype=np.int32)
+            h, w = got_arr.shape
+            result = got_arr.copy()
+            for r in range(h):
+                for c in range(w):
+                    center = int(got_arr[r, c])
+                    nbrs = set()
+                    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < h and 0 <= nc < w:
+                            nbrs.add(int(got_arr[nr, nc]))
+                    key = (center, frozenset(nbrs))
+                    if key in rules:
+                        result[r, c] = rules[key]
+            if not np.array_equal(result, exp_arr):
+                return None
+
+        # Build correction primitive
+        # Convert frozenset keys to sorted tuples for hashing
+        hashable_rules = {(c, tuple(sorted(ns))): v
+                          for (c, ns), v in rules.items()}
+
+        def _make_adj_fix(adj_rules):
+            def adjacency_fix(grid: Grid) -> Grid:
+                arr = np.array(grid, dtype=np.int32)
+                result = arr.copy()
+                h, w = arr.shape
+                for r in range(h):
+                    for c in range(w):
+                        center = int(arr[r, c])
+                        nbrs = set()
+                        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < h and 0 <= nc < w:
+                                nbrs.add(int(arr[nr, nc]))
+                        key = (center, frozenset(nbrs))
+                        hkey = (center, tuple(sorted(nbrs)))
+                        if hkey in adj_rules:
+                            result[r, c] = adj_rules[hkey]
+                return result.tolist()
+            return adjacency_fix
+
+        name = f"adj_fix_{len(rules)}r"
+        fn = _make_adj_fix(hashable_rules)
+        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+        _PRIM_MAP[name] = prim
+        return Program(root=name)
+
+    def _infer_neighborhood_correction(
+        self,
+        program_outputs: list[Any],
+        expected_outputs: list[Any],
+    ) -> Optional[Program]:
+        """Infer 3x3 neighborhood-based pixel correction.
+
+        For each mismatched pixel, encodes the full 3x3 neighborhood as
+        a feature and learns a mapping to the correct output color.
+        More specific than adjacency rules but catches more patterns.
+        Bounded to <=50 rules to avoid overfitting.
+        """
+        rules: dict[tuple, int] = {}
+        total_diff_pixels = 0
+
+        for got, expected in zip(program_outputs, expected_outputs):
+            got_arr = np.array(got, dtype=np.int32)
+            exp_arr = np.array(expected, dtype=np.int32)
+            if got_arr.shape != exp_arr.shape:
+                return None
+            h, w = got_arr.shape
+            diff = got_arr != exp_arr
+            if not diff.any():
+                continue
+
+            for r in range(h):
+                for c in range(w):
+                    if not diff[r, c]:
+                        continue
+                    total_diff_pixels += 1
+                    # 3x3 neighborhood (use -1 for out-of-bounds)
+                    patch = []
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < h and 0 <= nc < w:
+                                patch.append(int(got_arr[nr, nc]))
+                            else:
+                                patch.append(-1)
+                    key = tuple(patch)
+                    out_color = int(exp_arr[r, c])
+                    if key in rules and rules[key] != out_color:
+                        return None  # inconsistent
+                    rules[key] = out_color
+
+        if not rules or len(rules) > 50:
+            return None  # too many rules → likely overfitting
+
+        # Verify on all training examples
+        for got, expected in zip(program_outputs, expected_outputs):
+            got_arr = np.array(got, dtype=np.int32)
+            exp_arr = np.array(expected, dtype=np.int32)
+            h, w = got_arr.shape
+            result = got_arr.copy()
+            for r in range(h):
+                for c in range(w):
+                    patch = []
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < h and 0 <= nc < w:
+                                patch.append(int(got_arr[nr, nc]))
+                            else:
+                                patch.append(-1)
+                    key = tuple(patch)
+                    if key in rules:
+                        result[r, c] = rules[key]
+            if not np.array_equal(result, exp_arr):
+                return None
+
+        # Build correction primitive
+        def _make_nbr_fix(nbr_rules):
+            def neighborhood_fix(grid: Grid) -> Grid:
+                arr = np.array(grid, dtype=np.int32)
+                result = arr.copy()
+                h, w = arr.shape
+                for r in range(h):
+                    for c in range(w):
+                        patch = []
+                        for dr in (-1, 0, 1):
+                            for dc in (-1, 0, 1):
+                                nr, nc = r + dr, c + dc
+                                if 0 <= nr < h and 0 <= nc < w:
+                                    patch.append(int(arr[nr, nc]))
+                                else:
+                                    patch.append(-1)
+                        key = tuple(patch)
+                        if key in nbr_rules:
+                            result[r, c] = nbr_rules[key]
+                return result.tolist()
+            return neighborhood_fix
+
+        name = f"nbr_fix_{len(rules)}r"
+        fn = _make_nbr_fix(dict(rules))
+        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+        _PRIM_MAP[name] = prim
         return Program(root=name)
 
     # Maximum intermediate grid size (pixels). Grid-expanding primitives

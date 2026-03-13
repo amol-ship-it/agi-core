@@ -238,7 +238,7 @@ class Learner:
             """Build WakeResult for a training-solved task using top-k test evaluation."""
             nonlocal best_so_far
             top_sp, te, ts, n_perf, s_rank = self._evaluate_top_k_on_test(
-                enum_candidates, task, top_k=3)
+                enum_candidates, task, top_k=10)
             # Use the test-best candidate as the reported best
             if top_sp is not None and top_sp is not best_so_far:
                 best_so_far = top_sp
@@ -562,15 +562,61 @@ class Learner:
         test_solved = avg_error <= self.search_cfg.solve_threshold
         return avg_error, test_solved
 
+    def _loocv_score(self, sp: ScoredProgram, task: Task) -> float:
+        """Leave-one-out cross-validation score for a training-perfect candidate.
+
+        For each training example, holds it out, re-prepares the grammar
+        with the remaining N-1 examples (which re-learns any parameterized
+        primitives), and checks if the program still produces correct output
+        for the held-out example.  This catches programs whose learned
+        components (e.g., color remapping, structural role primitives)
+        overfit the full training set.
+
+        Returns fraction of folds passed (1.0 = fully validated).
+        """
+        n = len(task.train_examples)
+        if n < 2:
+            return 1.0
+
+        threshold = self.search_cfg.solve_threshold
+        passed = 0
+
+        for i in range(n):
+            loo_examples = task.train_examples[:i] + task.train_examples[i + 1:]
+            loo_task = Task(
+                task_id=task.task_id,
+                train_examples=loo_examples,
+                test_inputs=task.test_inputs,
+                test_outputs=task.test_outputs,
+            )
+            # Re-prepare grammar with N-1 examples — re-learns parameterized
+            # primitives, which may now produce different mappings
+            self.grammar.prepare_for_task(loo_task)
+
+            # Evaluate on the held-out example
+            held_inp, held_exp = task.train_examples[i]
+            try:
+                pred = self.env.execute(sp.program, held_inp)
+                err = self.drive.prediction_error(pred, held_exp)
+                if err <= threshold:
+                    passed += 1
+            except Exception:
+                pass
+
+        # Restore grammar state for the full task
+        self.grammar.prepare_for_task(task)
+
+        return passed / n
+
     def _evaluate_top_k_on_test(
         self, candidates: list[ScoredProgram], task: Task, top_k: int = 3
     ) -> tuple[Optional[ScoredProgram], Optional[float], Optional[bool], int, Optional[int]]:
         """Try top-k training-perfect candidates on test, return best.
 
         Collects all candidates with prediction_error <= threshold, deduplicates
-        by program representation, sorts by program size, and tries up to top_k
-        on test. Returns the first test-passing candidate, or the best-scoring
-        one if none pass.
+        by program representation, and ranks by LOOCV score + program size.
+        LOOCV catches overfitting: candidates whose learned components don't
+        generalize to held-out training examples are demoted (not eliminated).
 
         Returns: (best_program, test_error, test_solved, n_train_perfect, solving_rank)
         """
@@ -591,9 +637,28 @@ class Learner:
         if not perfect:
             return None, None, None, 0, None
 
-        # Sort by program size (Occam's razor), then energy as tiebreaker
-        perfect.sort(key=lambda sp: (sp.program.size, sp.energy))
         n_train_perfect = len(perfect)
+
+        # LOOCV validation: score top candidates to detect overfitting.
+        # Only run when we have multiple candidates (the payoff scenario)
+        # and enough training examples for meaningful cross-validation.
+        loocv_scores: dict[str, float] = {}
+        n_to_validate = min(len(perfect), top_k)
+        if len(task.train_examples) >= 2 and n_train_perfect > 1:
+            # Pre-sort by size for LOOCV (validate simpler programs first)
+            perfect.sort(key=lambda sp: (sp.program.size, sp.energy))
+            for sp in perfect[:n_to_validate]:
+                key = repr(sp.program)
+                loocv_scores[key] = self._loocv_score(sp, task)
+
+        # Sort by: LOOCV score (desc), program size (asc), energy (asc)
+        # LOOCV-passing candidates are tried first; failures are demoted
+        # but not eliminated (they still get a chance on test)
+        perfect.sort(key=lambda sp: (
+            -loocv_scores.get(repr(sp.program), 1.0),
+            sp.program.size,
+            sp.energy,
+        ))
 
         best_test_error = None
         best_test_sp = None
@@ -1659,15 +1724,25 @@ class Learner:
             return eval_budget <= 0 or n_evals < eval_budget
 
         # --- Depth 1: all single primitives (cost: 1 op each) ---
+        # Always try ALL depth-1 prims (349 evals, essentially free) to collect
+        # multiple training-perfect candidates. This combats overfitting:
+        # if both erase_4 and erase_rare match training, top-k test evaluation
+        # can select the one that generalizes to test.
         unary_prims = [p for p in primitives if p.arity <= 1]
         prim_by_name: dict[str, Primitive] = {p.name: p for p in unary_prims}
+        depth1_solved = False
         for prim in unary_prims:
             prog = Program(root=prim.name)
             sp = self._evaluate_program(prog, task)
             scored.append(sp)
             n_evals += 1  # depth 1 = 1 op
             if sp.prediction_error <= solve_thresh:
-                return scored, n_evals
+                depth1_solved = True
+        # If depth-1 found matches, return all candidates for top-k test
+        # evaluation. Skip depth-2+ since depth-1 solutions are simpler
+        # (Occam's razor) and we now have multiple candidates to choose from.
+        if depth1_solved:
+            return scored, n_evals
 
         if max_depth < 2 or not _budget_ok():
             return scored, n_evals

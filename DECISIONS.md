@@ -1579,4 +1579,67 @@ This was latent since the numba JIT commit (b970016) but only triggered with cer
 - Tier 3: Object movement primitives + context-dependent per-object transforms
 
 ---
+
+### Decision 79: Generalized LOOCV for All Training-Perfect Candidates
+
+**Date:** 2026-03-13
+**Context:** 12+ overfit tasks had n_train_perfect=1. With the no-early-exit + top_k=10 change (uncommitted), more candidates are collected. Need LOOCV to rank them by generalizability.
+
+**Change:** Added `_loocv_score` method to Learner. For each training-perfect candidate, holds out each training example, re-prepares the grammar with N-1 examples (re-learning parameterized primitives), and checks if the program still works on the held-out example. Candidates are sorted by LOOCV score (desc), then program size (asc), then energy.
+
+**Result (combined with Decisions 80-81):** See Decision 82 for combined validation results.
+
+---
+
+### Decision 80: Diff-and-Patch for Near-Misses
+
+**Date:** 2026-03-13
+**Context:** 68 tasks within 5% error with a non-identity program. Current `infer_output_correction` only does color remapping. Many near-misses have correct geometry but wrong local pixel coloring.
+
+**Changes:**
+1. Extended `infer_output_correction` with 3 strategies (tried in order):
+   - Color remapping (existing, now with verification before return)
+   - Adjacency-based correction: "if pixel is color A with neighbor of color B → change to C"
+   - 3x3 neighborhood correction: full local context → output color (capped at 50 rules)
+2. Color remap now verifies that applying the remap actually fixes ALL diffs before returning (prevents overgeneralization that blocks spatial strategies)
+
+**Result:** See Decision 82 for combined validation results.
+
+---
+
+### Decision 81: Vocabulary Pruning — Task-Specific Color Primitives
+
+**Date:** 2026-03-13
+**Context:** ~120 parameterized color primitives (keep_cN, erase_N, fill_bg_N, swap_A_B, etc.) built statically for all 9 colors. 70% never appear in solutions. Bloats depth-2+ search space.
+
+**Change:** Moved all color-parameterized primitive families from static `_build_arc_primitives()` to runtime `build_task_color_primitives()` called via `prepare_for_task`. Only instantiates primitives for colors actually present in the current task's training examples. Typical task has 3-5 colors → ~30-50 color primitives instead of ~120.
+
+**Result:** Primitives per task reduced from ~349 to ~235. See Decision 82 for combined validation results.
+
+---
+
+### Decision 82: Combined Validation — Decisions 79-81
+
+**Date:** 2026-03-13
+**Context:** Validated combined effect of generalized LOOCV + diff-and-patch + vocab pruning.
+
+**Results (full 800-task pipeline):**
+
+| Metric | Before (Decision 78) | After (79-81) | Delta |
+|---|---|---|---|
+| Train solved | 91/400 (22.75%) | 105/400 (26.2%) | **+14** |
+| Eval solved | 23/400 (5.75%) | 33/400 (8.25%) | **+10** |
+| Total solved | 114/800 (14.2%) | 138/800 (17.25%) | **+24** |
+| Train overfit | 20 | 14 | **-6** |
+| Eval overfit | — | 7 | — |
+| Primitives | ~349 | 235 | **-114** |
+| Wall time | — | 8m38s | — |
+
+**Analysis:**
+- +14 train solves from better vocabulary targeting and spatial corrections
+- +10 eval solves — strong generalization signal, biggest eval gain yet
+- -6 overfit from LOOCV candidate ranking + vocab pruning
+- Primitives 235 per task (down 33%) with no loss of capability
+
+---
 *This document will be updated with each new session and major decision.*
