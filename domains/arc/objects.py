@@ -514,6 +514,7 @@ def _try_conditional_recolor(
         ("by_has_hole", _learn_recolor_by_has_hole),
     ]
 
+    n = len(task_examples)
     for strat_name, learn_fn in strategies:
         rule = learn_fn(task_examples)
         if rule is None:
@@ -531,8 +532,33 @@ def _try_conditional_recolor(
             except Exception:
                 all_match = False
                 break
-        if all_match:
-            return (f"per_object_recolor({strat_name})", fn)
+        if not all_match:
+            continue
+
+        # LOOCV: for each example, learn from all-except-i, verify on i.
+        # This catches rules that memorize training-specific properties
+        # (e.g. shapes/sizes that don't appear in test).
+        if n >= 2:
+            loocv_pass = True
+            for hold_idx in range(n):
+                loo_examples = task_examples[:hold_idx] + task_examples[hold_idx + 1:]
+                loo_rule = learn_fn(loo_examples)
+                if loo_rule is None:
+                    loocv_pass = False
+                    break
+                loo_fn = _make_conditional_recolor_fn(loo_rule, strat_name)
+                held_inp, held_exp = task_examples[hold_idx]
+                try:
+                    if loo_fn(held_inp) != held_exp:
+                        loocv_pass = False
+                        break
+                except Exception:
+                    loocv_pass = False
+                    break
+            if not loocv_pass:
+                continue
+
+        return (f"per_object_recolor({strat_name})", fn)
 
     return None
 
