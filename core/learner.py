@@ -223,14 +223,38 @@ class Learner:
             """Check whether we've exceeded the per-task eval budget."""
             return eval_budget <= 0 or n_evals < eval_budget
 
-        def _record_solve():
+        def _record_solve(sp: Optional[ScoredProgram] = None):
             """Record solution in memory if record=True."""
-            if record and best_so_far:
+            prog = sp or best_so_far
+            if record and prog:
                 self.memory.record_episode(
                     task.task_id, task.train_examples,
-                    best_so_far.program, best_so_far.energy)
-                self.memory.store_solution(task.task_id, best_so_far)
-                self._credit_library_usage(best_so_far.program)
+                    prog.program, prog.energy)
+                self.memory.store_solution(task.task_id, prog)
+                self._credit_library_usage(prog.program)
+
+        def _make_solved_result(phase_name: str, gens: int = 0, deduped: int = 0) -> WakeResult:
+            """Build WakeResult for a training-solved task using top-k test evaluation."""
+            nonlocal best_so_far
+            top_sp, te, ts, n_perf, s_rank = self._evaluate_top_k_on_test(
+                enum_candidates, task, top_k=3)
+            # Use the test-best candidate as the reported best
+            if top_sp is not None and top_sp is not best_so_far:
+                best_so_far = top_sp
+            best_so_far.task_id = task.task_id
+            _record_solve(best_so_far)
+            front = self._extract_pareto_front(pareto)
+            wall = time.time() - t0
+            logger.info(
+                f"  [wake] Task {task.task_id}: SOLVED by {phase_name}, "
+                f"energy={best_so_far.energy:.6f}, evals={n_evals}, "
+                f"candidates={n_perf}, time={wall:.1f}s")
+            return WakeResult(
+                task_id=task.task_id, train_solved=True, best=best_so_far,
+                generations_used=gens, evaluations=n_evals, wall_time=wall,
+                pareto_front=front, dedup_count=deduped,
+                test_error=te, test_solved=ts,
+                n_train_perfect=n_perf, solving_rank=s_rank)
 
         # --- Phase 1: Exhaustive enumeration ---
         t_phase = time.time()
@@ -246,19 +270,7 @@ class Learner:
 
             # Early exit if enumeration found a perfect solve
             if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                best_so_far.task_id = task.task_id
-                _record_solve()
-                test_error, test_solved = self._evaluate_on_test(best_so_far, task)
-                front = self._extract_pareto_front(pareto)
-                wall = time.time() - t0
-                logger.info(
-                    f"  [wake] Task {task.task_id}: SOLVED by enumeration, "
-                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
-                return WakeResult(
-                    task_id=task.task_id, train_solved=True, best=best_so_far,
-                    generations_used=0, evaluations=n_evals, wall_time=wall,
-                    pareto_front=front, dedup_count=0,
-                    test_error=test_error, test_solved=test_solved)
+                return _make_solved_result("enumeration")
 
         logger.debug(f"  [wake] Phase 1 enumeration: {time.time()-t_phase:.2f}s, {n_evals} evals")
 
@@ -278,19 +290,7 @@ class Learner:
             enum_candidates.append(sp)
 
             if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                best_so_far.task_id = task.task_id
-                _record_solve()
-                test_error, test_solved = self._evaluate_on_test(best_so_far, task)
-                front = self._extract_pareto_front(pareto)
-                wall = time.time() - t0
-                logger.info(
-                    f"  [wake] Task {task.task_id}: SOLVED by object decomposition, "
-                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
-                return WakeResult(
-                    task_id=task.task_id, train_solved=True, best=best_so_far,
-                    generations_used=0, evaluations=n_evals, wall_time=wall,
-                    pareto_front=front, dedup_count=0,
-                    test_error=test_error, test_solved=test_solved)
+                return _make_solved_result("object decomposition")
 
         logger.debug(f"  [wake] Phase 1.1 object decomp: {time.time()-t_phase:.2f}s")
 
@@ -310,19 +310,7 @@ class Learner:
                 enum_candidates.append(decomp_result)
 
                 if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                    best_so_far.task_id = task.task_id
-                    _record_solve()
-                    test_error, test_solved = self._evaluate_on_test(best_so_far, task)
-                    front = self._extract_pareto_front(pareto)
-                    wall = time.time() - t0
-                    logger.info(
-                        f"  [wake] Task {task.task_id}: SOLVED by grammar decomposition, "
-                        f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
-                    return WakeResult(
-                        task_id=task.task_id, train_solved=True, best=best_so_far,
-                        generations_used=0, evaluations=n_evals, wall_time=wall,
-                        pareto_front=front, dedup_count=0,
-                        test_error=test_error, test_solved=test_solved)
+                    return _make_solved_result("grammar decomposition")
 
         logger.debug(f"  [wake] Phase 1.15 grammar decomp: {time.time()-t_phase:.2f}s")
 
@@ -343,19 +331,7 @@ class Learner:
                 enum_candidates.append(cond_result)
 
                 if best_so_far.prediction_error <= cfg.solve_threshold:
-                    best_so_far.task_id = task.task_id
-                    _record_solve()
-                    test_error, test_solved = self._evaluate_on_test(best_so_far, task)
-                    front = self._extract_pareto_front(pareto)
-                    wall = time.time() - t0
-                    logger.info(
-                        f"  [wake] Task {task.task_id}: SOLVED by conditional, "
-                        f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
-                    return WakeResult(
-                        task_id=task.task_id, train_solved=True, best=best_so_far,
-                        generations_used=0, evaluations=n_evals, wall_time=wall,
-                        pareto_front=front, dedup_count=0,
-                        test_error=test_error, test_solved=test_solved)
+                    return _make_solved_result("conditional")
 
         logger.debug(f"  [wake] Phase 1.25 conditional: {time.time()-t_phase:.2f}s")
 
@@ -375,19 +351,7 @@ class Learner:
 
             # Check if refinement found a perfect solve
             if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                best_so_far.task_id = task.task_id
-                _record_solve()
-                test_error, test_solved = self._evaluate_on_test(best_so_far, task)
-                front = self._extract_pareto_front(pareto)
-                wall = time.time() - t0
-                logger.info(
-                    f"  [wake] Task {task.task_id}: SOLVED by near-miss refinement, "
-                    f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
-                return WakeResult(
-                    task_id=task.task_id, train_solved=True, best=best_so_far,
-                    generations_used=0, evaluations=n_evals, wall_time=wall,
-                    pareto_front=front, dedup_count=0,
-                    test_error=test_error, test_solved=test_solved)
+                return _make_solved_result("near-miss refinement")
 
         logger.debug(f"  [wake] Phase 1.5 near-miss refine: {time.time()-t_phase:.2f}s")
 
@@ -406,19 +370,7 @@ class Learner:
                 enum_candidates.append(fp_result)
 
                 if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                    best_so_far.task_id = task.task_id
-                    _record_solve()
-                    test_error, test_solved = self._evaluate_on_test(best_so_far, task)
-                    front = self._extract_pareto_front(pareto)
-                    wall = time.time() - t0
-                    logger.info(
-                        f"  [wake] Task {task.task_id}: SOLVED by fixed-point iteration, "
-                        f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
-                    return WakeResult(
-                        task_id=task.task_id, train_solved=True, best=best_so_far,
-                        generations_used=0, evaluations=n_evals, wall_time=wall,
-                        pareto_front=front, dedup_count=0,
-                        test_error=test_error, test_solved=test_solved)
+                    return _make_solved_result("fixed-point iteration")
 
         logger.debug(f"  [wake] Phase 1.6 fixed-point: {time.time()-t_phase:.2f}s")
 
@@ -436,19 +388,7 @@ class Learner:
                     best_so_far = color_fix_result
 
                 if best_so_far.prediction_error <= cfg.solve_threshold:
-                    best_so_far.task_id = task.task_id
-                    _record_solve()
-                    test_error, test_solved = self._evaluate_on_test(best_so_far, task)
-                    front = self._extract_pareto_front(pareto)
-                    wall = time.time() - t0
-                    logger.info(
-                        f"  [wake] Task {task.task_id}: SOLVED by color fix, "
-                        f"energy={best_so_far.energy:.6f}, evals={n_evals}, time={wall:.1f}s")
-                    return WakeResult(
-                        task_id=task.task_id, train_solved=True, best=best_so_far,
-                        generations_used=0, evaluations=n_evals, wall_time=wall,
-                        pareto_front=front, dedup_count=0,
-                        test_error=test_error, test_solved=test_solved)
+                    return _make_solved_result("color fix")
 
         logger.debug(f"  [wake] Phase 1.75 color fix: {time.time()-t_phase:.2f}s")
 
@@ -557,6 +497,15 @@ class Learner:
 
         # Record the episode and store solution if solved
         solved = best_so_far is not None and best_so_far.prediction_error <= self.search_cfg.solve_threshold
+
+        # Include beam search results in the candidate pool for top-k
+        if scored:
+            enum_candidates.extend(scored)
+
+        if solved:
+            return _make_solved_result("beam search", gens=gens_used, deduped=total_deduped)
+
+        # Not solved — record best effort
         if best_so_far:
             best_so_far.task_id = task.task_id
             if record:
@@ -566,17 +515,6 @@ class Learner:
                     best_so_far.program,
                     best_so_far.energy,
                 )
-                if solved:
-                    self.memory.store_solution(task.task_id, best_so_far)
-                    self._credit_library_usage(best_so_far.program)
-
-        # Evaluate on held-out test examples if available
-        # Only evaluate test if training was solved — otherwise test_solved
-        # can be True when train is not, which is misleading.
-        if solved:
-            test_error, test_solved = self._evaluate_on_test(best_so_far, task)
-        else:
-            test_error, test_solved = None, None
 
         front = self._extract_pareto_front(pareto)
         wall = time.time() - t0
@@ -595,8 +533,6 @@ class Learner:
             wall_time=wall,
             pareto_front=front,
             dedup_count=total_deduped,
-            test_error=test_error,
-            test_solved=test_solved,
         )
 
     def _evaluate_on_test(
@@ -624,6 +560,58 @@ class Learner:
         avg_error = total_error / n if n > 0 else total_error
         test_solved = avg_error <= self.search_cfg.solve_threshold
         return avg_error, test_solved
+
+    def _evaluate_top_k_on_test(
+        self, candidates: list[ScoredProgram], task: Task, top_k: int = 3
+    ) -> tuple[Optional[ScoredProgram], Optional[float], Optional[bool], int, Optional[int]]:
+        """Try top-k training-perfect candidates on test, return best.
+
+        Collects all candidates with prediction_error <= threshold, deduplicates
+        by program representation, sorts by program size, and tries up to top_k
+        on test. Returns the first test-passing candidate, or the best-scoring
+        one if none pass.
+
+        Returns: (best_program, test_error, test_solved, n_train_perfect, solving_rank)
+        """
+        threshold = self.search_cfg.solve_threshold
+        if not task.test_inputs or not task.test_outputs:
+            return None, None, None, 0, None
+
+        # Collect training-perfect candidates, deduplicate by program repr
+        seen: set[str] = set()
+        perfect: list[ScoredProgram] = []
+        for sp in candidates:
+            if sp.prediction_error <= threshold:
+                key = repr(sp.program)
+                if key not in seen:
+                    seen.add(key)
+                    perfect.append(sp)
+
+        if not perfect:
+            return None, None, None, 0, None
+
+        # Sort by program size (Occam's razor), then energy as tiebreaker
+        perfect.sort(key=lambda sp: (sp.program.size, sp.energy))
+        n_train_perfect = len(perfect)
+
+        best_test_error = None
+        best_test_sp = None
+        solving_rank = None
+
+        for rank, sp in enumerate(perfect[:top_k]):
+            test_error, test_solved = self._evaluate_on_test(sp, task)
+            if test_error is not None and (best_test_error is None or test_error < best_test_error):
+                best_test_error = test_error
+                best_test_sp = sp
+            if test_solved:
+                solving_rank = rank
+                return sp, test_error, True, n_train_perfect, rank
+
+        # No candidate passed test — return the one with best test error
+        if best_test_sp is not None:
+            return best_test_sp, best_test_error, False, n_train_perfect, None
+
+        return perfect[0], None, None, n_train_perfect, None
 
     # -------------------------------------------------------------------------
     # SLEEP PHASE: analyze → extract → compress → add to library
