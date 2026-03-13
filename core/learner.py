@@ -1432,6 +1432,10 @@ class Learner:
             )
             sp = self._evaluate_program(fixed_prog, task)
 
+            # Only accept if the correction actually reduces error
+            if sp.prediction_error >= nm.prediction_error:
+                continue
+
             if sp.prediction_error <= solve_thresh:
                 return sp
             if best_fix is None or sp.energy < best_fix.energy:

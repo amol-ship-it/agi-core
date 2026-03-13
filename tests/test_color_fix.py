@@ -90,3 +90,95 @@ class TestInferOutputCorrection:
         ]
         correction = self.env.infer_output_correction(outputs, expected)
         assert correction is None
+
+    def test_color_swap_detected(self):
+        """A↔B swap should be detected even when both colors appear correctly.
+
+        The old safety check rejected A→B if there were correct A pixels.
+        For swaps, the net effect is correct — every A→B is paired with B→A.
+        """
+        # Grid where colors 2 and 7 are swapped relative to expected
+        outputs = [
+            [[0, 2, 0], [7, 0, 7], [0, 2, 0]],
+        ]
+        expected = [
+            [[0, 7, 0], [2, 0, 2], [0, 7, 0]],
+        ]
+        correction = self.env.infer_output_correction(outputs, expected)
+        assert correction is not None
+        # The correction should swap 2↔7
+        from domains.arc.primitives import _PRIM_MAP
+        prim = _PRIM_MAP[correction.root]
+        result = prim.fn(outputs[0])
+        assert result == expected[0]
+
+    def test_color_swap_multi_example(self):
+        """Swap must be consistent across multiple examples."""
+        outputs = [
+            [[2, 7], [7, 2]],
+            [[0, 2, 7], [2, 0, 7]],
+        ]
+        expected = [
+            [[7, 2], [2, 7]],
+            [[0, 7, 2], [7, 0, 2]],
+        ]
+        correction = self.env.infer_output_correction(outputs, expected)
+        assert correction is not None
+        from domains.arc.primitives import _PRIM_MAP
+        prim = _PRIM_MAP[correction.root]
+        # Verify on both examples
+        assert prim.fn(outputs[0]) == expected[0]
+        assert prim.fn(outputs[1]) == expected[1]
+
+    def test_swap_with_correct_pixels_of_both_colors(self):
+        """Swap A↔B when both colors also appear in correct positions.
+
+        infer_output_correction returns candidate corrections (no safety
+        heuristic). The caller (_try_color_fix in learner) evaluates and
+        only accepts corrections that reduce error.
+
+        This test verifies infer_output_correction returns a correction
+        for consistent transitions, even when a global remap would be
+        destructive. The learner is responsible for trial-evaluating.
+        """
+        # Two pixels have 0↔5 swapped. Many correct pixels of both colors.
+        outputs = [
+            [[5, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 5, 0, 0],
+             [5, 0, 0, 5, 0],
+             [0, 0, 0, 0, 5]],
+        ]
+        expected = [
+            [[5, 0, 0, 0, 0],
+             [0, 0, 0, 5, 0],
+             [0, 0, 5, 0, 0],
+             [0, 0, 0, 5, 0],
+             [0, 0, 0, 0, 5]],
+        ]
+        correction = self.env.infer_output_correction(outputs, expected)
+        # With relaxed safety, a correction should be returned
+        # (the caller evaluates whether it actually helps)
+        assert correction is not None, (
+            "infer_output_correction should return a candidate for "
+            "consistent color transitions")
+
+    def test_remap_with_few_wrong_pixels(self):
+        """Remap for a single wrong pixel still returns a candidate.
+
+        The correction may be destructive (global remap), but that's OK:
+        the learner's _try_color_fix evaluates and rejects bad corrections.
+        """
+        outputs = [
+            [[3, 3, 3, 0],
+             [3, 0, 3, 0],
+             [0, 0, 0, 0]],
+        ]
+        expected = [
+            [[3, 3, 3, 0],
+             [3, 0, 5, 0],
+             [0, 0, 0, 0]],
+        ]
+        correction = self.env.infer_output_correction(outputs, expected)
+        # A candidate should be returned (consistent 3→5 transition)
+        assert correction is not None
