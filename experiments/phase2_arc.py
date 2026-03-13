@@ -184,14 +184,13 @@ def _run_train(args, resolved, max_tasks):
 
 
 def _try_generate_viz(results_json_path: str) -> None:
-    """Generate HTML visualization (index + per-task pages) from results JSON."""
+    """Generate HTML visualization from results JSON."""
     if not results_json_path or not os.path.exists(results_json_path):
         return
     try:
         from .visualize_results import generate_html
-        viz_dir = results_json_path.replace(".json", "_viz")
-        generate_html(results_json_path, viz_dir)
-        print(f"  Visualization:    {viz_dir}/")
+        output_base = os.path.splitext(results_json_path)[0]
+        generate_html(results_json_path, output_base)
     except Exception as e:
         print(f"  (visualization skipped: {e})")
 
