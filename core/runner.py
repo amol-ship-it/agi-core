@@ -496,6 +496,10 @@ class ExperimentConfig:
     # Shared timestamp (for pipeline mode — reuse across train+eval)
     timestamp: str = ""
 
+    # Suppress result/metric file output (for pipeline mode where the
+    # pipeline script writes its own combined output files)
+    suppress_files: bool = False
+
 
 def resolve_from_preset(args, preset: dict) -> dict:
     """Resolve argument values: explicit args override preset defaults."""
@@ -537,7 +541,7 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
     install_signal_handler()
 
     run_timestamp = cfg.timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
-    prefix = f"{run_timestamp}_{cfg.domain_tag}"
+    prefix = f"{cfg.domain_tag}_{run_timestamp}"
 
     runs_dir = cfg.runs_dir
     os.makedirs(runs_dir, exist_ok=True)
@@ -618,17 +622,18 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     else:
         print(f"  Compute cap: unlimited")
 
-    print()
-    hline("─")
-    print("  Output files (available now for tail -f):")
-    hline("─")
-    print(f"  Results (live):   {jsonl_path}")
-    print(f"  Results (final):  {results_path}")
-    print(f"  Metrics:          {metrics_json_path}")
-    print(f"  Library:          {library_path}")
-    if not cfg.no_log:
-        print(f"  Console log:      {log_path}")
-    print()
+    if not cfg.suppress_files:
+        print()
+        hline("─")
+        print("  Output files (available now for tail -f):")
+        hline("─")
+        print(f"  Results (live):   {jsonl_path}")
+        print(f"  Results (final):  {results_path}")
+        print(f"  Metrics:          {metrics_json_path}")
+        print(f"  Library:          {library_path}")
+        if not cfg.no_log:
+            print(f"  Console log:      {log_path}")
+        print()
 
     if not tasks:
         print("  ERROR: No tasks loaded.")
@@ -914,26 +919,29 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         ],
     }
 
-    with open(results_path, "w") as f:
-        json.dump(results_data, f, indent=2)
+    if not cfg.suppress_files:
+        with open(results_path, "w") as f:
+            json.dump(results_data, f, indent=2)
 
-    save_metrics_json(metrics, metrics_json_path)
-    save_metrics_csv(metrics, metrics_csv_path)
+        save_metrics_json(metrics, metrics_json_path)
+        save_metrics_csv(metrics, metrics_csv_path)
 
-    # Save culture file (proper serialization with program reconstruction)
+        # Save legacy library format
+        memory.save(library_path)
+
+    # Always save culture file (needed for pipeline eval transfer)
     memory.save_culture(culture_path)
-    # Also save legacy format
-    memory.save(library_path)
 
     print()
     hline("─")
     print("  Artifacts:")
     hline("─")
-    print(f"  Results (live):   {jsonl_path}")
-    print(f"  Results (final):  {results_path}")
-    print(f"  Metrics JSON:     {metrics_json_path}")
-    print(f"  Metrics CSV:      {metrics_csv_path}")
-    print(f"  Library:          {library_path}")
+    if not cfg.suppress_files:
+        print(f"  Results (live):   {jsonl_path}")
+        print(f"  Results (final):  {results_path}")
+        print(f"  Metrics JSON:     {metrics_json_path}")
+        print(f"  Metrics CSV:      {metrics_csv_path}")
+        print(f"  Library:          {library_path}")
     print(f"  Culture:          {culture_path}")
     if not cfg.no_log:
         print(f"  Console log:      {log_path}")

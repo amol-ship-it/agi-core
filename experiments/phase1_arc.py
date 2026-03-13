@@ -1,5 +1,5 @@
 """
-Phase 1: ARC-AGI-1 Training & Evaluation.
+ARC-AGI-1 Training & Evaluation.
 
 Thin wrapper around the generic core runner. Provides:
 - ARC dataset loading (auto-detects or uses built-in samples)
@@ -94,7 +94,8 @@ def _load_tasks(split: str, data_dir: str | None, max_tasks: int):
 def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
                  tasks, culture_path: str = "",
                  save_culture: str = "",
-                 timestamp: str = "") -> ExperimentConfig:
+                 timestamp: str = "",
+                 suppress_files: bool = False) -> ExperimentConfig:
     """Build an ExperimentConfig with ARC-specific defaults."""
 
     # Compounding mode: reduce exhaustive depth to force library reliance.
@@ -147,6 +148,7 @@ def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
         task_ids=getattr(args, "task_ids", ""),
         mode=args.mode,
         timestamp=timestamp,
+        suppress_files=suppress_files,
     )
 
 
@@ -156,7 +158,7 @@ def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
 
 def main():
     parser = make_parser(
-        description="Phase 1: ARC-AGI-1 Curriculum Training & Evaluation",
+        description="ARC-AGI-1 Curriculum Training & Evaluation",
         domain_name="phase1_arc",
     )
     parser.add_argument("--data-dir", type=str, default=None,
@@ -197,8 +199,8 @@ def _run_train(args, resolved, max_tasks):
     """Run training only."""
     tasks = _load_tasks("training", args.data_dir, max_tasks)
     cfg = _make_config(args, resolved, max_tasks,
-                       title="PHASE 1: ARC-AGI-1 TRAINING",
-                       domain_tag="phase1_train",
+                       title="ARC-AGI-1 TRAINING",
+                       domain_tag="phase1_arc_train",
                        tasks=tasks,
                        save_culture=args.save_culture)
     result = run_experiment(cfg)
@@ -209,8 +211,8 @@ def _run_eval(args, resolved, max_tasks):
     """Run evaluation only with a pre-trained culture file."""
     tasks = _load_tasks("evaluation", args.data_dir, max_tasks)
     cfg = _make_config(args, resolved, max_tasks,
-                       title="PHASE 1: ARC-AGI-1 EVALUATION",
-                       domain_tag="phase1_eval",
+                       title="ARC-AGI-1 EVALUATION",
+                       domain_tag="phase1_arc_eval",
                        tasks=tasks,
                        culture_path=args.culture)
     run_experiment(cfg)
@@ -226,34 +228,36 @@ def _run_pipeline(args, resolved, max_tasks):
     print("=" * 72)
     print()
 
-    # Step 1: Train
+    # Step 1: Train (suppress individual files — pipeline writes combined)
     print("  STEP 1/2: Training...")
     print()
     train_tasks = _load_tasks("training", args.data_dir, max_tasks)
     train_cfg = _make_config(args, resolved, max_tasks,
-                             title="PHASE 1: ARC-AGI-1 TRAINING",
-                             domain_tag="phase1_train",
+                             title="ARC-AGI-1 TRAINING",
+                             domain_tag="phase1_arc_train",
                              tasks=train_tasks,
-                             timestamp=shared_ts)
+                             timestamp=shared_ts,
+                             suppress_files=True)
     train_result = run_experiment(train_cfg)
     print(f"\n  Culture file: {train_result.culture_path}")
 
-    # Step 2: Evaluate using the culture file produced by training
+    # Step 2: Evaluate (suppress individual files)
     print()
     print("  STEP 2/2: Evaluating with learned culture...")
     print()
     eval_tasks = _load_tasks("evaluation", args.data_dir, max_tasks)
     eval_cfg = _make_config(args, resolved, max_tasks,
-                            title="PHASE 1: ARC-AGI-1 EVALUATION",
-                            domain_tag="phase1_eval",
+                            title="ARC-AGI-1 EVALUATION",
+                            domain_tag="phase1_arc_eval",
                             tasks=eval_tasks,
                             culture_path=train_result.culture_path,
-                            timestamp=shared_ts)
+                            timestamp=shared_ts,
+                            suppress_files=True)
     eval_result = run_experiment(eval_cfg)
 
     # --- Save combined pipeline output files ---
     runs_dir = args.runs_dir
-    pipeline_prefix = f"{shared_ts}_phase1_pipeline"
+    pipeline_prefix = f"phase1_arc_{shared_ts}"
     pipeline_json_path = os.path.join(runs_dir, f"{pipeline_prefix}.json")
     pipeline_jsonl_path = os.path.join(runs_dir, f"{pipeline_prefix}.jsonl")
 
@@ -277,8 +281,8 @@ def _run_pipeline(args, resolved, max_tasks):
         "meta": {
             "timestamp": shared_ts,
             "datetime": datetime.now().isoformat(),
-            "title": "PHASE 1: ARC-AGI-1 FULL PIPELINE (Train → Eval)",
-            "domain": "phase1_pipeline",
+            "title": "ARC-AGI-1 FULL PIPELINE (Train → Eval)",
+            "domain": "phase1_arc",
             "mode": train_meta.get("mode", args.mode),
             "rounds": train_meta.get("rounds", resolved["rounds"]),
             "beam_width": train_meta.get("beam_width", resolved["beam_width"]),
@@ -392,8 +396,6 @@ def _run_pipeline(args, resolved, max_tasks):
     print("  Pipeline artifacts:")
     print(f"    Pipeline JSON:     {pipeline_json_path}")
     print(f"    Pipeline JSONL:    {pipeline_jsonl_path}")
-    print(f"    Train results:     {train_result.results_path}")
-    print(f"    Eval results:      {eval_result.results_path}")
     print(f"    Culture file:      {train_result.culture_path}")
 
     print()

@@ -401,15 +401,16 @@ def _assign_color_roles(grid: Grid) -> dict[int, str]:
 def _learn_structural_recolor(task: Task) -> list[tuple[str, str]]:
     """Learn structural role-to-role recolor mappings from training examples.
 
-    Analyzes which roles in the input map to which roles in the output.
-    Only learns mappings that are consistent across ALL training examples.
+    Key fix: uses INPUT roles for BOTH source and target colors. The output
+    color is looked up in the INPUT's role map. This avoids role drift caused
+    by the transformation itself changing frequency distributions.
 
     Returns list of (src_role, dst_role) pairs that are consistent.
     """
     if not task.train_examples:
         return []
 
-    # Collect per-example role transitions
+    # Collect per-example role transitions (using input roles for both)
     all_transitions: list[dict[str, Counter]] = []
 
     for inp, out in task.train_examples:
@@ -419,14 +420,14 @@ def _learn_structural_recolor(task: Task) -> list[tuple[str, str]]:
             continue  # size-changing tasks don't apply
 
         inp_roles = _assign_color_roles(inp)
-        out_roles = _assign_color_roles(out)
 
         transitions: dict[str, Counter] = {}
         for r in range(len(inp)):
             for c in range(len(inp[0])):
                 if inp[r][c] != out[r][c]:
                     src_role = inp_roles.get(inp[r][c])
-                    dst_role = out_roles.get(out[r][c])
+                    # Use INPUT roles for target color too — avoids role drift
+                    dst_role = inp_roles.get(out[r][c])
                     if src_role and dst_role:
                         if src_role not in transitions:
                             transitions[src_role] = Counter()
@@ -439,12 +440,10 @@ def _learn_structural_recolor(task: Task) -> list[tuple[str, str]]:
         return []
 
     # Find role transitions consistent across all examples
-    # Get the dominant mapping from each example, check consistency
     consistent = []
     first = all_transitions[0]
     for src_role, dst_counts in first.items():
         dst_role = dst_counts.most_common(1)[0][0]
-        # Check if this mapping appears in all examples
         all_agree = True
         for ex_trans in all_transitions[1:]:
             if src_role not in ex_trans:

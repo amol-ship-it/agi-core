@@ -3905,6 +3905,107 @@ def erase_2nd_color(grid: Grid) -> Grid:
     return [[bg if v == accent else v for v in row] for row in grid]
 
 
+def erase_rare(grid: Grid) -> Grid:
+    """Erase (set to bg) the rarest non-bg color."""
+    if not grid or not grid[0]:
+        return grid
+    flat = [v for row in grid for v in row]
+    counts = Counter(flat)
+    bg = counts.most_common(1)[0][0]
+    non_bg = [(v, c) for v, c in counts.items() if v != bg]
+    if not non_bg:
+        return grid
+    rare = min(non_bg, key=lambda x: x[1])[0]
+    return [[bg if v == rare else v for v in row] for row in grid]
+
+
+def erase_3rd_color(grid: Grid) -> Grid:
+    """Erase (set to bg) the 3rd most common non-bg color."""
+    if not grid or not grid[0]:
+        return grid
+    flat = [v for row in grid for v in row]
+    counts = Counter(flat)
+    bg = counts.most_common(1)[0][0]
+    non_bg = [v for v, _ in counts.most_common() if v != bg]
+    if len(non_bg) < 3:
+        return grid
+    target = non_bg[2]
+    return [[bg if v == target else v for v in row] for row in grid]
+
+
+def fill_hole_by_neighbor(grid: Grid) -> Grid:
+    """Fill zero (bg) cells with their most common non-bg 4-neighbor color.
+
+    Useful for tasks where holes should be filled with the surrounding color.
+    Iterates once — for propagation, use with apply_until_stable.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                continue
+            # Count non-bg 4-neighbors
+            neighbor_counts: dict[int, int] = {}
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] != 0:
+                    v = grid[nr][nc]
+                    neighbor_counts[v] = neighbor_counts.get(v, 0) + 1
+            if neighbor_counts:
+                result[r][c] = max(neighbor_counts, key=lambda k: neighbor_counts[k])
+    return result
+
+
+def fill_hole_dominant(grid: Grid) -> Grid:
+    """Fill zero (bg) cells that are enclosed by non-bg with the dominant color.
+
+    Unlike fill_enclosed which uses a hard-coded color, this uses the most
+    common non-bg color in the grid.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    flat = [v for row in grid for v in row]
+    counts = Counter(flat)
+    bg = counts.most_common(1)[0][0]
+    non_bg = [(v, c) for v, c in counts.items() if v != bg]
+    if not non_bg:
+        return grid
+    dominant = max(non_bg, key=lambda x: x[1])[0]
+
+    # BFS from boundary to find non-enclosed bg
+    reachable = set()
+    queue = []
+    for r in range(h):
+        for c in [0, w - 1]:
+            if grid[r][c] == bg and (r, c) not in reachable:
+                reachable.add((r, c))
+                queue.append((r, c))
+    for c in range(w):
+        for r in [0, h - 1]:
+            if grid[r][c] == bg and (r, c) not in reachable:
+                reachable.add((r, c))
+                queue.append((r, c))
+    while queue:
+        cr, cc = queue.pop()
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = cr + dr, cc + dc
+            if (0 <= nr < h and 0 <= nc < w
+                    and (nr, nc) not in reachable and grid[nr][nc] == bg):
+                reachable.add((nr, nc))
+                queue.append((nr, nc))
+
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == bg and (r, c) not in reachable:
+                result[r][c] = dominant
+    return result
+
+
 def recolor_bg_enclosed_by_dominant(grid: Grid) -> Grid:
     """Fill enclosed bg regions with the dominant non-bg color."""
     if not grid or not grid[0]:
