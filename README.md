@@ -106,26 +106,23 @@ The Zork domain is fully self-contained (custom game engine, no external depende
 Every run automatically saves timestamped files. Paths are printed at the start so you can monitor progress live:
 
 ```
-runs/20260311_164939_phase1_train.log          — full console output (tee'd)
-runs/20260311_164939_phase1_train.jsonl        — live per-task results (tail -f friendly)
-runs/20260311_164939_phase1_train.json         — final results: meta + summary + per-task + library
-runs/20260311_164939_phase1_train_culture.json — learned culture snapshot (for eval / cross-run transfer)
-runs/20260311_164939_phase1_train_library.json — learned abstractions (legacy format)
-runs/20260311_164939_phase1_train_metrics.json — compounding curve per round
-runs/20260311_164939_phase1_train_metrics.csv  — same, for spreadsheets
+runs/phase1_arc_20260311_164939.json           — combined: parameters + train/eval summaries + all tasks
+runs/phase1_arc_20260311_164939.jsonl          — all task records (train + eval) with phase tags
+runs/phase1_arc_20260311_164939_culture.json   — learned culture snapshot (for eval / cross-run transfer)
 ```
 
-Pipeline mode (default) also saves combined files with a summary printed at the end:
+In standalone mode (`--train-only` or `--eval-only`), each phase writes its own files:
 
 ```
-runs/20260311_164939_phase1_pipeline.json      — combined: parameters + train/eval summaries + all tasks
-runs/20260311_164939_phase1_pipeline.jsonl     — all task records (train + eval) with phase tags
+runs/phase1_arc_train_20260311_164939.log      — full console output (tee'd)
+runs/phase1_arc_train_20260311_164939.jsonl    — live per-task results (tail -f friendly)
+runs/phase1_arc_train_20260311_164939.json     — final results: meta + summary + per-task + library
 ```
 
 Monitor a running benchmark in another terminal:
 ```bash
-tail -f runs/*_phase1_train.jsonl    # watch task results as they complete
-tail -f runs/*_phase1_train.log      # watch full console output
+tail -f runs/phase1_arc_*.jsonl    # watch task results as they complete
+tail -f runs/phase1_arc_*.log      # watch full console output
 ```
 
 ### Verifying individual solves

@@ -107,7 +107,7 @@ def _make_config(args, resolved, max_tasks, *, title: str, domain_tag: str,
     rounds = resolved["rounds"]
     sequential = args.sequential_compounding
     min_occurrences = 2
-    energy_beta = 0.01
+    energy_beta = 0.002
 
     if compounding:
         exhaustive_depth = min(exhaustive_depth, 2)  # cap at 2 to force library
