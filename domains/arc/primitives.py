@@ -345,8 +345,59 @@ def _jit_denoise_5x5(arr, result):
 
 
 @nb.njit(cache=True)
+def _jit_try_tile(arr, h, w, th, tw):
+    """Try a specific tile size. Returns (success, result_array)."""
+    votes = np.zeros((th, tw, 10), dtype=np.int32)
+    for r in range(h):
+        for c in range(w):
+            v = arr[r, c]
+            if v != 0 and 0 <= v < 10:
+                votes[r % th, c % tw, v] += 1
+    tile = np.zeros((th, tw), dtype=np.int32)
+    for tr in range(th):
+        for tc in range(tw):
+            best = 0
+            best_count = 0
+            for v in range(10):
+                if votes[tr, tc, v] > best_count:
+                    best_count = votes[tr, tc, v]
+                    best = v
+            if best_count == 0:
+                return False, arr.copy()
+            tile[tr, tc] = best
+    # Verify: all non-zero cells must agree exactly
+    for r in range(h):
+        for c in range(w):
+            v = arr[r, c]
+            if v != 0 and tile[r % th, c % tw] != v:
+                return False, arr.copy()
+    result = np.zeros((h, w), dtype=np.int32)
+    for r in range(h):
+        for c in range(w):
+            result[r, c] = tile[r % th, c % tw]
+    return True, result
+
+
+@nb.njit(cache=True)
 def _jit_fill_tile_pattern(arr, h, w):
-    """Infer repeating tile from visible cells and fill zeros."""
+    """Infer repeating tile from visible cells and fill zeros.
+
+    Fast path: try tiles that divide grid evenly (original behavior).
+    Slow path: if no divisor tile works, try non-divisor tiles + wide/tall.
+    """
+    # Quick check: if no zeros, nothing to fill
+    has_zero = False
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] == 0:
+                has_zero = True
+                break
+        if has_zero:
+            break
+    if not has_zero:
+        return arr.copy()
+
+    # Fast path: divisor tiles only (same cost as original)
     for th in range(1, h + 1):
         if h % th != 0:
             continue
@@ -355,48 +406,37 @@ def _jit_fill_tile_pattern(arr, h, w):
                 continue
             if th == h and tw == w:
                 continue
-            # Vote: use int[10] counts per tile cell
-            votes = np.zeros((th, tw, 10), dtype=np.int32)
-            for r in range(h):
-                for c in range(w):
-                    v = arr[r, c]
-                    if v != 0 and 0 <= v < 10:
-                        votes[r % th, c % tw, v] += 1
-            # Resolve tile
-            tile = np.zeros((th, tw), dtype=np.int32)
-            n_resolved = 0
-            for tr in range(th):
-                for tc in range(tw):
-                    best = 0
-                    best_count = 0
-                    for v in range(10):
-                        if votes[tr, tc, v] > best_count:
-                            best_count = votes[tr, tc, v]
-                            best = v
-                    if best_count > 0:
-                        tile[tr, tc] = best
-                        n_resolved += 1
-            if n_resolved < th * tw * 0.5:
-                continue
-            # Verify agreement
-            n_agree = 0
-            n_nz = 0
-            for r in range(h):
-                for c in range(w):
-                    v = arr[r, c]
-                    if v != 0:
-                        n_nz += 1
-                        if tile[r % th, c % tw] == v:
-                            n_agree += 1
-            if n_nz > 0 and n_agree < n_nz * 0.9:
-                continue
-            # Build result
-            result = np.zeros((h, w), dtype=np.int32)
-            for r in range(h):
-                for c in range(w):
-                    result[r, c] = tile[r % th, c % tw]
+            ok, result = _jit_try_tile(arr, h, w, th, tw)
+            if ok:
+                return result
+
+    # Slow path: non-divisor small 2D tiles
+    limit = min(h // 2 + 1, 11)
+    limit_w = min(w // 2 + 1, 11)
+    for th in range(1, limit):
+        for tw in range(1, limit_w):
+            if h % th == 0 and w % tw == 0:
+                continue  # already tried
+            ok, result = _jit_try_tile(arr, h, w, th, tw)
+            if ok:
+                return result
+
+    # Wide tiles (row-periodic patterns where col period = full width)
+    for th in range(1, h // 2 + 1):
+        if h % th == 0:
+            continue  # already tried as divisor
+        ok, result = _jit_try_tile(arr, h, w, th, w)
+        if ok:
             return result
-    # No tile found, return copy
+
+    # Tall tiles (col-periodic patterns where row period = full height)
+    for tw in range(1, w // 2 + 1):
+        if w % tw == 0:
+            continue  # already tried as divisor
+        ok, result = _jit_try_tile(arr, h, w, h, tw)
+        if ok:
+            return result
+
     return arr.copy()
 
 

@@ -51,6 +51,7 @@ from domains.arc.primitives import (
     connect_same_color_h, connect_same_color_v,
     scale_4x, scale_5x, downscale_4x, downscale_5x,
     _detect_any_separator_lines, _split_grid_cells,
+    fill_tile_pattern,
 )
 
 
@@ -853,6 +854,45 @@ class TestNearMissPrimitives(unittest.TestCase):
         self.assertEqual(result[1][1], 0)
         self.assertEqual(result[0][0], 1)
         self.assertEqual(result[0][1], 1)
+
+
+class TestFillTilePattern(unittest.TestCase):
+    """Test fill_tile_pattern with non-divisor tile sizes."""
+
+    def test_divisor_tile(self):
+        """3x3 tile in 6x6 grid (divides evenly)."""
+        grid = [
+            [1, 2, 3, 1, 2, 3],
+            [4, 5, 6, 4, 5, 6],
+            [7, 8, 9, 7, 8, 9],
+            [1, 2, 0, 1, 2, 3],  # one zero
+            [4, 5, 6, 4, 5, 6],
+            [7, 8, 9, 7, 8, 9],
+        ]
+        result = fill_tile_pattern(grid)
+        self.assertEqual(result[3][2], 3)  # filled the zero
+
+    def test_non_divisor_tile(self):
+        """5-period tile in 7-wide grid (7 % 5 = 2)."""
+        # Build a 5-period row pattern, 7 cols
+        pattern = [1, 2, 3, 4, 5]
+        row = [pattern[c % 5] for c in range(7)]
+        grid = [row[:] for _ in range(3)]
+        grid[1][3] = 0  # erase one cell
+        result = fill_tile_pattern(grid)
+        self.assertEqual(result[1][3], 4)  # should reconstruct pattern[3]
+
+    def test_non_divisor_2d_tile(self):
+        """5x5 tile in 16x16 grid (16 % 5 = 1). Realistic size for ARC."""
+        tile = [[((r + c) % 5) + 1 for c in range(5)] for r in range(5)]
+        grid = [[tile[r % 5][c % 5] for c in range(16)] for r in range(16)]
+        # Erase a 4x4 rectangle (like a real ARC task hole)
+        for r in range(3, 7):
+            for c in range(5, 9):
+                grid[r][c] = 0
+        result = fill_tile_pattern(grid)
+        expected = [[tile[r % 5][c % 5] for c in range(16)] for r in range(16)]
+        self.assertEqual(result, expected)
 
 
 class TestCyclicShifts(unittest.TestCase):
