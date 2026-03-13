@@ -382,26 +382,57 @@ def _jit_try_tile(arr, h, w, th, tw):
 def _jit_fill_tile_pattern(arr, h, w):
     """Infer repeating tile from visible cells and fill zeros.
 
-    Two-phase search:
-    1. Small 2D tiles (up to 15×15) — catches square/small rectangular patterns
-    2. Wide tiles (th up to h//2, tw=w) — catches row-periodic patterns
+    Fast path: try tiles that divide grid evenly (original behavior).
+    Slow path: if no divisor tile works, try non-divisor tiles + wide/tall.
     """
-    # Phase 1: small 2D tiles
-    limit = min(h // 2 + 1, 16)
-    for th in range(1, limit):
-        for tw in range(1, limit):
+    # Quick check: if no zeros, nothing to fill
+    has_zero = False
+    for r in range(h):
+        for c in range(w):
+            if arr[r, c] == 0:
+                has_zero = True
+                break
+        if has_zero:
+            break
+    if not has_zero:
+        return arr.copy()
+
+    # Fast path: divisor tiles only (same cost as original)
+    for th in range(1, h + 1):
+        if h % th != 0:
+            continue
+        for tw in range(1, w + 1):
+            if w % tw != 0:
+                continue
+            if th == h and tw == w:
+                continue
             ok, result = _jit_try_tile(arr, h, w, th, tw)
             if ok:
                 return result
 
-    # Phase 2: wide tiles (row-periodic patterns where col period = full width)
+    # Slow path: non-divisor small 2D tiles
+    limit = min(h // 2 + 1, 11)
+    limit_w = min(w // 2 + 1, 11)
+    for th in range(1, limit):
+        for tw in range(1, limit_w):
+            if h % th == 0 and w % tw == 0:
+                continue  # already tried
+            ok, result = _jit_try_tile(arr, h, w, th, tw)
+            if ok:
+                return result
+
+    # Wide tiles (row-periodic patterns where col period = full width)
     for th in range(1, h // 2 + 1):
+        if h % th == 0:
+            continue  # already tried as divisor
         ok, result = _jit_try_tile(arr, h, w, th, w)
         if ok:
             return result
 
-    # Phase 3: tall tiles (col-periodic patterns where row period = full height)
+    # Tall tiles (col-periodic patterns where row period = full height)
     for tw in range(1, w // 2 + 1):
+        if w % tw == 0:
+            continue  # already tried as divisor
         ok, result = _jit_try_tile(arr, h, w, h, tw)
         if ok:
             return result
