@@ -12,7 +12,6 @@ from typing import Any
 from core import Grammar, Primitive, Program, Task, Decomposition
 from .primitives import (
     ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP,
-    _make_replace_color, _make_swap_colors,
     _detect_any_separator_lines, _split_grid_cells,
 )
 from .objects import (
@@ -81,8 +80,6 @@ class ARCGrammar(Grammar):
     - Leaves are unary primitives applied directly to the input grid
     - Internal nodes compose the outputs of their children
 
-    Key feature: prepare_for_task() analyzes training examples to create
-    task-specific color primitives inferred from input/output pairs.
     """
 
     def __init__(self, seed: int = 42):
@@ -99,114 +96,13 @@ class ARCGrammar(Grammar):
         return list(ARC_PRIMITIVES) + self._task_prims
 
     def prepare_for_task(self, task: Task) -> None:
-        """Analyze training examples to create task-specific color primitives.
+        """No-op. Static primitives cover all color operations.
 
-        Generates three categories of task-specific primitives:
-        1. Color introduction/removal: for colors that appear/disappear between I/O
-        2. Color replacement: for pairs where one color consistently replaces another
-        3. Dominant-color operations: recolor to the task's most common output color
+        Task-specific color primitives were measured to produce 0 additional
+        solves beyond the 349 static primitives (Decision 72). Removed to
+        reduce complexity.
         """
         self._task_prims = []
-        if not task.train_examples:
-            return
-
-        all_in_colors: set[int] = set()
-        all_out_colors: set[int] = set()
-        for inp, out in task.train_examples:
-            all_in_colors.update(c for row in inp for c in row)
-            all_out_colors.update(c for row in out for c in row)
-
-        new_colors = all_out_colors - all_in_colors - {0}
-        removed_colors = all_in_colors - all_out_colors - {0}
-        prim_names = {p.name for p in ARC_PRIMITIVES}
-
-        for c in new_colors:
-            name = f"task_fill_bg_{c}"
-            if name not in prim_names:
-                self._task_prims.append(Primitive(
-                    name=name, arity=1, fn=_make_replace_color(0, c), domain="arc"))
-                prim_names.add(name)
-
-        for c in removed_colors:
-            name = f"task_remove_{c}"
-            if name not in prim_names:
-                self._task_prims.append(Primitive(
-                    name=name, arity=1, fn=_make_replace_color(c, 0), domain="arc"))
-                prim_names.add(name)
-
-        for old_c in removed_colors:
-            for new_c in new_colors:
-                name = f"task_swap_{old_c}_to_{new_c}"
-                if name not in prim_names:
-                    self._task_prims.append(Primitive(
-                        name=name, arity=1, fn=_make_replace_color(old_c, new_c), domain="arc"))
-                    prim_names.add(name)
-
-        # --- Pixel-level color transition analysis ---
-        # Collect per-pixel color changes across all training examples.
-        # If color A consistently becomes color B (>70% of transitions),
-        # create a task-specific replacement primitive.
-        from collections import Counter
-        transitions: Counter = Counter()
-        for inp, out in task.train_examples:
-            h_i, w_i = len(inp), len(inp[0]) if inp else 0
-            h_o, w_o = len(out), len(out[0]) if out else 0
-            if h_i != h_o or w_i != w_o:
-                continue  # skip size-changing tasks for this analysis
-            for r in range(h_i):
-                for c in range(w_i):
-                    if inp[r][c] != out[r][c]:
-                        transitions[(inp[r][c], out[r][c])] += 1
-
-        # Group by source color
-        by_src: dict[int, Counter] = {}
-        for (src, dst), count in transitions.items():
-            if src not in by_src:
-                by_src[src] = Counter()
-            by_src[src][dst] += count
-
-        for src, tally in by_src.items():
-            best_dst, best_count = tally.most_common(1)[0]
-            total = sum(tally.values())
-            if best_count / total >= 0.70 and best_count >= 2:
-                name = f"task_recolor_{src}_to_{best_dst}"
-                if name not in prim_names:
-                    self._task_prims.append(Primitive(
-                        name=name, arity=1,
-                        fn=_make_replace_color(src, best_dst), domain="arc"))
-                    prim_names.add(name)
-
-        # --- Atomic color swap detection ---
-        # When transitions show A→B AND B→A consistently, generate a swap
-        # primitive. Swaps are atomic (read from original, write to copy)
-        # so they don't corrupt pixels the way sequential remaps would.
-        swap_pairs_seen: set[tuple[int, int]] = set()
-        for src, tally in by_src.items():
-            best_dst, best_count = tally.most_common(1)[0]
-            total = sum(tally.values())
-            if best_count / total < 0.70 or best_count < 2:
-                continue
-            # Check for reverse direction
-            if best_dst in by_src:
-                rev_tally = by_src[best_dst]
-                rev_best, rev_count = rev_tally.most_common(1)[0]
-                rev_total = sum(rev_tally.values())
-                if (rev_best == src and rev_count / rev_total >= 0.70
-                        and rev_count >= 2):
-                    pair = (min(src, best_dst), max(src, best_dst))
-                    if pair not in swap_pairs_seen:
-                        swap_pairs_seen.add(pair)
-                        a, b = pair
-                        name = f"task_swap_{a}_and_{b}"
-                        if name not in prim_names:
-                            self._task_prims.append(Primitive(
-                                name=name, arity=1,
-                                fn=_make_swap_colors(a, b), domain="arc"))
-                            prim_names.add(name)
-
-        # Register task prims in _PRIM_MAP for execution
-        for p in self._task_prims:
-            _PRIM_MAP[p.name] = p
 
     def compose(self, outer: Primitive, inner_programs: list[Program]) -> Program:
         return Program(root=outer.name, children=inner_programs)

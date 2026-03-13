@@ -307,8 +307,7 @@ agi-core/
 │   ├── phase1_arc.py        # ARC-AGI-1 training & evaluation pipeline
 │   ├── phase2_arc.py        # ARC-AGI-2 baseline experiment
 │   ├── zork_baseline.py     # Zork text adventure baseline
-│   ├── list_compounding.py  # List ops compounding demonstration
-│   └── analyze_residuals.py # Near-miss residual analysis (research)
+│   └── list_compounding.py  # List ops compounding demonstration
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
 │   ├── arc/                 # ARC-AGI grid transformations (349 primitives)

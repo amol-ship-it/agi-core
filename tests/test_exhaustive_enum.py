@@ -4,7 +4,7 @@ Tests for the new features:
 2. New ARC primitives (extract_largest, symmetry, repeat, border, etc.)
 3. Sequential compounding (within-run knowledge transfer)
 4. Culture persistence (save/load library with program reconstruction)
-5. Task-specific color primitives (prepare_for_task)
+5. prepare_for_task (verified no-op — Decision 72)
 """
 
 import json
@@ -452,82 +452,11 @@ class TestCulturePersistence(unittest.TestCase):
 
 
 # =============================================================================
-# Task-specific color primitives tests
-# =============================================================================
+class TestPrepareForTaskNoOp(unittest.TestCase):
+    """Verify prepare_for_task is a no-op (Decision 72: 0 solves)."""
 
-class TestTaskSpecificPrimitives(unittest.TestCase):
-    """Test prepare_for_task generating task-specific color prims."""
-
-    def test_prepare_creates_fill_prim(self):
-        """When output has a color not in input, create fill primitive."""
-        grammar = ARCGrammar(seed=42)
-        task = Task(
-            task_id="test",
-            train_examples=[
-                ([[0, 1], [1, 0]], [[5, 1], [1, 5]]),  # 0 -> 5, new color 5
-            ],
-            test_inputs=[[[0]]],
-        )
-        grammar.prepare_for_task(task)
-        prims = grammar.base_primitives()
-        prim_names = {p.name for p in prims}
-        self.assertIn("task_fill_bg_5", prim_names)
-
-    def test_prepare_creates_remove_prim(self):
-        """When input has a color not in output, create remove primitive."""
-        grammar = ARCGrammar(seed=42)
-        task = Task(
-            task_id="test",
-            train_examples=[
-                ([[1, 3], [3, 1]], [[1, 0], [0, 1]]),  # 3 removed
-            ],
-            test_inputs=[[[0]]],
-        )
-        grammar.prepare_for_task(task)
-        prim_names = {p.name for p in grammar.base_primitives()}
-        self.assertIn("task_remove_3", prim_names)
-
-    def test_prepare_creates_swap_prim(self):
-        """Cross-swap: removed color -> new color."""
-        grammar = ARCGrammar(seed=42)
-        task = Task(
-            task_id="test",
-            train_examples=[
-                ([[3, 0], [0, 3]], [[0, 5], [5, 0]]),  # 3 removed, 5 new
-            ],
-            test_inputs=[[[0]]],
-        )
-        grammar.prepare_for_task(task)
-        prim_names = {p.name for p in grammar.base_primitives()}
-        self.assertIn("task_swap_3_to_5", prim_names)
-
-    def test_prepare_no_extra_prims_when_same_colors(self):
-        """No *color-introduction* prims when input and output have same colors.
-
-        Note: pixel-transition prims (task_recolor_X_to_Y) may still be
-        generated when colors are swapped between I/O positions.
-        """
-        grammar = ARCGrammar(seed=42)
-        task = Task(
-            task_id="test",
-            train_examples=[
-                ([[1, 2], [2, 1]], [[2, 1], [1, 2]]),
-            ],
-            test_inputs=[[[0]]],
-        )
-        grammar.prepare_for_task(task)
-        base_count = len(ARC_PRIMITIVES)
-        total_count = len(grammar.base_primitives())
-        # No new/removed colors → no fill/remove prims, but pixel
-        # transitions (1→2, 2→1) may generate task_recolor and task_swap prims.
-        task_prims = [p for p in grammar.base_primitives() if p.name.startswith("task_")]
-        for p in task_prims:
-            self.assertTrue(
-                p.name.startswith("task_recolor_") or p.name.startswith("task_swap_"),
-                f"Unexpected task prim: {p.name}")
-
-    def test_task_prims_executable(self):
-        """Task-specific primitives should be executable via ARCEnv."""
+    def test_prepare_adds_no_task_prims(self):
+        """prepare_for_task should not generate any task-specific primitives."""
         grammar = ARCGrammar(seed=42)
         task = Task(
             task_id="test",
@@ -537,33 +466,9 @@ class TestTaskSpecificPrimitives(unittest.TestCase):
             test_inputs=[[[0]]],
         )
         grammar.prepare_for_task(task)
-
-        env = ARCEnv()
-        prog = Program(root="task_fill_bg_5")
-        result = env.execute(prog, [[0, 1], [1, 0]])
-        self.assertEqual(result, [[5, 1], [1, 5]])
-
-    def test_task_swap_prim_generated(self):
-        """When pixel transitions show A→B AND B→A, a swap prim is generated."""
-        grammar = ARCGrammar(seed=42)
-        # Grid where colors 2 and 7 are swapped between input and output
-        task = Task(
-            task_id="test_swap",
-            train_examples=[
-                ([[2, 0, 7], [7, 0, 2]], [[7, 0, 2], [2, 0, 7]]),
-                ([[2, 7], [0, 0]], [[7, 2], [0, 0]]),
-            ],
-            test_inputs=[[[2, 7]]],
-        )
-        grammar.prepare_for_task(task)
-        prim_names = {p.name for p in grammar.base_primitives()}
-        self.assertIn("task_swap_2_and_7", prim_names)
-
-        # Verify the swap prim works correctly
-        env = ARCEnv()
-        prog = Program(root="task_swap_2_and_7")
-        result = env.execute(prog, [[2, 0, 7], [7, 0, 2]])
-        self.assertEqual(result, [[7, 0, 2], [2, 0, 7]])
+        task_prims = [p for p in grammar.base_primitives()
+                      if p.name.startswith("task_")]
+        self.assertEqual(len(task_prims), 0)
 
 
 # =============================================================================
