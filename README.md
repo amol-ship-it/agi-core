@@ -163,11 +163,11 @@ Three modes. Pick one. That's the only knob most users need.
 
 | Mode | Tasks | Beam | Compute Cap | Eval accuracy | Use case |
 |------|-------|------|-------------|---------------|----------|
-| `quick` | 50 | off | 500K | ~22% (11/50) | Fast dev loop (~5s) |
-| `default` | all (400) | off | 3M | ~25% (100/400) | Full benchmark (~3.5 min) |
-| `contest` | all (400) | 30×15 | 100M | ~27% (107/400) | Maximum accuracy (~10 min) |
+| `quick` | 50 | off | 500K | ~22% (11/50) | Fast dev loop (~8s) |
+| `default` | all (400) | off | 3M | ~25% (98/400) | Full benchmark (~3.5 min) |
+| `contest` | all (400) | 30×15 | 100M | ~26% (105/400) | Maximum accuracy (~8.5 min) |
 
-All presets run **1 round** with **seed 42** by default. Results are fully deterministic.
+All presets run **1 round** with **seed 42** by default. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
 
 **Why no beam search?** A/B testing on 49 tasks showed beam search (width=20, gens=10) solves **exactly the same tasks** as exhaustive-only, while adding +13% wall time. All solves come from exhaustive enumeration (depth 1-3), object decomposition, conditional search, near-miss refinement, and color fix. Beam is kept in contest mode as a safety net.
 
@@ -183,9 +183,9 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 | Mode | Training | Eval (culture transfer) | Total | Wall time |
 |------|----------|------------------------|-------|-----------|
-| `quick` | ~27/50 (~54%) | ~11/50 (~22%) | ~38/100 (~38%) | **~5s** |
-| `default` | ~173/400 (~43%) | ~100/400 (~25%) | ~273/800 (~34%) | **~3.5 min** |
-| `contest` | 184/400 (46.0%) | 106/400 (26.5%) | 290/800 (36.3%) | **~10 min** |
+| `quick` | 27/50 (54.0%) | 11/50 (22.0%) | 38/100 (38.0%) | **~8s** |
+| `default` | 180/400 (45.0%) | 98/400 (24.5%) | 278/800 (34.8%) | **~3.5 min** |
+| `contest` | 187/400 (46.8%) | 105/400 (26.2%) | 292/800 (36.5%) | **~8.5 min** |
 
 **Other domains:**
 
@@ -281,7 +281,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **Compounding produces library entries on ARC but has limited impact.** With `--compounding` flag (depth-2 + 3 rounds + sequential), the system creates 3-5 library entries with 2x reuse. However, most ARC solves are depth-1 (single primitives), so the library provides little additional coverage beyond what depth-3 exhaustive search already finds.
 
-**The training-eval gap has narrowed significantly.** The train/eval ratio improved from 3.8x (21% vs 5.5%) to 1.7x (43% vs 25%). LOOCV candidate ranking reduces overfitting, and spatial corrections (3x3 and 5x5 neighborhoods, adjacency rules, identity-seeded correction) generalize well. The 5x5 neighborhood correction and identity-seeded correction together added +66 solves over the previous baseline.
+**The training-eval gap has narrowed significantly.** The train/eval ratio improved from 3.8x (21% vs 5.5%) to 1.8x (45% vs 24.5%). LOOCV candidate ranking reduces overfitting, and spatial corrections (3x3 and 5x5 neighborhoods, adjacency rules, identity-seeded correction) generalize well. The 5x5 neighborhood correction and identity-seeded correction together added +66 solves over the previous baseline.
 
 **Where the ARC solve rate comes from:** 235 primitives per task (6,500 lines of domain code) encode substantial human knowledge about grid transformations. The diff-and-patch correction phases (3x3 and 5x5 neighborhood patches, adjacency rules, color remapping, row/column corrections) learn task-specific spatial rules from near-miss programs. Identity-seeded correction captures tasks describable entirely as local cellular automaton rules. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
 
@@ -354,7 +354,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (557 tests):** 72% overall. Core modules: learner 66%, runner 27% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 73%, ARC objects 57%, ARC environment 89%, Zork 95%, list_ops 94%.
+**Current coverage (551 tests):** 72% overall. Core modules: learner 66%, runner 27% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 73%, ARC objects 57%, ARC environment 89%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
@@ -367,11 +367,11 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** ✅ ARC-AGI-1 training (235 primitives/task, exhaustive enumeration, diff-and-patch, wake-sleep) — 173/400 (43%)
-- **Phase 2** ✅ ARC-AGI-1 eval with culture transfer — 100/400 (25%)
+- **Phase 1** ✅ ARC-AGI-1 training (235 primitives/task, exhaustive enumeration, diff-and-patch, wake-sleep) — 180/400 (45%)
+- **Phase 2** ✅ ARC-AGI-1 eval with culture transfer — 98/400 (24.5%)
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated on list_ops and Zork
 - **Phase 4** ✅ Compounding infrastructure: `--compounding` flag, distance-based drive signals, library primitive execution. Zork: 7/20→10/20 with library reuse 5-11x. ARC: library entries produced but limited impact.
-- **Phase 5** ✅ Narrowed ARC train-eval gap from 3.8x to 1.7x (43% train, 25% eval) via LOOCV + 3x3/5x5 diff-and-patch + identity correction
+- **Phase 5** ✅ Narrowed ARC train-eval gap from 3.8x to 1.8x (45% train, 24.5% eval) via LOOCV + 3x3/5x5 diff-and-patch + identity correction
 - **Phase 6** 🔧 ARC-AGI-2 improved to 31.2% train, 7.5% eval — corrections transfer cross-domain
 - **Phase 6** Cross-domain library transfer
 - **Phase 7** Continuous mixed-domain learning

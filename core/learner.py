@@ -1552,11 +1552,16 @@ class Learner:
                 continue
 
             # Compose: correction(original_program)
-            fixed_prog = Program(
-                root=correction.root,
-                children=[copy.deepcopy(nm.program)],
-                params=correction.params,
-            )
+            # Skip identity base — correction(identity) = correction
+            base = nm.program
+            if base.root == "identity" and not base.children:
+                fixed_prog = correction
+            else:
+                fixed_prog = Program(
+                    root=correction.root,
+                    children=[copy.deepcopy(base)],
+                    params=correction.params,
+                )
             sp = self._evaluate_program(fixed_prog, task)
 
             # Only accept if the correction actually reduces error
@@ -1903,9 +1908,13 @@ class Learner:
         for outer_name in pair_pool:
             if not _budget_ok():
                 break
+            if outer_name == "identity":
+                continue  # identity(x) = x, already tested at depth 1
             for inner_name in inner_pool:
                 if not _budget_ok():
                     break
+                if inner_name == "identity":
+                    continue  # f(identity) = f, already tested at depth 1
                 prog = Program(root=outer_name, children=[
                     Program(root=inner_name)])
                 sp = self._evaluate_program(prog, task)
@@ -2000,12 +2009,18 @@ class Learner:
         for a in triple_pool:
             if not _budget_ok():
                 break
+            if a == "identity":
+                continue  # identity(b(c)) = b(c), already tested at depth 2
             for b in triple_pool:
                 if not _budget_ok():
                     break
+                if b == "identity":
+                    continue  # a(identity(c)) = a(c), already tested at depth 2
                 for c in triple_pool:
                     if not _budget_ok():
                         break
+                    if c == "identity":
+                        continue  # a(b(identity)) = a(b), already tested at depth 2
                     # Skip degenerate a(a(a(x))) — already tested as single
                     if a == b == c:
                         continue

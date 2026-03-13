@@ -526,6 +526,36 @@ class ExperimentResult:
     results_data: dict  # the full results dict (meta + summary + tasks + library)
 
 
+def _ensure_deterministic_hashing():
+    """Ensure PYTHONHASHSEED=0 for reproducible results.
+
+    Python randomizes string hashing by default (PYTHONHASHSEED=random),
+    which makes dict/set iteration order non-deterministic for string keys.
+    This causes beam search results to vary between runs even with the
+    same seed, because semantic dedup and program ranking depend on
+    dict ordering when energies are tied.
+    """
+    if os.environ.get("PYTHONHASHSEED") != "0":
+        import subprocess
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = "0"
+        # Must restart the process for PYTHONHASHSEED to take effect
+        # (it's read at interpreter startup, so mid-process changes don't help).
+        # Relaunch using -m with the module name derived from the script path,
+        # since the original -m context is lost in sys.argv.
+        print("  Re-launching with PYTHONHASHSEED=0 for reproducibility...")
+        script = sys.argv[0]
+        cwd = os.getcwd()
+        # Convert absolute script path to module name (relative to CWD)
+        if os.path.isabs(script):
+            script = os.path.relpath(script, cwd)
+        module = script.replace(".py", "").replace(os.sep, ".")
+        result = subprocess.run(
+            [sys.executable, "-m", module] + sys.argv[1:], env=env
+        )
+        sys.exit(result.returncode)
+
+
 def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
     """Run a complete wake-sleep experiment on any domain.
 
@@ -538,6 +568,7 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
     4. Runs the curriculum with live progress tracking
     5. Prints final results and saves all artifacts
     """
+    _ensure_deterministic_hashing()
     install_signal_handler()
 
     run_timestamp = cfg.timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
