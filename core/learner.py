@@ -17,6 +17,7 @@ import math
 import os
 import random
 import time
+import multiprocessing as _mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Optional
 
@@ -969,9 +970,15 @@ class Learner:
         # calls shutdown(wait=True), which blocks on Ctrl-C even when workers
         # ignore SIGINT. Instead, manage manually and call shutdown(wait=False)
         # on interrupt for immediate cleanup.
+        # Use "fork" context so workers inherit parent memory instead of
+        # re-importing from disk. This makes the pipeline robust to file
+        # edits during execution (workers use the code snapshot from when
+        # the parent process started, not the current on-disk version).
+        _fork_ctx = _mp.get_context("fork")
         pool = ProcessPoolExecutor(
             max_workers=workers,
             initializer=_worker_init,
+            mp_context=_fork_ctx,
         )
         try:
             futures = {

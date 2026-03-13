@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import copy
 import random
+from collections import Counter
 
 from typing import Any
 
 from core import Grammar, Primitive, Program, Task, Decomposition
 from .primitives import (
-    ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP,
-    _detect_any_separator_lines, _split_grid_cells,
+    ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP, register_prim,
+    _detect_any_separator_lines, _split_grid_cells, Grid,
 )
 from .objects import (
     find_foreground_shapes, find_multicolor_objects, place_subgrid,
@@ -96,13 +97,20 @@ class ARCGrammar(Grammar):
         return list(ARC_PRIMITIVES) + self._task_prims
 
     def prepare_for_task(self, task: Task) -> None:
-        """No-op. Static primitives cover all color operations.
+        """Generate parameterized color primitives from training examples.
 
-        Task-specific color primitives were measured to produce 0 additional
-        solves beyond the 349 static primitives (Decision 72). Removed to
-        reduce complexity.
+        Unlike the old approach (Decision 72, absolute color mappings like
+        swap_3_to_5), these learn STRUCTURAL roles — e.g. "replace rare color
+        with dominant color". At test time, roles are re-determined from the
+        input grid, so the mapping generalizes to new color palettes.
+
+        Ported from agi-mvp-general's param_search module.
         """
         self._task_prims = []
+        prims = _learn_parameterized_prims(task)
+        for p in prims:
+            self._task_prims.append(p)
+            register_prim(p)
 
     def compose(self, outer: Primitive, inner_programs: list[Program]) -> Program:
         return Program(root=outer.name, children=inner_programs)
@@ -358,4 +366,328 @@ class ARCGrammar(Grammar):
                 cell_idx += 1
 
         return canvas
+
+
+# =============================================================================
+# Parameterized primitive learning (structural color roles)
+# =============================================================================
+
+def _assign_color_roles(grid: Grid) -> dict[int, str]:
+    """Assign structural roles to colors based on frequency.
+
+    Roles: 'bg' (most frequent), 'rare' (least frequent),
+    'dominant' (second most frequent), 'accent' (everything else).
+    Returns {color: role} mapping.
+    """
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    freq = Counter(flat)
+    if not freq:
+        return {}
+
+    sorted_colors = sorted(freq.items(), key=lambda x: -x[1])
+    roles = {}
+    for rank, (color, _) in enumerate(sorted_colors):
+        if rank == 0:
+            roles[color] = "bg"
+        elif rank == 1:
+            roles[color] = "dominant"
+        elif rank == len(sorted_colors) - 1 and rank >= 2:
+            roles[color] = "rare"
+        else:
+            roles[color] = f"accent_{rank}"
+    return roles
+
+
+def _learn_structural_recolor(task: Task) -> list[tuple[str, str]]:
+    """Learn structural role-to-role recolor mappings from training examples.
+
+    Analyzes which roles in the input map to which roles in the output.
+    Only learns mappings that are consistent across ALL training examples.
+
+    Returns list of (src_role, dst_role) pairs that are consistent.
+    """
+    if not task.train_examples:
+        return []
+
+    # Collect per-example role transitions
+    all_transitions: list[dict[str, Counter]] = []
+
+    for inp, out in task.train_examples:
+        if not inp or not out:
+            continue
+        if len(inp) != len(out) or len(inp[0]) != len(out[0]):
+            continue  # size-changing tasks don't apply
+
+        inp_roles = _assign_color_roles(inp)
+        out_roles = _assign_color_roles(out)
+
+        transitions: dict[str, Counter] = {}
+        for r in range(len(inp)):
+            for c in range(len(inp[0])):
+                if inp[r][c] != out[r][c]:
+                    src_role = inp_roles.get(inp[r][c])
+                    dst_role = out_roles.get(out[r][c])
+                    if src_role and dst_role:
+                        if src_role not in transitions:
+                            transitions[src_role] = Counter()
+                        transitions[src_role][dst_role] += 1
+
+        if transitions:
+            all_transitions.append(transitions)
+
+    if not all_transitions:
+        return []
+
+    # Find role transitions consistent across all examples
+    # Get the dominant mapping from each example, check consistency
+    consistent = []
+    first = all_transitions[0]
+    for src_role, dst_counts in first.items():
+        dst_role = dst_counts.most_common(1)[0][0]
+        # Check if this mapping appears in all examples
+        all_agree = True
+        for ex_trans in all_transitions[1:]:
+            if src_role not in ex_trans:
+                all_agree = False
+                break
+            ex_dst = ex_trans[src_role].most_common(1)[0][0]
+            if ex_dst != dst_role:
+                all_agree = False
+                break
+        if all_agree:
+            consistent.append((src_role, dst_role))
+
+    return consistent
+
+
+def _learn_recolor_by_frequency(task: Task) -> list[tuple[int, int]]:
+    """Learn frequency-rank-based color mapping from training examples.
+
+    Returns list of (input_rank, output_color) if consistent across examples.
+    The mapping is: color at frequency rank N in input → specific output color.
+
+    This generalizes because rank is structural, not absolute.
+    """
+    if not task.train_examples:
+        return []
+
+    all_rank_maps: list[dict[int, int]] = []
+
+    for inp, out in task.train_examples:
+        if not inp or not out:
+            continue
+        if len(inp) != len(out) or len(inp[0]) != len(out[0]):
+            continue
+
+        inp_flat = [inp[r][c] for r in range(len(inp)) for c in range(len(inp[0]))]
+        out_flat = [out[r][c] for r in range(len(out)) for c in range(len(out[0]))]
+
+        inp_freq = Counter(inp_flat)
+        out_freq = Counter(out_flat)
+
+        inp_sorted = sorted(inp_freq.items(), key=lambda x: -x[1])
+        out_sorted = sorted(out_freq.items(), key=lambda x: -x[1])
+
+        if len(inp_sorted) != len(out_sorted):
+            return []  # different color counts → not a rank-based recolor
+
+        rank_map = {}
+        for rank in range(len(out_sorted)):
+            rank_map[rank] = out_sorted[rank][0]
+
+        # Verify this mapping actually works for this example
+        inp_rank = {color: rank for rank, (color, _) in enumerate(inp_sorted)}
+        ok = True
+        for r in range(len(inp)):
+            for c in range(len(inp[0])):
+                expected_out = rank_map.get(inp_rank.get(inp[r][c], -1), inp[r][c])
+                if expected_out != out[r][c]:
+                    ok = False
+                    break
+            if not ok:
+                break
+        if not ok:
+            return []
+
+        all_rank_maps.append(rank_map)
+
+    if not all_rank_maps:
+        return []
+
+    # Check consistency: same rank → same output color across examples?
+    # No: rank maps use different absolute colors per example, that's the point.
+    # The structural part is: use the output's frequency order.
+    # So we just need to verify the STRUCTURE is consistent:
+    # "rank N in input → rank N in output" for all examples.
+    # If that's the case, return a sentinel indicating rank-based recolor.
+    return [(r, c) for r, c in all_rank_maps[0].items()]
+
+
+def _learn_parameterized_prims(task: Task) -> list[Primitive]:
+    """Learn parameterized primitives from training examples.
+
+    Returns a list of task-specific Primitive objects with structural
+    (role-based) closures that generalize to unseen color palettes.
+    """
+    prims = []
+
+    # --- 1. Structural role-based recolor ---
+    role_maps = _learn_structural_recolor(task)
+    if role_maps:
+        # Build a closure that applies the structural mapping
+        captured_maps = list(role_maps)
+
+        def _make_role_recolor(maps):
+            def role_recolor(grid: Grid) -> Grid:
+                if not grid or not grid[0]:
+                    return grid
+                roles = _assign_color_roles(grid)
+                # Invert: role → color
+                role_to_color = {role: color for color, role in roles.items()}
+                # Build color→color map from role transitions
+                color_map = {}
+                for src_role, dst_role in maps:
+                    src_color = role_to_color.get(src_role)
+                    dst_color = role_to_color.get(dst_role)
+                    if src_color is not None and dst_color is not None:
+                        color_map[src_color] = dst_color
+                if not color_map:
+                    return grid
+                return [[color_map.get(cell, cell) for cell in row]
+                        for row in grid]
+            return role_recolor
+
+        fn = _make_role_recolor(captured_maps)
+        name = "param_role_recolor"
+        prims.append(Primitive(name=name, arity=0, fn=fn))
+
+    # --- 2. Frequency-rank recolor ---
+    rank_maps = _learn_recolor_by_frequency(task)
+    if rank_maps:
+        def _make_rank_recolor(rmap):
+            def rank_recolor(grid: Grid) -> Grid:
+                if not grid or not grid[0]:
+                    return grid
+                flat = [grid[r][c] for r in range(len(grid))
+                        for c in range(len(grid[0]))]
+                freq = Counter(flat)
+                sorted_colors = sorted(freq.items(), key=lambda x: -x[1])
+                # Build color map: color at rank N → output color at rank N
+                out_colors = [oc for _, oc in rmap]
+                color_map = {}
+                for rank, (color, _) in enumerate(sorted_colors):
+                    if rank < len(out_colors):
+                        color_map[color] = out_colors[rank]
+                return [[color_map.get(cell, cell) for cell in row]
+                        for row in grid]
+            return rank_recolor
+
+        fn = _make_rank_recolor(rank_maps)
+        name = "param_rank_recolor"
+        prims.append(Primitive(name=name, arity=0, fn=fn))
+
+    # --- 3. Fill enclosed with learned color role ---
+    fill_role = _learn_fill_enclosed_role(task)
+    if fill_role:
+        def _make_fill_enclosed(role):
+            def fill_enclosed_param(grid: Grid) -> Grid:
+                if not grid or not grid[0]:
+                    return grid
+                roles = _assign_color_roles(grid)
+                role_to_color = {r: c for c, r in roles.items()}
+                fill_color = role_to_color.get(role)
+                if fill_color is None:
+                    return grid
+
+                rows, cols = len(grid), len(grid[0])
+                result = [row[:] for row in grid]
+
+                # BFS from boundary to find non-enclosed zeros
+                reachable = set()
+                bg_color = role_to_color.get("bg", 0)
+                queue = []
+                for r in range(rows):
+                    for c in [0, cols - 1]:
+                        if result[r][c] == bg_color and (r, c) not in reachable:
+                            reachable.add((r, c))
+                            queue.append((r, c))
+                for c in range(cols):
+                    for r in [0, rows - 1]:
+                        if result[r][c] == bg_color and (r, c) not in reachable:
+                            reachable.add((r, c))
+                            queue.append((r, c))
+
+                while queue:
+                    cr, cc = queue.pop()
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if (0 <= nr < rows and 0 <= nc < cols
+                                and (nr, nc) not in reachable
+                                and result[nr][nc] == bg_color):
+                            reachable.add((nr, nc))
+                            queue.append((nr, nc))
+
+                # Fill enclosed bg pixels with learned color
+                for r in range(rows):
+                    for c in range(cols):
+                        if result[r][c] == bg_color and (r, c) not in reachable:
+                            result[r][c] = fill_color
+                return result
+            return fill_enclosed_param
+
+        fn = _make_fill_enclosed(fill_role)
+        name = "param_fill_enclosed"
+        prims.append(Primitive(name=name, arity=0, fn=fn))
+
+    return prims
+
+
+def _learn_fill_enclosed_role(task: Task) -> str | None:
+    """Learn which color role fills enclosed bg regions in training examples.
+
+    Returns the role string (e.g. 'dominant', 'rare') or None.
+    """
+    if not task.train_examples:
+        return None
+
+    fill_roles = []
+    for inp, out in task.train_examples:
+        if not inp or not out:
+            continue
+        if len(inp) != len(out) or len(inp[0]) != len(out[0]):
+            continue
+
+        out_roles = _assign_color_roles(out)
+        inp_roles = _assign_color_roles(inp)
+        bg_role_color = None
+        for color, role in inp_roles.items():
+            if role == "bg":
+                bg_role_color = color
+                break
+
+        if bg_role_color is None:
+            continue
+
+        # Find pixels that are bg in input but non-bg in output
+        fill_colors = Counter()
+        for r in range(len(inp)):
+            for c in range(len(inp[0])):
+                if inp[r][c] == bg_role_color and out[r][c] != bg_role_color:
+                    fill_colors[out[r][c]] += 1
+
+        if not fill_colors:
+            continue
+
+        fill_color = fill_colors.most_common(1)[0][0]
+        role = out_roles.get(fill_color)
+        if role:
+            fill_roles.append(role)
+
+    if not fill_roles:
+        return None
+
+    # Check consistency
+    if len(set(fill_roles)) == 1:
+        return fill_roles[0]
+    return None
 

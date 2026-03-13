@@ -1538,5 +1538,168 @@ class TestObjectDecompositionExtended(unittest.TestCase):
         self.assertEqual(result, grid)
 
 
+class TestParameterizedPrimitives(unittest.TestCase):
+    """Test parameterized (role-based) color primitives."""
+
+    def test_role_recolor_learns_mapping(self):
+        """Role recolor should learn rare→dominant and generalize."""
+        from domains.arc.grammar import _learn_structural_recolor, _assign_color_roles
+        # Example: rare color (appears least) maps to dominant color
+        # Input has colors: 0 (bg, 16 cells), 1 (dominant, 6 cells), 2 (rare, 2 cells)
+        # Output: 2→1 (rare→dominant)
+        inp1 = [
+            [0, 0, 1, 1, 0, 0],
+            [0, 1, 2, 0, 0, 0],
+            [0, 0, 1, 1, 0, 0],
+            [0, 0, 0, 2, 1, 0],
+        ]
+        out1 = [
+            [0, 0, 1, 1, 0, 0],
+            [0, 1, 1, 0, 0, 0],  # 2→1
+            [0, 0, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 0],  # 2→1
+        ]
+        inp2 = [
+            [0, 0, 0, 0],
+            [0, 1, 2, 0],
+            [0, 1, 1, 0],
+            [0, 0, 0, 0],
+        ]
+        out2 = [
+            [0, 0, 0, 0],
+            [0, 1, 1, 0],  # 2→1
+            [0, 1, 1, 0],
+            [0, 0, 0, 0],
+        ]
+        task = Task(
+            task_id="test_role",
+            train_examples=[(inp1, out1), (inp2, out2)],
+            test_inputs=[],
+        )
+        mappings = _learn_structural_recolor(task)
+        # Should learn rare→dominant
+        self.assertTrue(len(mappings) > 0)
+        src_roles = [m[0] for m in mappings]
+        self.assertIn("rare", src_roles)
+
+    def test_role_recolor_generates_primitive(self):
+        """prepare_for_task should generate parameterized primitives."""
+        inp1 = [
+            [0, 0, 1, 1, 0, 0],
+            [0, 1, 2, 0, 0, 0],
+            [0, 0, 1, 1, 0, 0],
+            [0, 0, 0, 2, 1, 0],
+        ]
+        out1 = [
+            [0, 0, 1, 1, 0, 0],
+            [0, 1, 1, 0, 0, 0],
+            [0, 0, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 0],
+        ]
+        inp2 = [
+            [0, 0, 0, 0],
+            [0, 1, 2, 0],
+            [0, 1, 1, 0],
+            [0, 0, 0, 0],
+        ]
+        out2 = [
+            [0, 0, 0, 0],
+            [0, 1, 1, 0],
+            [0, 1, 1, 0],
+            [0, 0, 0, 0],
+        ]
+        task = Task(
+            task_id="test_gen",
+            train_examples=[(inp1, out1), (inp2, out2)],
+            test_inputs=[],
+        )
+        grammar = ARCGrammar()
+        grammar.prepare_for_task(task)
+        prim_names = [p.name for p in grammar._task_prims]
+        self.assertIn("param_role_recolor", prim_names)
+
+    def test_role_recolor_applies_correctly(self):
+        """The generated role_recolor primitive should transform grids correctly."""
+        from domains.arc.grammar import _learn_parameterized_prims
+        # Train: rare (2) → dominant (1)
+        inp1 = [
+            [0, 0, 1, 1, 0, 0],
+            [0, 1, 2, 0, 0, 0],
+            [0, 0, 1, 1, 0, 0],
+            [0, 0, 0, 2, 1, 0],
+        ]
+        out1 = [
+            [0, 0, 1, 1, 0, 0],
+            [0, 1, 1, 0, 0, 0],
+            [0, 0, 1, 1, 0, 0],
+            [0, 0, 0, 1, 1, 0],
+        ]
+        task = Task(
+            task_id="test_apply",
+            train_examples=[(inp1, out1)],
+            test_inputs=[],
+        )
+        prims = _learn_parameterized_prims(task)
+        role_prim = [p for p in prims if p.name == "param_role_recolor"]
+        self.assertEqual(len(role_prim), 1)
+
+        # Apply to training input — should produce training output
+        result = role_prim[0].fn(inp1)
+        self.assertEqual(result, out1)
+
+    def test_rank_recolor(self):
+        """Frequency-rank recolor should swap colors by rank."""
+        from domains.arc.grammar import _learn_recolor_by_frequency
+        # Input: 0 (bg, 12 cells), 1 (dominant, 3 cells), 2 (rare, 1 cell)
+        # Output: same positions but 1→2, 2→1 (swap dominant and rare)
+        inp = [
+            [0, 0, 0, 0],
+            [0, 1, 1, 0],
+            [0, 1, 2, 0],
+            [0, 0, 0, 0],
+        ]
+        out = [
+            [0, 0, 0, 0],
+            [0, 2, 2, 0],
+            [0, 2, 1, 0],
+            [0, 0, 0, 0],
+        ]
+        task = Task(
+            task_id="test_rank",
+            train_examples=[(inp, out)],
+            test_inputs=[],
+        )
+        result = _learn_recolor_by_frequency(task)
+        # Should learn a rank mapping
+        self.assertTrue(len(result) > 0)
+
+    def test_assign_color_roles(self):
+        """Color role assignment should identify bg, dominant, rare."""
+        from domains.arc.grammar import _assign_color_roles
+        grid = [
+            [0, 0, 0, 0],
+            [0, 1, 1, 0],
+            [0, 1, 2, 0],
+            [0, 0, 0, 0],
+        ]
+        roles = _assign_color_roles(grid)
+        self.assertEqual(roles[0], "bg")
+        self.assertEqual(roles[1], "dominant")
+        self.assertEqual(roles[2], "rare")
+
+    def test_no_prims_for_size_change(self):
+        """No parameterized prims should be generated for size-changing tasks."""
+        from domains.arc.grammar import _learn_parameterized_prims
+        task = Task(
+            task_id="test_size_change",
+            train_examples=[
+                ([[1, 2], [3, 4]], [[1, 2, 3], [4, 5, 6]]),  # 2x2 → 2x3
+            ],
+            test_inputs=[],
+        )
+        prims = _learn_parameterized_prims(task)
+        self.assertEqual(len(prims), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
