@@ -382,10 +382,15 @@ class ProgressTracker:
             "n_train_perfect": wr.n_train_perfect,
             "solving_rank": wr.solving_rank,
             "elapsed": round(elapsed, 1),
+            "train_predictions": wr.train_predictions,
+            "test_predictions": wr.test_predictions,
         }
         self.all_records.append(record)
 
-        self._file.write(json.dumps(record) + "\n")
+        # Exclude predictions from JSONL (large grids bloat streaming output)
+        jsonl_record = {k: v for k, v in record.items()
+                        if k not in ("train_predictions", "test_predictions")}
+        self._file.write(json.dumps(jsonl_record) + "\n")
         self._file.flush()
 
         if self.done % self.SCOREBOARD_INTERVAL == 0:
@@ -935,6 +940,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
                 "program": r["program"],
                 "n_train_perfect": r.get("n_train_perfect", 0),
                 "solving_rank": r.get("solving_rank"),
+                "train_predictions": r.get("train_predictions"),
+                "test_predictions": r.get("test_predictions"),
             }
             for r in tracker.all_records
         },

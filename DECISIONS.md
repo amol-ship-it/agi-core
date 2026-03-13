@@ -1958,4 +1958,36 @@ The entire gain came from one architectural insight: the 5x5 neighborhood rule c
 **Files:** `experiments/visualize_results.py`
 
 ---
+
+### Decision 96: CRITICAL BUG FIX — Solve counting was wrong
+
+**Date:** 2026-03-13
+**Bug:** `WakeResult.solved` property fell back to `train_solved` when `test_solved` was `None`. For tasks solved by corrections (neighborhood fix, identity correction, color fix), the corrected program was never evaluated on test — `_make_solved_result` only tested `enum_candidates` (uncorrected programs), not `best_so_far` (the corrected program). This caused `test_solved=None`, triggering the fallback.
+
+**Impact:** Previously reported numbers were massively inflated:
+- ARC-AGI-1 contest: reported 445/800 (55.6%), actual 141/800 (17.6%)
+- ARC-AGI-1 eval: reported 185/400 (46.2%), actual 34/400 (8.5%)
+- ARC-AGI-2 train: reported 312/1000 (31.2%), actual 131/1000 (13.1%)
+- ARC-AGI-2 eval: reported 9/120 (7.5%), actual 0/120 (0.0%)
+
+**Root cause:** In `_make_solved_result`, `_evaluate_top_k_on_test(enum_candidates, ...)` evaluated only enumeration candidates, not the corrected `best_so_far`. When no enum candidate passed test, `test_solved=None`, and the `solved` property fell back to `train_solved=True`.
+
+**Fix:** Added fallback in `_make_solved_result`: when `ts is None` (enum_candidates didn't yield a test result), directly evaluate `best_so_far` on test via `_evaluate_on_test`. This ensures every train-solved task gets test-verified.
+
+**Overfit analysis:** The correction cascade (neighborhood fix) overfits heavily — 277/400 train_solved vs 107/400 test-verified in contest mode. The corrections learn patterns that don't generalize from training to test examples.
+
+**Files:** `core/learner.py` (2-line fix in `_make_solved_result`), `README.md` (all numbers corrected)
+
+---
+
+### Decision 97: Store predictions in results JSON for visualization
+
+**Date:** 2026-03-13
+**Context:** Visualizer needs to show predicted output grids. With multi-process workers, dynamically created primitives (neighborhood_fix, color_remap) exist only in subprocess memory — not available in the main process where the visualizer runs.
+
+**Fix:** Compute train/test predictions in the learner (where dynamic primitives are in memory) and store them in WakeResult and the results JSON. Visualizer reads stored predictions instead of re-executing programs.
+
+**Files:** `core/results.py`, `core/learner.py`, `core/runner.py`, `experiments/visualize_results.py`
+
+---
 *This document will be updated with each new session and major decision.*

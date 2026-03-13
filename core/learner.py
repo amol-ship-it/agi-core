@@ -242,6 +242,10 @@ class Learner:
             # Use the test-best candidate as the reported best
             if top_sp is not None and top_sp is not best_so_far:
                 best_so_far = top_sp
+            # If enum_candidates didn't yield a test result (e.g. solve came
+            # from correction/identity fix), evaluate best_so_far directly.
+            if ts is None and best_so_far is not None:
+                te, ts = self._evaluate_on_test(best_so_far, task)
             best_so_far.task_id = task.task_id
             _record_solve(best_so_far)
             front = self._extract_pareto_front(pareto)
@@ -250,12 +254,14 @@ class Learner:
                 f"  [wake] Task {task.task_id}: SOLVED by {phase_name}, "
                 f"energy={best_so_far.energy:.6f}, evals={n_evals}, "
                 f"candidates={n_perf}, time={wall:.1f}s")
+            train_preds, test_preds = self._compute_predictions(best_so_far, task)
             return WakeResult(
                 task_id=task.task_id, train_solved=True, best=best_so_far,
                 generations_used=gens, evaluations=n_evals, wall_time=wall,
                 pareto_front=front, dedup_count=deduped,
                 test_error=te, test_solved=ts,
-                n_train_perfect=n_perf, solving_rank=s_rank)
+                n_train_perfect=n_perf, solving_rank=s_rank,
+                train_predictions=train_preds, test_predictions=test_preds)
 
         # --- Phase 1: Exhaustive enumeration ---
         t_phase = time.time()
@@ -538,6 +544,7 @@ class Learner:
 
         front = self._extract_pareto_front(pareto)
         wall = time.time() - t0
+        train_preds, test_preds = self._compute_predictions(best_so_far, task)
         logger.info(
             f"  [wake] Task {task.task_id}: train_solved={solved}, "
             f"energy={best_so_far.energy:.6f}, gens={gens_used}, "
@@ -553,7 +560,37 @@ class Learner:
             wall_time=wall,
             pareto_front=front,
             dedup_count=total_deduped,
+            train_predictions=train_preds,
+            test_predictions=test_preds,
         )
+
+    def _compute_predictions(
+        self, best: Optional[ScoredProgram], task: Task
+    ) -> tuple[Optional[list], Optional[list]]:
+        """Compute predicted outputs for train and test inputs.
+
+        Returns (train_predictions, test_predictions). Stored in results JSON
+        so the visualizer doesn't need to re-execute programs (which may use
+        dynamically created primitives unavailable after the run).
+        """
+        if best is None:
+            return None, None
+        train_preds = []
+        for inp, _ in task.train_examples:
+            try:
+                pred = self.env.execute(best.program, inp)
+                train_preds.append(pred)
+            except Exception:
+                train_preds.append(inp)
+        test_preds = []
+        if task.test_inputs:
+            for inp in task.test_inputs:
+                try:
+                    pred = self.env.execute(best.program, inp)
+                    test_preds.append(pred)
+                except Exception:
+                    test_preds.append(inp)
+        return train_preds, test_preds or None
 
     def _evaluate_on_test(
         self, best: Optional[ScoredProgram], task: Task

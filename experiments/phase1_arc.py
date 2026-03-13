@@ -5,6 +5,7 @@ Thin wrapper around the generic core runner. Provides:
 - ARC dataset loading (auto-detects or uses built-in samples)
 - ARC-specific search tuning (energy_beta, solve_threshold)
 - Train/eval pipeline: train produces a culture file, eval loads it
+- Auto-generated HTML visualization of results
 
 Usage:
     python -m experiments.phase1_arc                      # full pipeline (train → eval)
@@ -113,6 +114,19 @@ def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
     )
 
 
+def _try_generate_viz(results_json_path: str) -> None:
+    """Generate HTML visualization from a results JSON file."""
+    if not os.path.exists(results_json_path):
+        return
+    try:
+        from .visualize_results import generate_html
+        viz_path = results_json_path.replace(".json", "_viz.html")
+        generate_html(results_json_path, viz_path)
+        print(f"  Visualization:    {viz_path}")
+    except Exception as e:
+        print(f"  (visualization skipped: {e})")
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -158,6 +172,7 @@ def _run_train(args, resolved, max_tasks):
                        domain_tag="phase1_arc_train", tasks=tasks,
                        save_culture=args.save_culture)
     result = run_experiment(cfg)
+    _try_generate_viz(result.results_path)
     print(f"  Culture saved to: {result.culture_path}")
 
 
@@ -167,7 +182,8 @@ def _run_eval(args, resolved, max_tasks):
                        title="ARC-AGI-1 EVALUATION",
                        domain_tag="phase1_arc_eval", tasks=tasks,
                        culture_path=args.culture)
-    run_experiment(cfg)
+    result = run_experiment(cfg)
+    _try_generate_viz(result.results_path)
 
 
 def _run_pipeline(args, resolved, max_tasks):
@@ -212,6 +228,9 @@ def _run_pipeline(args, resolved, max_tasks):
             title="ARC-AGI-1 FULL PIPELINE (Train → Eval)",
             domain="phase1_arc", args=args, resolved=resolved,
         )
+
+        # Generate HTML visualization from pipeline results
+        _try_generate_viz(json_path)
 
         print_pipeline_summary(
             train_result, eval_result,
