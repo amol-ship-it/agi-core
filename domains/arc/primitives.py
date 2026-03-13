@@ -6600,8 +6600,6 @@ def build_task_color_primitives(task_colors: set[int]) -> list[Primitive]:
     prims: list[Primitive] = []
     # Non-zero colors in the task
     colors = sorted(task_colors - {0})
-    # Include 0 in the full palette for remap targets
-    all_colors = sorted(task_colors)
 
     # keep_cN: keep only pixels of color N
     for c in colors:

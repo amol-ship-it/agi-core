@@ -233,7 +233,6 @@ class ARCEnv(Environment):
                             nr, nc = r + dr, c + dc
                             if 0 <= nr < h and 0 <= nc < w:
                                 nbrs.add(int(arr[nr, nc]))
-                        key = (center, frozenset(nbrs))
                         hkey = (center, tuple(sorted(nbrs)))
                         if hkey in adj_rules:
                             result[r, c] = adj_rules[hkey]
@@ -259,7 +258,6 @@ class ARCEnv(Environment):
         Bounded to <=50 rules to avoid overfitting.
         """
         rules: dict[tuple, int] = {}
-        total_diff_pixels = 0
 
         for got, expected in zip(program_outputs, expected_outputs):
             got_arr = np.array(got, dtype=np.int32)
@@ -275,7 +273,6 @@ class ARCEnv(Environment):
                 for c in range(w):
                     if not diff[r, c]:
                         continue
-                    total_diff_pixels += 1
                     # 3x3 neighborhood (use -1 for out-of-bounds)
                     patch = []
                     for dr in (-1, 0, 1):

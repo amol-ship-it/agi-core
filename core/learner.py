@@ -2102,7 +2102,7 @@ class Learner:
         return front
 
     def _enumerate_subtrees(self, program: Program) -> list[Program]:
-        """Yield every sub-tree in a program (including the root)."""
+        """Return every sub-tree in a program (including the root)."""
         result = [program]
         for child in program.children:
             result.extend(self._enumerate_subtrees(child))

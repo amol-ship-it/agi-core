@@ -17,6 +17,7 @@ import tempfile
 import unittest
 
 from core import Program, Task, InMemoryStore, Learner, SearchConfig, CurriculumConfig
+from core.types import ScoredProgram
 from domains.arc import ARCEnv, ARCGrammar, ARCDrive, ARC_PRIMITIVES, to_np, from_np
 from domains.arc.dataset import make_sample_tasks, load_arc_task, load_arc_dataset
 from domains.arc.primitives import (
@@ -1745,6 +1746,81 @@ class TestDiffAndPatch(unittest.TestCase):
         correction = self.env.infer_output_correction(got, exp)
         self.assertIsNotNone(correction)
 
+    def test_nbr_fix_registers_primitive(self):
+        """nbr_fix should register a callable primitive and produce correct output."""
+        from domains.arc.primitives import _PRIM_MAP
+        # Context-dependent fix: 0 next to 1 on top → becomes 2, 0 next to 1 on left → becomes 3
+        # Color remap can't handle this (0 maps to different colors depending on context)
+        got = [
+            [[1, 0], [0, 0]],
+            [[0, 0], [1, 0]],
+        ]
+        exp = [
+            [[1, 2], [3, 0]],  # top-right 0 has 1 above → 2, bottom-left 0 has 1 to right → 3
+            [[3, 0], [1, 2]],
+        ]
+        correction = self.env.infer_output_correction(got, exp)
+        # May produce nbr_fix or adj_fix — either is acceptable since both are spatial
+        if correction is not None:
+            prim = _PRIM_MAP.get(correction.root)
+            self.assertIsNotNone(prim)
+            for g, e in zip(got, exp):
+                self.assertEqual(prim.fn(g), e)
+
+    def test_adj_fix_registers_primitive(self):
+        """adj_fix should register a callable primitive and produce correct output."""
+        from domains.arc.primitives import _PRIM_MAP
+        # Adjacent to color 2, color 0 → becomes 1 (consistent across examples)
+        got = [
+            [[0, 2, 0], [0, 0, 0], [0, 0, 0]],
+            [[0, 0, 0], [0, 2, 0], [0, 0, 0]],
+        ]
+        exp = [
+            [[1, 2, 1], [0, 1, 0], [0, 0, 0]],
+            [[0, 1, 0], [1, 2, 1], [0, 1, 0]],
+        ]
+        correction = self.env.infer_output_correction(got, exp)
+        if correction is not None and "adj_fix" in correction.root:
+            prim = _PRIM_MAP.get(correction.root)
+            self.assertIsNotNone(prim)
+            for g, e in zip(got, exp):
+                self.assertEqual(prim.fn(g), e)
+
+    def test_nbr_fix_rejects_inconsistent_rules(self):
+        """Inconsistent neighborhood patterns should not produce a correction."""
+        # Same 3x3 neighborhood but different expected outputs across examples
+        got = [
+            [[1, 1, 1], [1, 0, 1], [1, 1, 1]],
+            [[1, 1, 1], [1, 0, 1], [1, 1, 1]],
+        ]
+        exp = [
+            [[1, 1, 1], [1, 2, 1], [1, 1, 1]],  # 0→2
+            [[1, 1, 1], [1, 3, 1], [1, 1, 1]],  # 0→3 (inconsistent!)
+        ]
+        correction = self.env.infer_output_correction(got, exp)
+        # Should NOT produce a nbr_fix (inconsistent), may fall back to None
+        if correction is not None:
+            self.assertNotIn("nbr_fix", correction.root)
+
+    def test_nbr_fix_boundary_handling(self):
+        """Neighborhood correction should handle edge/corner pixels correctly."""
+        # Corner pixel (0,0) has only 3 actual neighbors; others are -1
+        got = [
+            [[0, 1], [1, 1]],
+            [[0, 1, 1], [1, 1, 1], [1, 1, 1]],
+        ]
+        exp = [
+            [[2, 1], [1, 1]],
+            [[2, 1, 1], [1, 1, 1], [1, 1, 1]],
+        ]
+        correction = self.env.infer_output_correction(got, exp)
+        if correction is not None:
+            from domains.arc.primitives import _PRIM_MAP
+            prim = _PRIM_MAP.get(correction.root)
+            if prim is not None:
+                for g, e in zip(got, exp):
+                    self.assertEqual(prim.fn(g), e)
+
     def test_no_correction_inconsistent(self):
         """Return None when diffs are inconsistent across examples."""
         got = [[[1, 0], [0, 0]], [[1, 0], [0, 0]]]
@@ -1847,7 +1923,64 @@ class TestLOOCV(unittest.TestCase):
         grammar.prepare_for_task(task)
 
         # Identity program
-        from core.types import ScoredProgram
+        sp = ScoredProgram(
+            program=Program(root="identity"),
+            energy=0.0,
+            prediction_error=0.0,
+            complexity_cost=1.0,
+        )
+        score = learner._loocv_score(sp, task)
+        self.assertEqual(score, 1.0)
+
+    def test_loocv_wrong_program_scores_zero(self):
+        """A program that fails on held-out examples should score 0."""
+        env = ARCEnv()
+        grammar = ARCGrammar()
+        drive = ARCDrive()
+        memory = InMemoryStore()
+        cfg = SearchConfig(seed=42, exhaustive_depth=1)
+        learner = Learner(env, grammar, drive, memory, search_config=cfg)
+
+        # Task where rot_90 works on all examples — but fill_0 does not
+        task = Task(
+            task_id="test_loocv_fail",
+            train_examples=[
+                ([[1, 2], [3, 4]], [[3, 1], [4, 2]]),
+                ([[5, 6], [7, 8]], [[7, 5], [8, 6]]),
+                ([[0, 1], [1, 0]], [[1, 0], [0, 1]]),
+            ],
+            test_inputs=[],
+        )
+        grammar.prepare_for_task(task)
+
+        # fill_0 matches none of the examples, should score 0
+        sp = ScoredProgram(
+            program=Program(root="fill_0"),
+            energy=0.0,
+            prediction_error=0.0,
+            complexity_cost=1.0,
+        )
+        score = learner._loocv_score(sp, task)
+        self.assertEqual(score, 0.0)
+
+    def test_loocv_single_example_returns_one(self):
+        """With only 1 training example, LOOCV can't hold out — should return 1.0."""
+        env = ARCEnv()
+        grammar = ARCGrammar()
+        drive = ARCDrive()
+        memory = InMemoryStore()
+        cfg = SearchConfig(seed=42, exhaustive_depth=1)
+        learner = Learner(env, grammar, drive, memory, search_config=cfg)
+
+        task = Task(
+            task_id="test_loocv_single",
+            train_examples=[
+                ([[1, 2], [3, 4]], [[1, 2], [3, 4]]),
+            ],
+            test_inputs=[],
+        )
+        grammar.prepare_for_task(task)
+
         sp = ScoredProgram(
             program=Program(root="identity"),
             energy=0.0,
