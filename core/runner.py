@@ -284,8 +284,9 @@ class ProgressTracker:
 
     SCOREBOARD_INTERVAL = 10
 
-    def __init__(self, jsonl_path: str, t0: float, split_label: str = ""):
-        self._file = open(jsonl_path, "w")
+    def __init__(self, jsonl_path: str, t0: float, split_label: str = "",
+                 suppress_file: bool = False):
+        self._file = open(os.devnull, "w") if suppress_file else open(jsonl_path, "w")
         self._t0 = t0
         self._split_label = split_label  # e.g. "TRAIN" or "EVAL"
 
@@ -557,7 +558,7 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
                      else library_path.replace("_library.json", "_culture.json"))
 
     tee = None
-    if not cfg.no_log:
+    if not cfg.no_log and not cfg.suppress_files:
         tee = TeeWriter(log_path, sys.stdout)
         sys.stdout = tee
 
@@ -706,7 +707,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         _split = "TRAIN"
     else:
         _split = ""
-    tracker = ProgressTracker(jsonl_path, time.time(), split_label=_split)
+    tracker = ProgressTracker(jsonl_path, time.time(), split_label=_split,
+                              suppress_file=cfg.suppress_files)
 
     hline("─")
     print(f"  Running {len(tasks)} tasks × {rounds} rounds on {workers} workers")
