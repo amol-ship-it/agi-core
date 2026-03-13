@@ -1588,7 +1588,12 @@ class Learner:
 
         Uses a higher rule cap (100) since identity-seeded corrections need
         to capture the full transformation, not just residual errors.
-        Also tries 5x5 neighborhoods for longer-range dependencies.
+        Also tries 5x5+ neighborhoods for longer-range dependencies.
+
+        LOOCV: When there are 3+ training examples, holds out each example
+        and verifies the correction learned from the others still works.
+        This prevents accepting corrections that memorize training patterns
+        (e.g., large neighborhood patches) without generalizing.
         """
         # Check if all training examples are same-shape
         for inp, exp in task.train_examples:
@@ -1604,7 +1609,7 @@ class Learner:
         inputs = [inp for inp, _ in task.train_examples]
         expected = [exp for _, exp in task.train_examples]
 
-        # Try correction with higher rule cap and 5x5 fallback
+        # Try correction with higher rule cap and 5x5+ fallback
         correction = self.env.infer_output_correction(
             inputs, expected, max_rules=100, try_5x5=True)
         if correction is None:
@@ -1613,11 +1618,32 @@ class Learner:
         # The correction IS the full program (no base program needed)
         sp = self._evaluate_program(correction, task)
 
-        # Only accept if it actually solves
-        if sp.prediction_error <= self.search_cfg.solve_threshold:
-            return sp
+        # Only accept if it actually solves on training
+        if sp.prediction_error > self.search_cfg.solve_threshold:
+            return None
 
-        return None
+        # LOOCV: hold out each training example and verify generalization.
+        # Skip if only 2 examples (too few for meaningful holdout).
+        if len(task.train_examples) >= 3:
+            for i in range(len(task.train_examples)):
+                loo_inputs = inputs[:i] + inputs[i+1:]
+                loo_expected = expected[:i] + expected[i+1:]
+
+                loo_correction = self.env.infer_output_correction(
+                    loo_inputs, loo_expected, max_rules=100, try_5x5=True)
+                if loo_correction is None:
+                    return None
+
+                # Test on held-out example
+                try:
+                    pred = self.env.execute(loo_correction, inputs[i])
+                    err = self.drive.prediction_error(pred, expected[i])
+                    if err > self.search_cfg.solve_threshold:
+                        return None  # correction doesn't generalize
+                except Exception:
+                    return None
+
+        return sp
 
     @staticmethod
     def _to_array(grid):
