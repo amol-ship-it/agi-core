@@ -129,6 +129,7 @@ class ARCEnv(Environment):
             lambda: self._infer_adjacency_correction(program_outputs, expected_outputs),
             lambda: self._infer_neighborhood_correction(program_outputs, expected_outputs, radius=1, max_rules=max_rules),
             lambda: (self._infer_neighborhood_correction(program_outputs, expected_outputs, radius=2, max_rules=max_rules) if try_5x5 else None),
+            lambda: (self._infer_neighborhood_correction(program_outputs, expected_outputs, radius=3, max_rules=max_rules) if try_5x5 else None),
             lambda: self._infer_row_col_correction(program_outputs, expected_outputs),
         ]:
             result = strategy()
