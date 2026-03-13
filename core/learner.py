@@ -1838,7 +1838,6 @@ class Learner:
     # -------------------------------------------------------------------------
 
     @staticmethod
-    @staticmethod
     def _avg_cells(task: Task) -> int:
         """Max cell count across training input grids.
 

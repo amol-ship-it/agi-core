@@ -659,6 +659,13 @@ def _learn_recolor_by_has_hole(examples: list[tuple]) -> Optional[dict]:
 
 def _make_conditional_recolor_fn(rule: dict, strategy: str) -> Callable:
     """Build a Grid→Grid function from a learned conditional recolor rule."""
+    # Compute a default color for unseen keys (most common output color).
+    # This prevents overfitting on by_shape/by_size when test inputs
+    # have properties not seen in training.
+    from collections import Counter
+    color_counts = Counter(rule.values())
+    default_color = color_counts.most_common(1)[0][0] if color_counts else 0
+
     def transform(grid: Grid) -> Grid:
         shapes = find_foreground_shapes(grid)
         if not shapes:
@@ -675,15 +682,15 @@ def _make_conditional_recolor_fn(rule: dict, strategy: str) -> Callable:
 
         for i, shape in enumerate(shapes):
             if strategy == "by_size":
-                new_color = rule.get(shape["size"], shape["color"])
+                new_color = rule.get(shape["size"], default_color)
             elif strategy == "by_singleton":
                 new_color = rule[shape["size"] > 1]
             elif strategy == "by_input_color":
-                new_color = rule.get(shape["color"], shape["color"])
+                new_color = rule.get(shape["color"], default_color)
             elif strategy == "by_shape":
-                new_color = rule.get(_shape_signature(shape), shape["color"])
+                new_color = rule.get(_shape_signature(shape), default_color)
             elif strategy == "by_size_rank":
-                new_color = rule.get(size_ranks.get(i, -1), shape["color"])
+                new_color = rule.get(size_ranks.get(i, -1), default_color)
             elif strategy == "by_compactness":
                 new_color = rule[_compactness(shape) >= 1.0 - 1e-9]
             elif strategy == "by_has_hole":
