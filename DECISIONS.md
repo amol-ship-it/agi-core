@@ -1927,4 +1927,35 @@ Fixed a bug where `run_curriculum` dropped `sequential_compounding` and `adaptiv
 The entire gain came from one architectural insight: the 5x5 neighborhood rule cap was artificially low (30 vs 100 for 3x3), and adding larger neighborhoods (7x7, 9x9, 11x11) resolves false positives where smaller patches can't distinguish changed from unchanged pixels. This confirms Decision 78: **it's a vocabulary problem, not a search problem** — but the "vocabulary" that matters here is the correction vocabulary (neighborhood radius), not the program primitive vocabulary.
 
 ---
+
+### Decision 94: LOOCV for Identity Correction — Prevent Overfit
+
+**Date:** 2026-03-13
+**Context:** 23 tasks were train-perfect but test-failing because neighborhood rules (especially at larger radii) memorized training patterns. Analysis showed 0/test-needed-changes were covered by training rules.
+
+**Change:** Added LOOCV to `_try_identity_correction`: when 3+ training examples exist, holds out each example and verifies the correction learned from others generalizes.
+
+**Results:** 444→445/800 (+1). Overfit reduced from 24→17 (train), 13→10 (eval). The LOOCV freed up one task to find a better solution via alternative search paths.
+
+**Files:** `core/learner.py:1578-1641`
+
+---
+
+### Decision 95: HTML Results Visualization
+
+**Date:** 2026-03-13
+**Context:** Need to visually audit results — see actual grids with ARC colors, our predictions vs expected, and intermediate program steps.
+
+**Added:** `experiments/visualize_results.py` — generates HTML report with:
+- Colored grid rendering using official ARC palette
+- Training examples (input → expected)
+- Test predictions vs expected with diff highlighting (red outline on mismatched cells)
+- Intermediate program execution steps for composed programs
+- Filter by status (solved/overfit/near-miss/unsolved)
+
+**Usage:** `python -m experiments.visualize_results runs/XXX.json`
+
+**Files:** `experiments/visualize_results.py`
+
+---
 *This document will be updated with each new session and major decision.*

@@ -185,7 +185,7 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 |------|----------|------------------------|-------|-----------|
 | `quick` | 34/50 (68.0%) | — | — | **~8s** |
 | `default` | 250/400 (62.5%) | — | — | **~3.5 min** |
-| `contest` | 259/400 (64.8%) | 185/400 (46.2%) | 444/800 (55.5%) | **~8.5 min** |
+| `contest` | 260/400 (65.0%) | 185/400 (46.2%) | 445/800 (55.6%) | **~8.5 min** |
 
 **Other domains:**
 
@@ -372,7 +372,7 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated on list_ops and Zork
 - **Phase 4** ✅ Compounding infrastructure: `--compounding` flag, distance-based drive signals, library primitive execution. Zork: 7/20→10/20 with library reuse 5-11x. ARC: library entries produced but limited impact.
 - **Phase 5** ✅ Narrowed ARC train-eval gap from 3.8x to 1.8x (45% train, 24.5% eval) via LOOCV + 3x3/5x5 diff-and-patch + identity correction
-- **Phase 6** ✅ Multi-scale neighborhood correction (3x3→11x11): ARC-AGI-1 contest 444/800 (55.5%), eval 185/400 (46.2%)
+- **Phase 6** ✅ Multi-scale neighborhood correction (3x3→11x11) + LOOCV: ARC-AGI-1 contest 445/800 (55.6%), eval 185/400 (46.2%)
 - **Phase 7** 🔧 ARC-AGI-2 improved to 31.2% train, 7.5% eval — corrections transfer cross-domain
 - **Phase 6** Cross-domain library transfer
 - **Phase 7** Continuous mixed-domain learning
