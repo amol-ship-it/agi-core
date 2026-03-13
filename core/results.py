@@ -37,6 +37,8 @@ class WakeResult:
     dedup_count: int = 0    # how many duplicates were removed
     test_error: Optional[float] = None  # error on held-out test examples (None if unavailable)
     test_solved: Optional[bool] = None  # did the program solve the held-out test examples?
+    n_train_perfect: int = 0            # how many distinct programs solved training
+    solving_rank: Optional[int] = None  # which rank (0-indexed) solved test (None if not solved)
 
     @property
     def solved(self) -> bool:

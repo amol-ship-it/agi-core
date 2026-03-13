@@ -377,6 +377,8 @@ class ProgressTracker:
             "evaluations": wr.evaluations,
             "wall_time": round(wr.wall_time, 3),
             "program": repr(wr.best.program) if wr.best else None,
+            "n_train_perfect": wr.n_train_perfect,
+            "solving_rank": wr.solving_rank,
             "elapsed": round(elapsed, 1),
         }
         self.all_records.append(record)
@@ -885,6 +887,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
                 "evaluations": r["evaluations"],
                 "wall_time": r["wall_time"],
                 "program": r["program"],
+                "n_train_perfect": r.get("n_train_perfect", 0),
+                "solving_rank": r.get("solving_rank"),
             }
             for r in tracker.all_records
         },
