@@ -266,11 +266,11 @@
 
 [Implemented Phases A, B, and D. Phase A: Added `_loocv_score` method to Learner — re-prepares grammar with N-1 examples and validates held-out for each candidate. Phase B: Extended `infer_output_correction` with adjacency-based and 3x3 neighborhood correction strategies beyond color remapping. Phase D: Moved ~120 parameterized color primitives to runtime generation in `prepare_for_task`, reducing per-task primitives from ~349 to ~235. All 527 tests pass.
 
-**Results:** +100 total solves (120→220 in contest mode). Phase B (diff-and-patch) drove 89% of gains — `nbr_fix` alone added 84 new solves with 91% generalization rate. Train-eval gap narrowed from 3.8x to 2.0x. See Decisions 82-83 for full attribution.]
+**Results:** +100 total solves (120→220 in contest mode). Phase B (diff-and-patch) drove 89% of gains — `neighborhood_3x3_fix` alone added 84 new solves with 91% generalization rate. Train-eval gap narrowed from 3.8x to 2.0x. See Decisions 82-83 for full attribution.]
 
 ### Prompt 42: Cross-Domain Validation + Path to 320/800
 
-> Implement the strategic plan: (1) Cross-domain validation runs for ARC-AGI-2, Zork, ARC-AGI-1, (2) Document results, (3) Generalization gap analysis (nbr_fix cap tuning, complexity penalty, ensemble agreement), (4) Near-miss goldmine mining (identity-seeded correction, 5x5 neighborhoods, row/column corrections), (5) ARC compounding re-test, (6) Jericho assessment (deferred).
+> Implement the strategic plan: (1) Cross-domain validation runs for ARC-AGI-2, Zork, ARC-AGI-1, (2) Document results, (3) Generalization gap analysis (neighborhood fix cap tuning, complexity penalty, ensemble agreement), (4) Near-miss goldmine mining (identity-seeded correction, 5x5 neighborhoods, row/column corrections), (5) ARC compounding re-test, (6) Jericho assessment (deferred).
 
 [Implemented 4 new correction strategies: (a) 5x5 neighborhood patches for longer-range dependencies, (b) identity-seeded correction for same-shape tasks, (c) row/column-level corrections, (d) ensemble agreement for test prediction. Fixed CurriculumConfig bug that dropped sequential_compounding/adaptive_realloc when resolving workers=0.
 

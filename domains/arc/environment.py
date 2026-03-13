@@ -65,11 +65,20 @@ class ARCEnv(Environment):
         """Infer a correction that fixes mismatches between program outputs
         and expected outputs.
 
-        Tries multiple strategies in order:
-        1. Color remapping: consistent color→color substitutions
-        2. Adjacency-based correction: pixel changes conditioned on neighbors
-        3. Neighborhood patch: full 3x3 context-based pixel correction
-        4. (optional) 5x5 neighborhood patch for longer-range dependencies
+        Tries multiple strategies in order of specificity:
+        1. Color remapping — consistent color→color substitutions (cheapest)
+        2. Adjacency correction — pixel changes conditioned on 4-connected neighbors
+        3. 3x3 neighborhood patch — full 3x3 context-based pixel correction
+           (acts as learned cellular automaton rules, ≤max_rules rules)
+        4. 5x5 neighborhood patch — longer-range dependencies (≤30 rules)
+        5. Row/column correction — spatial rearrangements (reverse, shift, transpose)
+
+        Generated primitives follow the naming convention:
+        - color_remap_XtoY — color substitution
+        - adjacency_fix_Nr — N adjacency rules
+        - neighborhood_3x3_fix_Nr — N 3x3 neighborhood rules
+        - neighborhood_5x5_fix_Nr — N 5x5 neighborhood rules
+        - row_col_fix_<transform> — spatial rearrangement
 
         Returns a single best correction, or None. The caller (_try_color_fix)
         evaluates whether the correction actually improves accuracy.
@@ -79,28 +88,34 @@ class ARCEnv(Environment):
         if color_fix is not None:
             return color_fix
 
-        # Strategy 2: Adjacency-based correction
-        adj_fix = self._infer_adjacency_correction(program_outputs, expected_outputs)
-        if adj_fix is not None:
-            return adj_fix
+        # Strategy 2: Adjacency-based correction — pixel changes conditioned
+        # on 4-connected neighbor colors (e.g., "0 next to 2 → becomes 1")
+        adjacency_fix = self._infer_adjacency_correction(program_outputs, expected_outputs)
+        if adjacency_fix is not None:
+            return adjacency_fix
 
-        # Strategy 3: Neighborhood patch (3x3 context)
-        nbr_fix = self._infer_neighborhood_correction(
+        # Strategy 3: 3x3 neighborhood patch — encodes the full 3x3 pixel
+        # neighborhood as a feature key and learns output color per key.
+        # Acts as a learned cellular automaton rule set (≤max_rules rules).
+        neighborhood_3x3_fix = self._infer_neighborhood_correction(
             program_outputs, expected_outputs, max_rules=max_rules)
-        if nbr_fix is not None:
-            return nbr_fix
+        if neighborhood_3x3_fix is not None:
+            return neighborhood_3x3_fix
 
-        # Strategy 4: 5x5 neighborhood patch (longer-range dependencies)
+        # Strategy 4: 5x5 neighborhood patch — same as 3x3 but uses a larger
+        # patch for longer-range dependencies (pixel depends on cell 2 away).
+        # Stricter cap (30) since 5x5 has higher overfitting risk.
         if try_5x5:
-            nbr5_fix = self._infer_neighborhood_correction_5x5(
+            neighborhood_5x5_fix = self._infer_neighborhood_correction_5x5(
                 program_outputs, expected_outputs, max_rules=min(max_rules, 30))
-            if nbr5_fix is not None:
-                return nbr5_fix
+            if neighborhood_5x5_fix is not None:
+                return neighborhood_5x5_fix
 
-        # Strategy 5: Row/column-level corrections (spatial rearrangement)
-        rc_fix = self._infer_row_col_correction(program_outputs, expected_outputs)
-        if rc_fix is not None:
-            return rc_fix
+        # Strategy 5: Row/column-level corrections — detects systematic spatial
+        # rearrangements (row/col reversal, cyclic shifts, transpose)
+        row_col_fix = self._infer_row_col_correction(program_outputs, expected_outputs)
+        if row_col_fix is not None:
+            return row_col_fix
 
         return None
 
@@ -236,7 +251,7 @@ class ARCEnv(Environment):
         hashable_rules = {(c, tuple(sorted(ns))): v
                           for (c, ns), v in rules.items()}
 
-        def _make_adj_fix(adj_rules):
+        def _make_adjacency_fix(adj_rules):
             def adjacency_fix(grid: Grid) -> Grid:
                 arr = np.array(grid, dtype=np.int32)
                 result = arr.copy()
@@ -255,8 +270,8 @@ class ARCEnv(Environment):
                 return result.tolist()
             return adjacency_fix
 
-        name = f"adj_fix_{len(rules)}r"
-        fn = _make_adj_fix(hashable_rules)
+        name = f"adjacency_fix_{len(rules)}r"
+        fn = _make_adjacency_fix(hashable_rules)
         prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
         _PRIM_MAP[name] = prim
         return Program(root=name)
@@ -331,8 +346,8 @@ class ARCEnv(Environment):
                 return None
 
         # Build correction primitive
-        def _make_nbr_fix(nbr_rules):
-            def neighborhood_fix(grid: Grid) -> Grid:
+        def _make_neighborhood_3x3_fix(nbr_rules):
+            def neighborhood_3x3_fix(grid: Grid) -> Grid:
                 arr = np.array(grid, dtype=np.int32)
                 result = arr.copy()
                 h, w = arr.shape
@@ -350,10 +365,10 @@ class ARCEnv(Environment):
                         if key in nbr_rules:
                             result[r, c] = nbr_rules[key]
                 return result.tolist()
-            return neighborhood_fix
+            return neighborhood_3x3_fix
 
-        name = f"nbr_fix_{len(rules)}r"
-        fn = _make_nbr_fix(dict(rules))
+        name = f"neighborhood_3x3_fix_{len(rules)}r"
+        fn = _make_neighborhood_3x3_fix(dict(rules))
         prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
         _PRIM_MAP[name] = prim
         return Program(root=name)
@@ -427,7 +442,7 @@ class ARCEnv(Environment):
                 return None
 
         # Build correction primitive
-        def _make_nbr5_fix(nbr_rules):
+        def _make_neighborhood_5x5_fix(nbr_rules):
             def neighborhood_5x5_fix(grid: Grid) -> Grid:
                 arr = np.array(grid, dtype=np.int32)
                 result = arr.copy()
@@ -448,8 +463,8 @@ class ARCEnv(Environment):
                 return result.tolist()
             return neighborhood_5x5_fix
 
-        name = f"nbr5_fix_{len(rules)}r"
-        fn = _make_nbr5_fix(dict(rules))
+        name = f"neighborhood_5x5_fix_{len(rules)}r"
+        fn = _make_neighborhood_5x5_fix(dict(rules))
         prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
         _PRIM_MAP[name] = prim
         return Program(root=name)
@@ -507,17 +522,17 @@ class ARCEnv(Environment):
                     all_match = False
                     break
             if all_match:
-                def _make_rc_fix(tfn):
-                    def rc_fix(grid: Grid) -> Grid:
+                def _make_row_col_fix(tfn):
+                    def row_col_fix(grid: Grid) -> Grid:
                         arr = np.array(grid, dtype=np.int32)
                         result = tfn(arr)
                         if result is None:
                             return grid
                         return result.tolist()
-                    return rc_fix
+                    return row_col_fix
 
-                prim_name = f"rc_fix_{name}"
-                fn = _make_rc_fix(transform_fn)
+                prim_name = f"row_col_fix_{name}"
+                fn = _make_row_col_fix(transform_fn)
                 prim = Primitive(name=prim_name, arity=1, fn=fn, domain="arc")
                 _PRIM_MAP[prim_name] = prim
                 return Program(root=prim_name)

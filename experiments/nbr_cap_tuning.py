@@ -1,5 +1,5 @@
 """
-Quick experiment: nbr_fix rule cap tuning.
+Quick experiment: neighborhood fix rule cap tuning.
 
 Tests different max_rules caps for _infer_neighborhood_correction
 to find the optimal tradeoff between train solves and eval generalization.
@@ -36,7 +36,7 @@ def main():
 
     for cap in caps_to_test:
         print(f"\n{'='*60}")
-        print(f"  Testing nbr_fix rule cap = {cap}")
+        print(f"  Testing neighborhood fix rule cap = {cap}")
         print(f"{'='*60}\n")
 
         # Monkey-patch the default max_rules for this run
@@ -133,7 +133,7 @@ def main():
 
     # Summary
     print("\n" + "=" * 72)
-    print("  NBR_FIX RULE CAP TUNING RESULTS")
+    print("  NEIGHBORHOOD FIX RULE CAP TUNING RESULTS")
     print("=" * 72)
     print(f"\n  {'Cap':>4}  {'Train':>6}  {'T-Overfit':>9}  {'Eval':>5}  {'E-Overfit':>9}  {'Total':>5}  {'Gen Rate':>8}")
     print(f"  {'---':>4}  {'-----':>6}  {'---------':>9}  {'----':>5}  {'---------':>9}  {'-----':>5}  {'--------':>8}")

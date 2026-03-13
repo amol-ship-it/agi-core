@@ -1649,8 +1649,8 @@ This was latent since the numba JIT commit (b970016) but only triggered with cer
 
 | Category | Count | % of gains |
 |----------|-------|-----------|
-| `nbr_fix` (Phase B: 3x3 neighborhood patch) | 42 | 78% |
-| `adj_fix` (Phase B: adjacency correction) | 6 | 11% |
+| `neighborhood_3x3_fix` (Phase B: 3x3 neighborhood patch) | 42 | 78% |
+| `adjacency_fix` (Phase B: adjacency correction) | 6 | 11% |
 | Static compositions (vocab pruning freed search) | 5 | 9% |
 | per_object_recolor | 1 | 2% |
 
@@ -1658,27 +1658,27 @@ This was latent since the numba JIT commit (b970016) but only triggered with cer
 
 | Category | Count | % of gains |
 |----------|-------|-----------|
-| `nbr_fix` (Phase B) | 42 | 88% |
-| `adj_fix` (Phase B) | 2 | 4% |
+| `neighborhood_3x3_fix` (Phase B) | 42 | 88% |
+| `adjacency_fix` (Phase B) | 2 | 4% |
 | Static compositions | 4 | 8% |
 
 **Conclusion: Phase B (diff-and-patch) is 89% of the improvement.**
 
 - 48/54 train gains and 44/48 eval gains come from spatial correction strategies
-- The 3x3 neighborhood patch (`nbr_fix`) alone accounts for 42 train + 42 eval = **84 new solves**
+- The 3x3 neighborhood patch (`neighborhood_3x3_fix`) alone accounts for 42 train + 42 eval = **84 new solves**
 - **91% generalization rate**: 44 of 48 Phase B train solves also work on eval — corrections generalize exceptionally well
 - Phase D (vocab pruning) contributed ~5 static composition solves + speed improvement
 - Phase A (LOOCV) contributed overfit reduction (train overfit stable despite +52 train solves)
 - 2 tasks lost from vocabulary changes (different conditional/composition selected)
 
-**How `nbr_fix` works (the mechanism):**
+**How `neighborhood_3x3_fix` works (the mechanism):**
 
 In `domains/arc/environment.py:_infer_neighborhood_correction`:
 1. A near-miss program P gets ~95% of pixels right on training
 2. For each wrong pixel, encode its 3x3 neighborhood (9 color values) from P's output
 3. Map each neighborhood pattern to the expected output color
 4. If consistent across ALL training examples and ≤50 rules → create a correction primitive
-5. Compose as `nbr_fix_Nr(P)` and validate via trial evaluation
+5. Compose as `neighborhood_3x3_fix_Nr(P)` and validate via trial evaluation
 
 This is essentially a **learned cellular automaton rule** applied as post-processing on a near-miss program. It catches patterns where a program gets the global structure right but misses local context-dependent pixel decisions.
 
@@ -1704,7 +1704,7 @@ Ran all three benchmarks to establish post-improvement baselines:
 
 *Previous AGI-2 baseline was on a 400-task subset; full training set has 1000 tasks.
 
-**Key finding:** The diff-and-patch corrections (nbr_fix, adj_fix) transfer cross-domain within grid tasks. The 21.7% AGI-2 solve rate (up from 14%) required NO AGI-2-specific work — the same algorithms that improved AGI-1 also improve AGI-2. This supports the "one algorithm" thesis.
+**Key finding:** The diff-and-patch corrections (neighborhood_3x3_fix, adjacency_fix) transfer cross-domain within grid tasks. The 21.7% AGI-2 solve rate (up from 14%) required NO AGI-2-specific work — the same algorithms that improved AGI-1 also improve AGI-2. This supports the "one algorithm" thesis.
 
 **However:** AGI-2 eval (2.5%) is far below AGI-2 train (21.7%) — a 8.7x ratio vs AGI-1's 2.0x ratio. This suggests AGI-2 eval tasks require qualitatively different transformations, or the culture transfer is less effective with sparser training coverage (21.7% vs 37%).
 
@@ -1734,11 +1734,11 @@ ARC-AGI-1 default mode (all 800 tasks):
 | Overfit (T/E) | 16/5 | 18/11 | Slight increase |
 | Wall time | ~3 min | ~3.5 min | +17% |
 
-**Attribution of +66 solves:** The 5x5 neighborhood correction (`nbr5_fix`) is the biggest new contributor, appearing in ~30 eval solves. Identity-seeded correction (`nbr5_fix_Xr(identity)`) solves several tasks that previously had no near-miss base program. Row/column corrections contribute a few additional solves.
+**Attribution of +66 solves:** The 5x5 neighborhood correction (`neighborhood_5x5_fix`) is the biggest new contributor, appearing in ~30 eval solves. Identity-seeded correction (`neighborhood_5x5_fix_Xr(identity)`) solves several tasks that previously had no near-miss base program. Row/column corrections contribute a few additional solves.
 
 **Train/eval ratio improved from 2.0x to 1.7x** — the new strategies generalize well.
 
-#### nbr_fix Rule Cap Tuning (Step 3a)
+#### Neighborhood Fix Rule Cap Tuning (Step 3a)
 
 Tested caps 20, 30, 40, 50, 75, 100 on 50-task quick mode:
 

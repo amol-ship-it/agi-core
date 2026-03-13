@@ -164,11 +164,11 @@ Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, 
 
 Three modes. Pick one. That's the only knob most users need.
 
-| Mode | Tasks | Beam | Compute Cap | Expected accuracy | Use case |
-|------|-------|------|-------------|-------------------|----------|
-| `quick` | 50 | off | 500K | ~38% (38/100) | Fast dev loop (~5s) |
-| `default` | all (400) | off | 3M | ~34% (273/800) | Full benchmark (~3.5 min) |
-| `contest` | all (400) | 30×15 | 100M | ~36% (est.) | Maximum accuracy (~10 min) |
+| Mode | Tasks | Beam | Compute Cap | Eval accuracy | Use case |
+|------|-------|------|-------------|---------------|----------|
+| `quick` | 50 | off | 500K | ~22% (11/50) | Fast dev loop (~5s) |
+| `default` | all (400) | off | 3M | ~25% (100/400) | Full benchmark (~3.5 min) |
+| `contest` | all (400) | 30×15 | 100M | ~27% (107/400) | Maximum accuracy (~10 min) |
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic.
 
@@ -188,9 +188,7 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 |------|----------|------------------------|-------|-----------|
 | `quick` | ~27/50 (~54%) | ~11/50 (~22%) | ~38/100 (~38%) | **~5s** |
 | `default` | ~173/400 (~43%) | ~100/400 (~25%) | ~273/800 (~34%) | **~3.5 min** |
-| `contest` | ~185/400 (~46%)\* | ~105/400 (~26%)\* | ~290/800 (~36%)\* | **~10 min** |
-
-\*Contest mode estimated from default scaling; re-run pending.
+| `contest` | 182/400 (45.5%) | 107/400 (26.8%) | 289/800 (36.1%) | **~10 min** |
 
 **Other domains:**
 

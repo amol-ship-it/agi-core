@@ -1746,8 +1746,8 @@ class TestDiffAndPatch(unittest.TestCase):
         correction = self.env.infer_output_correction(got, exp)
         self.assertIsNotNone(correction)
 
-    def test_nbr_fix_registers_primitive(self):
-        """nbr_fix should register a callable primitive and produce correct output."""
+    def test_neighborhood_fix_registers_primitive(self):
+        """Neighborhood fix should register a callable primitive and produce correct output."""
         from domains.arc.primitives import _PRIM_MAP
         # Context-dependent fix: 0 next to 1 on top → becomes 2, 0 next to 1 on left → becomes 3
         # Color remap can't handle this (0 maps to different colors depending on context)
@@ -1760,15 +1760,15 @@ class TestDiffAndPatch(unittest.TestCase):
             [[3, 0], [1, 2]],
         ]
         correction = self.env.infer_output_correction(got, exp)
-        # May produce nbr_fix or adj_fix — either is acceptable since both are spatial
+        # May produce neighborhood_3x3_fix or adjacency_fix — either is acceptable since both are spatial
         if correction is not None:
             prim = _PRIM_MAP.get(correction.root)
             self.assertIsNotNone(prim)
             for g, e in zip(got, exp):
                 self.assertEqual(prim.fn(g), e)
 
-    def test_adj_fix_registers_primitive(self):
-        """adj_fix should register a callable primitive and produce correct output."""
+    def test_adjacency_fix_registers_primitive(self):
+        """Adjacency fix should register a callable primitive and produce correct output."""
         from domains.arc.primitives import _PRIM_MAP
         # Adjacent to color 2, color 0 → becomes 1 (consistent across examples)
         got = [
@@ -1780,13 +1780,13 @@ class TestDiffAndPatch(unittest.TestCase):
             [[0, 1, 0], [1, 2, 1], [0, 1, 0]],
         ]
         correction = self.env.infer_output_correction(got, exp)
-        if correction is not None and "adj_fix" in correction.root:
+        if correction is not None and "adjacency_fix" in correction.root:
             prim = _PRIM_MAP.get(correction.root)
             self.assertIsNotNone(prim)
             for g, e in zip(got, exp):
                 self.assertEqual(prim.fn(g), e)
 
-    def test_nbr_fix_rejects_inconsistent_rules(self):
+    def test_neighborhood_fix_rejects_inconsistent_rules(self):
         """Inconsistent neighborhood patterns should not produce a correction."""
         # Same 3x3 neighborhood but different expected outputs across examples
         got = [
@@ -1798,11 +1798,11 @@ class TestDiffAndPatch(unittest.TestCase):
             [[1, 1, 1], [1, 3, 1], [1, 1, 1]],  # 0→3 (inconsistent!)
         ]
         correction = self.env.infer_output_correction(got, exp)
-        # Should NOT produce a nbr_fix (inconsistent), may fall back to None
+        # Should NOT produce a neighborhood fix (inconsistent), may fall back to None
         if correction is not None:
-            self.assertNotIn("nbr_fix", correction.root)
+            self.assertNotIn("neighborhood_3x3_fix", correction.root)
 
-    def test_nbr_fix_boundary_handling(self):
+    def test_neighborhood_fix_boundary_handling(self):
         """Neighborhood correction should handle edge/corner pixels correctly."""
         # Corner pixel (0,0) has only 3 actual neighbors; others are -1
         got = [
