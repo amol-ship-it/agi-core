@@ -1871,4 +1871,27 @@ Fixed a bug where `run_curriculum` dropped `sequential_compounding` and `adaptiv
 **Files:** `domains/arc/environment.py:131`
 
 ---
+
+### Decision 92: Add 7x7 Neighborhood Correction — +73 More Contest Solves
+
+**Date:** 2026-03-13
+**Context:** After removing the 5x5 cap (Decision 91), diagnostic showed 35 tasks blocked by false positives (same 5x5 patch appearing in both changed and unchanged pixels) and 15 tasks with valid 7x7 rules.
+
+**Analysis:** 7x7 neighborhoods (radius=3) resolve false positives by capturing more spatial context. Of 78 remaining near-misses, 15 had valid 7x7 rules with no conflicts and no false positives. The rest had conflicts (21) or persistent false positives (32) or exceeded the rule cap (10).
+
+**Change:** Added 7x7 as an additional fallback after 5x5 in `_infer_single_correction`.
+
+**Results:**
+- Quick: 32→34/50 (+2)
+- Default train: 193→225/400 (+32)
+- Contest pipeline: 325→398/800 (+73) — 40.6%→49.8%
+- All 551 tests pass
+
+**Why 73 instead of 15?** The 15-task prediction was for identity-seeded correction only. The 7x7 also helps Phase 1.75 (near-miss correction on composed programs). Many tasks had programs that got close, and 7x7 correction could fix the remaining errors.
+
+**Combined session impact (Decisions 91+92):** 292→398/800 (+106 solves, +13.3 percentage points). This is the largest single-session improvement ever, confirming Decision 78's insight that it's a vocabulary problem.
+
+**Files:** `domains/arc/environment.py:132`
+
+---
 *This document will be updated with each new session and major decision.*
