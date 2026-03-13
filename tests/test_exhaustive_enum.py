@@ -453,11 +453,11 @@ class TestCulturePersistence(unittest.TestCase):
 
 # =============================================================================
 class TestPrepareForTaskNoOp(unittest.TestCase):
-    """Verify prepare_for_task generates only global_color_map when applicable."""
+    """Verify prepare_for_task doesn't add unexpected task-scoped primitives."""
 
-    def test_prepare_adds_only_global_color_map(self):
-        """prepare_for_task should generate only task_global_color_map for
-        simple color mapping tasks (no param_role/rank/fill prims)."""
+    def test_prepare_adds_no_task_prims(self):
+        """prepare_for_task should not generate task_* primitives for
+        simple tasks that don't match parameterized patterns."""
         grammar = ARCGrammar(seed=42)
         task = Task(
             task_id="test",
@@ -469,10 +469,8 @@ class TestPrepareForTaskNoOp(unittest.TestCase):
         grammar.prepare_for_task(task)
         task_prims = [p for p in grammar.base_primitives()
                       if p.name.startswith("task_")]
-        # Only task_global_color_map should be generated (0→5 consistent mapping)
-        self.assertTrue(
-            all(p.name == "task_global_color_map" for p in task_prims),
-            f"Expected only task_global_color_map, got: {[p.name for p in task_prims]}"
+        self.assertEqual(task_prims, [],
+            f"Expected no task_* primitives, got: {[p.name for p in task_prims]}"
         )
 
 

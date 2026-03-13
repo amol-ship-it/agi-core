@@ -608,21 +608,7 @@ def _learn_parameterized_prims(task: Task) -> list[Primitive]:
         name = "param_rank_recolor"
         prims.append(Primitive(name=name, arity=0, fn=fn))
 
-    # --- 3. Global color map (depth-0 full solution) ---
-    global_map = _learn_global_color_map(task)
-    if global_map:
-        def _make_global_color_map(cmap):
-            def global_color_map(grid: Grid) -> Grid:
-                if not grid or not grid[0]:
-                    return grid
-                return [[cmap.get(cell, cell) for cell in row] for row in grid]
-            return global_color_map
-
-        fn = _make_global_color_map(global_map)
-        name = "task_global_color_map"
-        prims.append(Primitive(name=name, arity=0, fn=fn))
-
-    # --- 4. Fill enclosed with learned color role ---
+    # --- 3. Fill enclosed with learned color role ---
     fill_role = _learn_fill_enclosed_role(task)
     if fill_role:
         def _make_fill_enclosed(role):
@@ -676,73 +662,6 @@ def _learn_parameterized_prims(task: Task) -> list[Primitive]:
         prims.append(Primitive(name=name, arity=0, fn=fn))
 
     return prims
-
-
-def _learn_global_color_map(task: Task) -> dict[int, int] | None:
-    """Learn a consistent global color→color mapping from training examples.
-
-    For each training pair, computes per-pixel color→color transitions.
-    If the same mapping is consistent across ALL training examples (every
-    pixel of color X becomes color Y), returns the mapping dict.
-
-    This is different from color_remap correction — it's a depth-0 primitive
-    that solves tasks where the transformation is purely a color substitution.
-    Only returns if the mapping perfectly reproduces all training outputs.
-    """
-    if not task.train_examples:
-        return None
-
-    # Collect votes across all examples
-    global_map: dict[int, int] | None = None
-
-    for inp, out in task.train_examples:
-        if not inp or not out:
-            return None
-        if len(inp) != len(out) or len(inp[0]) != len(out[0]):
-            return None
-
-        # Build per-example color mapping
-        example_map: dict[int, set[int]] = {}
-        for r in range(len(inp)):
-            for c in range(len(inp[0])):
-                src = inp[r][c]
-                dst = out[r][c]
-                if src not in example_map:
-                    example_map[src] = set()
-                example_map[src].add(dst)
-
-        # Each source color must map to exactly one destination
-        example_unique: dict[int, int] = {}
-        for src, dsts in example_map.items():
-            if len(dsts) != 1:
-                return None  # ambiguous mapping
-            example_unique[src] = next(iter(dsts))
-
-        # Check consistency with previous examples
-        if global_map is None:
-            global_map = example_unique
-        else:
-            for src, dst in example_unique.items():
-                if src in global_map and global_map[src] != dst:
-                    return None  # inconsistent across examples
-                global_map[src] = dst
-
-    if global_map is None:
-        return None
-
-    # Must actually change something (not all identity)
-    has_change = any(s != d for s, d in global_map.items())
-    if not has_change:
-        return None
-
-    # Verify: applying the map reproduces all training outputs exactly
-    for inp, out in task.train_examples:
-        for r in range(len(inp)):
-            for c in range(len(inp[0])):
-                if global_map.get(inp[r][c], inp[r][c]) != out[r][c]:
-                    return None
-
-    return global_map
 
 
 def _learn_fill_enclosed_role(task: Task) -> str | None:
