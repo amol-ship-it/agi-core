@@ -213,7 +213,7 @@ Note: training accuracy is much higher (e.g. contest: 107/400 = 26.8%) but this 
 | Zork | 20 | 10 | 50% | 5 library entries, reuse 2-6x (5 rounds) |
 | List Ops | 28 | 20 | 71.4% | 8 library entries, reuse 2-6x (3 rounds) |
 
-**235 base ARC primitives** plus task-specific color/role primitives (~260-390 total per task, ~9,000 lines of domain code) including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
+**199 base ARC primitives** plus task-specific color/role primitives (~260-390 total per task, ~9,000 lines of domain code) including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
 **Diff-and-patch correction** learns neighborhood-based corrections on near-miss programs; powerful for training but prone to overfitting (see "Current status" below).
@@ -300,7 +300,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **Overfitting is the primary challenge.** In contest mode, 277/400 programs match training examples but only 107/400 pass held-out test (61% overfit rate on training split). The multi-scale neighborhood correction cascade (3x3→11x11) is especially prone to overfitting — it learns task-specific spatial rules that don't generalize from training to test examples. LOOCV candidate ranking helps but doesn't close the gap.
 
-**Where the ARC solve rate comes from:** 235 base primitives plus task-specific additions (~9,000 lines of domain code) encode substantial human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition, correction cascade), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
+**Where the ARC solve rate comes from:** 199 base primitives plus task-specific additions (~9,000 lines of domain code) encode substantial human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition, correction cascade), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
 
 ## Structure
 
@@ -326,7 +326,7 @@ agi-core/
 │   └── list_compounding.py  # List ops compounding demonstration
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
-│   ├── arc/                 # ARC-AGI grid transformations (235 base primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (199 base primitives)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
@@ -372,7 +372,7 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** ✅ ARC-AGI-1 training (235 base primitives, exhaustive enumeration, diff-and-patch, wake-sleep)
+- **Phase 1** ✅ ARC-AGI-1 training (199 base primitives, exhaustive enumeration, diff-and-patch, wake-sleep)
 - **Phase 2** ✅ ARC-AGI-1 eval with culture transfer
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated
 - **Phase 4** ✅ Compounding infrastructure: Zork 10/20, list_ops 20/28 with library reuse 2-6x
