@@ -179,7 +179,21 @@ def _run_train(args, resolved, max_tasks):
                        domain_tag="phase2_arc_train", tasks=tasks,
                        save_culture=args.save_culture)
     result = run_experiment(cfg)
+    _try_generate_viz(result.results_path)
     print(f"  Culture saved to: {result.culture_path}")
+
+
+def _try_generate_viz(results_json_path: str) -> None:
+    """Generate HTML visualization (index + per-task pages) from results JSON."""
+    if not results_json_path or not os.path.exists(results_json_path):
+        return
+    try:
+        from .visualize_results import generate_html
+        viz_dir = results_json_path.replace(".json", "_viz")
+        generate_html(results_json_path, viz_dir)
+        print(f"  Visualization:    {viz_dir}/")
+    except Exception as e:
+        print(f"  (visualization skipped: {e})")
 
 
 def _run_eval(args, resolved, max_tasks):
@@ -188,7 +202,8 @@ def _run_eval(args, resolved, max_tasks):
                        title="PHASE 2: ARC-AGI-2 EVALUATION",
                        domain_tag="phase2_arc_eval", tasks=tasks,
                        culture_path=args.culture)
-    run_experiment(cfg)
+    result = run_experiment(cfg)
+    _try_generate_viz(result.results_path)
 
 
 def _run_pipeline(args, resolved, max_tasks):
@@ -235,6 +250,8 @@ def _run_pipeline(args, resolved, max_tasks):
             domain="phase2_arc", args=args, resolved=resolved,
             extra_meta={"train_source": train_src, "eval_source": "ARC-AGI-2 evaluation"},
         )
+
+        _try_generate_viz(json_path)
 
         print_pipeline_summary(
             train_result, eval_result,

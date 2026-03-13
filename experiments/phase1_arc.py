@@ -115,14 +115,14 @@ def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
 
 
 def _try_generate_viz(results_json_path: str) -> None:
-    """Generate HTML visualization from a results JSON file."""
+    """Generate HTML visualization (index + per-task pages) from results JSON."""
     if not os.path.exists(results_json_path):
         return
     try:
         from .visualize_results import generate_html
-        viz_path = results_json_path.replace(".json", "_viz.html")
-        generate_html(results_json_path, viz_path)
-        print(f"  Visualization:    {viz_path}")
+        viz_dir = results_json_path.replace(".json", "_viz")
+        index_path = generate_html(results_json_path, viz_dir)
+        print(f"  Visualization:    {viz_dir}/")
     except Exception as e:
         print(f"  (visualization skipped: {e})")
 
