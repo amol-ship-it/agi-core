@@ -188,14 +188,14 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 |------|----------|------------------------|-------|-----------|
 | `quick` | ~27/50 (~54%) | ~11/50 (~22%) | ~38/100 (~38%) | **~5s** |
 | `default` | ~173/400 (~43%) | ~100/400 (~25%) | ~273/800 (~34%) | **~3.5 min** |
-| `contest` | 182/400 (45.5%) | 107/400 (26.8%) | 289/800 (36.1%) | **~10 min** |
+| `contest` | 184/400 (46.0%) | 106/400 (26.5%) | 290/800 (36.3%) | **~10 min** |
 
 **Other domains:**
 
 | Domain | Tasks | Solved | Rate | Notes |
 |--------|-------|--------|------|-------|
-| ARC-AGI-2 Train | 1000 | 217 | 21.7% | Up from 14% — corrections transfer cross-domain |
-| ARC-AGI-2 Eval | 120 | 3 | 2.5% | With culture transfer from training |
+| ARC-AGI-2 Train | 1000 | 312 | 31.2% | Up from 14% — corrections transfer cross-domain |
+| ARC-AGI-2 Eval | 120 | 9 | 7.5% | With culture transfer from training |
 | Zork | 20 | 10 | 50% | Stable — compounding works: library entries reused 5-11x |
 | List Ops | 28 | ~20 | ~71% | Compounding demonstrated here |
 
@@ -325,7 +325,7 @@ agi-core/
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (547 tests, 14 files)
+├── tests/                   # Test suite (557 tests, 14 files)
 │   ├── test_arc.py
 │   ├── test_color_fix.py
 │   ├── test_compounding.py
@@ -357,7 +357,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (547 tests):** 72% overall. Core modules: learner 66%, runner 27% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 73%, ARC objects 57%, ARC environment 89%, Zork 95%, list_ops 94%.
+**Current coverage (557 tests):** 72% overall. Core modules: learner 66%, runner 27% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 73%, ARC objects 57%, ARC environment 89%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
@@ -375,7 +375,7 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated on list_ops and Zork
 - **Phase 4** ✅ Compounding infrastructure: `--compounding` flag, distance-based drive signals, library primitive execution. Zork: 7/20→10/20 with library reuse 5-11x. ARC: library entries produced but limited impact.
 - **Phase 5** ✅ Narrowed ARC train-eval gap from 3.8x to 1.7x (43% train, 25% eval) via LOOCV + 3x3/5x5 diff-and-patch + identity correction
-- **Phase 6** 🔧 ARC-AGI-2 improved to 21.7% train, 2.5% eval — corrections transfer cross-domain
+- **Phase 6** 🔧 ARC-AGI-2 improved to 31.2% train, 7.5% eval — corrections transfer cross-domain
 - **Phase 6** Cross-domain library transfer
 - **Phase 7** Continuous mixed-domain learning
 

@@ -61,6 +61,7 @@ class ARCEnv(Environment):
         expected_outputs: list[Any],
         max_rules: int = 50,
         try_5x5: bool = False,
+        max_chain_depth: int = 2,
     ) -> Optional[Program]:
         """Infer a correction that fixes mismatches between program outputs
         and expected outputs.
@@ -73,6 +74,10 @@ class ARCEnv(Environment):
         4. 5x5 neighborhood patch — longer-range dependencies (≤30 rules)
         5. Row/column correction — spatial rearrangements (reverse, shift, transpose)
 
+        If a correction reduces error but doesn't eliminate it, recursively
+        tries a second correction on the residual (max depth 2). This catches
+        tasks needing e.g. a color remap THEN a neighborhood fix.
+
         Generated primitives follow the naming convention:
         - color_remap_XtoY — color substitution
         - adjacency_fix_Nr — N adjacency rules
@@ -80,9 +85,56 @@ class ARCEnv(Environment):
         - neighborhood_5x5_fix_Nr — N 5x5 neighborhood rules
         - row_col_fix_<transform> — spatial rearrangement
 
-        Returns a single best correction, or None. The caller (_try_color_fix)
-        evaluates whether the correction actually improves accuracy.
+        Returns a single best correction (possibly chained), or None.
+        The caller (_try_color_fix) evaluates whether the correction
+        actually improves accuracy.
         """
+        correction = self._infer_single_correction(
+            program_outputs, expected_outputs, max_rules, try_5x5)
+        if correction is None:
+            return None
+
+        # Check if the correction fully fixes the outputs
+        if max_chain_depth <= 1:
+            return correction
+
+        # Apply the correction to see if there's residual error
+        corrected_outputs = []
+        has_residual = False
+        for got, expected in zip(program_outputs, expected_outputs):
+            try:
+                result = self.execute(correction, got)
+                corrected_outputs.append(result)
+                if np.array(result, dtype=np.int32).tolist() != np.array(expected, dtype=np.int32).tolist():
+                    has_residual = True
+            except Exception:
+                return correction  # can't apply correction — return as-is
+
+        if not has_residual:
+            return correction  # first correction is perfect
+
+        # Try a second correction on the residual
+        second = self._infer_single_correction(
+            corrected_outputs, expected_outputs, max_rules, try_5x5)
+        if second is None:
+            return correction  # first correction is still the best we have
+
+        # Chain: second(first(input))
+        chained = Program(
+            root=second.root,
+            children=[correction],
+            params=second.params,
+        )
+        return chained
+
+    def _infer_single_correction(
+        self,
+        program_outputs: list[Any],
+        expected_outputs: list[Any],
+        max_rules: int = 50,
+        try_5x5: bool = False,
+    ) -> Optional[Program]:
+        """Infer a single correction strategy (no chaining)."""
         # Strategy 1: Color remapping (cheapest, most general)
         color_fix = self._infer_color_correction(program_outputs, expected_outputs)
         if color_fix is not None:

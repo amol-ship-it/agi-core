@@ -1505,14 +1505,18 @@ class Learner:
         self,
         candidates: list[ScoredProgram],
         task: Task,
-        threshold: float = 0.30,
+        threshold: float = 0.40,
     ) -> Optional[ScoredProgram]:
-        """Try to fix near-miss programs by learning a color remapping.
+        """Try to fix near-miss programs by learning a correction.
 
-        For each candidate with low prediction error, execute it on all
+        For each candidate with prediction error <= threshold, execute it on all
         training inputs, compare outputs to expected, and ask the environment
-        to infer a correction (e.g., color remap).  If found, compose the
-        correction on top and evaluate the result.
+        to infer a correction (color remap, neighborhood patch, etc.).
+        If found, compose the correction on top and evaluate the result.
+
+        Widened threshold (0.40) gives more candidates a chance at correction,
+        catching tasks that are ~30% wrong but fixable with a color remap
+        or spatial patch.
 
         Returns the best color-fixed ScoredProgram, or None.
         """

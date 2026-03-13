@@ -280,6 +280,14 @@
 
 547 tests pass (14 new). See Decision 84 for full details.]
 
+### Prompt 43: Path from 273/800 to 350/800
+
+> Implement the following plan: (0) Update README with latest numbers, (1) Multi-step correction chaining, (2) Compounding re-test, (3) Parameterized global color map primitive, (4) Complexity penalty tuning, (5) Near-miss threshold widening, (6) 7x7 neighborhoods.
+
+Also provided latest ARC-AGI-2 numbers: 312/1000 (31.2%) train, 9/120 (7.5%) eval.
+
+[Implemented Steps 0-5. Step 6 deferred (diminishing returns). See Decisions 85-89. 557 tests pass (10 new).]
+
 ---
 
 *This document will be updated with each new session.*

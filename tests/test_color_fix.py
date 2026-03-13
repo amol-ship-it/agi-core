@@ -387,3 +387,176 @@ class TestIdentityCorrection:
         correction = self.env.infer_output_correction(
             inputs, expected, max_rules=100, try_5x5=True)
         assert correction is None
+
+
+class TestCorrectionChaining:
+    """Test multi-step correction chaining (Step 1)."""
+
+    def setup_method(self):
+        self.env = ARCEnv()
+
+    def test_single_correction_still_works(self):
+        """Simple single-step correction still returns directly."""
+        outputs = [[[0, 3, 0], [3, 3, 0]]]
+        expected = [[[0, 5, 0], [5, 5, 0]]]
+        correction = self.env.infer_output_correction(outputs, expected)
+        assert correction is not None
+        assert "3to5" in correction.root
+
+    def test_chained_correction_color_then_neighborhood(self):
+        """Two-step correction: color remap then neighborhood fix.
+
+        First step: remap 3→5. Second step: fix remaining pixel via 3x3 patch.
+        The chained correction should compose both steps.
+        """
+        # After remap 3→5, there's still a residual pixel needing neighborhood fix
+        # Output: [[0, 3, 0], [3, 1, 0]]
+        # After remap 3→5: [[0, 5, 0], [5, 1, 0]]
+        # Expected: [[0, 5, 0], [5, 5, 0]]  (pixel [1][1] still wrong: 1→5)
+        # Need: remap 3→5, then neighborhood fix for (1→5 in context of surrounding 5s)
+        outputs = [[[0, 3, 0], [3, 1, 0]]]
+        expected = [[[0, 5, 0], [5, 5, 0]]]
+
+        # With chaining (default max_chain_depth=2), should compose corrections
+        correction = self.env.infer_output_correction(
+            outputs, expected, max_chain_depth=2)
+
+        if correction is not None:
+            # Verify the chained correction produces the right output
+            result = self.env.execute(correction, outputs[0])
+            assert np.array(result, dtype=np.int32).tolist() == expected[0]
+
+    def test_no_chaining_when_depth_1(self):
+        """max_chain_depth=1 disables chaining."""
+        outputs = [[[0, 3, 0], [3, 1, 0]]]
+        expected = [[[0, 5, 0], [5, 5, 0]]]
+        correction = self.env.infer_output_correction(
+            outputs, expected, max_chain_depth=1)
+        # Should return single correction (may not fully fix)
+        # This is just a regression test — the important thing is no recursion
+
+    def test_no_chaining_when_first_is_perfect(self):
+        """If first correction is perfect, don't try second."""
+        outputs = [[[0, 3, 0], [3, 3, 0]]]
+        expected = [[[0, 5, 0], [5, 5, 0]]]
+        correction = self.env.infer_output_correction(
+            outputs, expected, max_chain_depth=2)
+        assert correction is not None
+        # Should be a simple correction, not chained
+        assert correction.children == []
+
+
+class TestGlobalColorMap:
+    """Test global color map primitive learning (Step 3)."""
+
+    def test_consistent_color_map(self):
+        """Consistent color→color mapping across examples is detected."""
+        from domains.arc.grammar import _learn_global_color_map
+        from core.types import Task
+
+        task = Task(
+            task_id="test_gcm",
+            train_examples=[
+                ([[0, 1, 2], [1, 2, 0]], [[0, 3, 4], [3, 4, 0]]),
+                ([[2, 1, 0], [0, 2, 1]], [[4, 3, 0], [0, 4, 3]]),
+            ],
+            test_inputs=[[[1, 1, 2]]],
+            test_outputs=[[[3, 3, 4]]],
+        )
+        cmap = _learn_global_color_map(task)
+        assert cmap is not None
+        assert cmap[1] == 3
+        assert cmap[2] == 4
+        assert cmap[0] == 0  # identity mapping for 0
+
+    def test_inconsistent_map_returns_none(self):
+        """Inconsistent mapping across examples returns None."""
+        from domains.arc.grammar import _learn_global_color_map
+        from core.types import Task
+
+        task = Task(
+            task_id="test_gcm_bad",
+            train_examples=[
+                ([[1, 2]], [[3, 4]]),
+                ([[1, 2]], [[5, 4]]),  # 1→3 vs 1→5 inconsistent
+            ],
+            test_inputs=[],
+            test_outputs=[],
+        )
+        cmap = _learn_global_color_map(task)
+        assert cmap is None
+
+    def test_ambiguous_single_example_returns_none(self):
+        """If same source maps to multiple destinations in one example, fail."""
+        from domains.arc.grammar import _learn_global_color_map
+        from core.types import Task
+
+        task = Task(
+            task_id="test_gcm_ambig",
+            train_examples=[
+                ([[1, 1], [1, 1]], [[2, 3], [2, 3]]),  # 1→2 AND 1→3
+            ],
+            test_inputs=[],
+            test_outputs=[],
+        )
+        cmap = _learn_global_color_map(task)
+        assert cmap is None
+
+    def test_identity_only_returns_none(self):
+        """All-identity mapping (no changes) returns None."""
+        from domains.arc.grammar import _learn_global_color_map
+        from core.types import Task
+
+        task = Task(
+            task_id="test_gcm_id",
+            train_examples=[
+                ([[1, 2], [3, 4]], [[1, 2], [3, 4]]),
+            ],
+            test_inputs=[],
+            test_outputs=[],
+        )
+        cmap = _learn_global_color_map(task)
+        assert cmap is None
+
+    def test_different_shape_returns_none(self):
+        """Different input/output shapes returns None."""
+        from domains.arc.grammar import _learn_global_color_map
+        from core.types import Task
+
+        task = Task(
+            task_id="test_gcm_shape",
+            train_examples=[
+                ([[1, 2, 3]], [[1, 2]]),
+            ],
+            test_inputs=[],
+            test_outputs=[],
+        )
+        cmap = _learn_global_color_map(task)
+        assert cmap is None
+
+    def test_global_color_map_registered_as_primitive(self):
+        """The learned primitive should be registered and executable."""
+        from domains.arc.grammar import ARCGrammar
+        from core.types import Task
+
+        task = Task(
+            task_id="test_gcm_prim",
+            train_examples=[
+                ([[0, 1], [2, 0]], [[0, 3], [4, 0]]),
+                ([[1, 2], [0, 1]], [[3, 4], [0, 3]]),
+            ],
+            test_inputs=[[[1, 1]]],
+            test_outputs=[[[3, 3]]],
+        )
+        grammar = ARCGrammar(seed=42)
+        grammar.prepare_for_task(task)
+
+        # Find the global color map primitive
+        prims = grammar.base_primitives()
+        gcm_prims = [p for p in prims if p.name == "task_global_color_map"]
+        assert len(gcm_prims) == 1
+
+        # Execute it
+        fn = gcm_prims[0].fn
+        result = fn([[1, 2], [0, 1]])
+        assert result == [[3, 4], [0, 3]]

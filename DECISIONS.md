@@ -1757,5 +1757,63 @@ Tested caps 20, 30, 40, 50, 75, 100 on 50-task quick mode:
 
 Fixed a bug where `run_curriculum` dropped `sequential_compounding` and `adaptive_realloc` when resolving `workers=0`. The old code created a new `CurriculumConfig` with only 3 fields; the fix mutates `cfg.workers` in-place. This didn't affect current benchmark numbers but would silently ignore `--sequential-compounding` and `--adaptive-realloc` flags.
 
+### Decision 85: Multi-Step Correction Chaining
+
+**Date:** 2026-03-13
+**Context:** 77 tasks at 5-10% error, 40 at 2-5% — the sweet spot for correction extensions. Some tasks need TWO corrections (e.g., a color remap THEN a neighborhood fix).
+
+**Change:** Refactored `infer_output_correction` into `_infer_single_correction` + a chaining wrapper. After finding a first correction, applies it and checks for residual error. If residuals remain, recursively tries a second correction on the corrected output (max depth 2). The chained correction is composed as `second(first(input))`.
+
+**Files:** `domains/arc/environment.py`
+**Tests:** 557 tests pass (3 new chaining tests).
+**Risk:** Low — bounded recursion (depth 2), same validation logic applies.
+
+---
+
+### Decision 86: Global Color Map Primitive
+
+**Date:** 2026-03-13
+**Context:** Many unsolved tasks have a consistent global per-pixel color→color mapping from input to output across all training examples. This is different from the post-hoc `color_remap` correction — it's a depth-0 primitive learned during `prepare_for_task`.
+
+**Change:** Added `_learn_global_color_map` to `domains/arc/grammar.py`. For each training pair, computes per-pixel color transitions. If every pixel of color X maps to color Y consistently across ALL examples, creates a `task_global_color_map` 0-arity primitive. Strict requirements: mapping must be unambiguous (one destination per source color), consistent across all examples, and actually change something (not identity).
+
+**Files:** `domains/arc/grammar.py`
+**Tests:** 557 tests pass (5 new global color map tests).
+
+---
+
+### Decision 87: ARC Complexity Penalty Tuning (beta 0.002→0.01)
+
+**Date:** 2026-03-13
+**Context:** Decision 54 showed depth-0 programs generalize at 62% vs depth-2+ at 1%. With `beta=0.002`, complexity is nearly irrelevant in energy ranking — simpler programs aren't strongly preferred when multiple candidates solve training.
+
+**Change:** Increased `energy_beta` from 0.002 to 0.01 in ARC experiment configs only (`phase1_arc.py`, `phase2_arc.py`). Applied only to ARC runners, not the default `SearchConfig`, to avoid affecting other domains (list_ops, Zork).
+
+**Expected impact:** +3-5 eval solves from better generalization (simpler programs preferred in ranking).
+
+---
+
+### Decision 88: Near-Miss Correction Threshold Widening (0.30→0.40)
+
+**Date:** 2026-03-13
+**Context:** `_try_color_fix` used threshold 0.30 — programs with up to 30% error got correction attempts. With 77 tasks at 5-10% error already captured, widening to 0.40 gives more candidates a chance at correction (programs ~30-40% wrong that might be fixable with a color remap or spatial patch).
+
+**Change:** Widened default threshold in `_try_color_fix` from 0.30 to 0.40.
+
+**Files:** `core/learner.py`
+
+---
+
+### Decision 89: README Number Updates
+
+**Date:** 2026-03-13
+**Context:** README showed stale numbers. Updated with latest benchmark results.
+
+**Changes:**
+- ARC-AGI-1 contest: 289/800→290/800 (36.3%)
+- ARC-AGI-2 train: 217/1000→312/1000 (31.2%)
+- ARC-AGI-2 eval: 3/120→9/120 (7.5%)
+- Test count: 547→557
+
 ---
 *This document will be updated with each new session and major decision.*
