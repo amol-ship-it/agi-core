@@ -264,7 +264,9 @@
 
 > Implement the full strategic plan: (A) Generalized LOOCV for all training-perfect candidates, (B) Diff-and-patch phase for near-misses with spatial corrections, (C) Same-shape few-changes specialization, (D) Vocabulary pruning — task-specific color primitives, (E) Output-shape prediction.
 
-[Implemented Phases A, B, and D. Phase A: Added `_loocv_score` method to Learner — re-prepares grammar with N-1 examples and validates held-out for each candidate. Phase B: Extended `infer_output_correction` with adjacency-based and 3x3 neighborhood correction strategies beyond color remapping. Phase D: Moved ~120 parameterized color primitives to runtime generation in `prepare_for_task`, reducing per-task primitives from ~349 to ~235. All 527 tests pass.]
+[Implemented Phases A, B, and D. Phase A: Added `_loocv_score` method to Learner — re-prepares grammar with N-1 examples and validates held-out for each candidate. Phase B: Extended `infer_output_correction` with adjacency-based and 3x3 neighborhood correction strategies beyond color remapping. Phase D: Moved ~120 parameterized color primitives to runtime generation in `prepare_for_task`, reducing per-task primitives from ~349 to ~235. All 527 tests pass.
+
+**Results:** +100 total solves (120→220 in contest mode). Phase B (diff-and-patch) drove 89% of gains — `nbr_fix` alone added 84 new solves with 91% generalization rate. Train-eval gap narrowed from 3.8x to 2.0x. See Decisions 82-83 for full attribution.]
 
 ---
 

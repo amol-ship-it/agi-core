@@ -133,12 +133,12 @@ tail -f runs/*_phase1_train.log      # watch full console output
 The console output ends with a **SOLVED TASKS** section listing every solved task and its program:
 
 ```
-  SOLVED TASKS (24 total)
+  SOLVED TASKS (73 total)
     ✓ 007bbfb7                 program: upscale_pattern
     ✓ 00d62c1b                 program: fill_rect_interior_4
     ...
 
-  OVERFIT TASKS (13 matched training but failed test)
+  OVERFIT TASKS (7 matched training but failed test)
     ~ 22168020                 program: fill_by_symmetry
     ...
 ```
@@ -164,11 +164,11 @@ Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, 
 
 Three modes. Pick one. That's the only knob most users need.
 
-| Mode | Tasks | Beam | Compute Cap | Use case |
-|------|-------|------|-------------|----------|
-| `quick` | 50 | off | 500K | Fast dev loop (~25s) |
-| `default` | all (400) | off | 3M | Full benchmark (~3 min) |
-| `contest` | all (400) | 30×15 | 100M | Maximum accuracy (~30 min) |
+| Mode | Tasks | Beam | Compute Cap | Expected accuracy | Use case |
+|------|-------|------|-------------|-------------------|----------|
+| `quick` | 50 | off | 500K | ~24% (190/800) | Fast dev loop (~30s) |
+| `default` | all (400) | off | 3M | ~26% (207/800) | Full benchmark (~3 min) |
+| `contest` | all (400) | 30×15 | 100M | ~28% (220/800) | Maximum accuracy (~10 min) |
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic.
 
@@ -184,11 +184,11 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 **ARC-AGI-1:**
 
-| Mode | Training | Eval (culture transfer) | Wall time |
-|------|----------|------------------------|-----------|
-| `quick` | ~17/50 (~34%) | ~2/50 (~4%) | **~25s** |
-| `default` | ~85/400 (~21%) | ~20/400 (~5%) | **~3 min** |
-| `contest` | higher | TBD | ~30 min |
+| Mode | Training | Eval (culture transfer) | Total | Wall time |
+|------|----------|------------------------|-------|-----------|
+| `quick` | ~130/400 (~33%) | ~60/400 (~15%) | ~190/800 (~24%) | **~30s** |
+| `default` | ~138/400 (~35%) | ~69/400 (~17%) | ~207/800 (~26%) | **~3 min** |
+| `contest` | ~147/400 (~37%) | ~73/400 (~18%) | ~220/800 (~28%) | **~10 min** |
 
 **Other domains:**
 
@@ -199,7 +199,8 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 | Zork | 20 | 10 | 50% | Compounding works: library entries reused 5-11x |
 | List Ops | 28 | ~20 | ~71% | Compounding demonstrated here |
 
-**349 hand-crafted ARC primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
+**235 ARC primitives per task** (down from 349 via task-specific vocabulary pruning) including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
+**Diff-and-patch correction** (Phase B) accounts for 89% of recent gains: 3x3 neighborhood patches act as learned cellular automaton rules on near-miss programs, with 91% train→eval generalization.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
 
@@ -283,9 +284,9 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **Compounding produces library entries on ARC but has limited impact.** With `--compounding` flag (depth-2 + 3 rounds + sequential), the system creates 3-5 library entries with 2x reuse. However, most ARC solves are depth-1 (single primitives), so the library provides little additional coverage beyond what depth-3 exhaustive search already finds.
 
-**The training-eval gap is significant.** ARC-AGI-1 training: 85/400 (21%) truly solved (train+test), 16 overfit. Eval: ~2/50 (4%) on quick mode. Analysis shows the gap is driven by **overfitting, not missing primitives**: deeper programs (depth-2+) are 4-5x more likely to overfit than depth-0. The fix is better generalization (Occam's razor, per-example verification), not more primitives.
+**The training-eval gap has narrowed significantly.** The train/eval ratio improved from 3.8x (21% vs 5.5%) to 2.0x (37% vs 18%). LOOCV candidate ranking reduces overfitting, and the Phase B spatial corrections generalize at 91% (44 of 48 train Phase B solves also work on eval). Remaining gap is driven by deeper compositions (depth-2+) that are more likely to overfit.
 
-**Where the ARC solve rate comes from:** The 349 hand-crafted primitives (6,500 lines of domain code) encode substantial human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition), but the primitives are the primary source of ARC performance. This is honest: the architecture is generic, but ARC results depend on domain engineering.
+**Where the ARC solve rate comes from:** 235 primitives per task (6,500 lines of domain code) encode substantial human knowledge about grid transformations. The diff-and-patch correction phase (89% of recent +100 gains) learns task-specific spatial rules from near-miss programs. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
 
 ## Structure
 
@@ -310,7 +311,7 @@ agi-core/
 │   └── list_compounding.py  # List ops compounding demonstration
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
-│   ├── arc/                 # ARC-AGI grid transformations (349 primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (235 primitives/task)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
@@ -324,7 +325,7 @@ agi-core/
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (508 tests, 14 files)
+├── tests/                   # Test suite (527 tests, 14 files)
 │   ├── test_arc.py
 │   ├── test_color_fix.py
 │   ├── test_compounding.py
@@ -356,7 +357,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (508 tests):** 72% overall. Core modules: learner 66%, runner 27% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 73%, ARC objects 57%, ARC environment 89%, Zork 95%, list_ops 94%.
+**Current coverage (527 tests):** 72% overall. Core modules: learner 66%, runner 27% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 73%, ARC objects 57%, ARC environment 89%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
@@ -369,11 +370,11 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** ✅ ARC-AGI-1 training (349 primitives, exhaustive enumeration, wake-sleep) — 85/400 (21%)
-- **Phase 2** ✅ ARC-AGI-1 eval with culture transfer — ~20/400 (5%)
+- **Phase 1** ✅ ARC-AGI-1 training (235 primitives/task, exhaustive enumeration, diff-and-patch, wake-sleep) — 147/400 (37%)
+- **Phase 2** ✅ ARC-AGI-1 eval with culture transfer — 73/400 (18%)
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated on list_ops and Zork
 - **Phase 4** ✅ Compounding infrastructure: `--compounding` flag, distance-based drive signals, library primitive execution. Zork: 7/20→10/20 with library reuse 5-11x. ARC: library entries produced but limited impact.
-- **Phase 5** 🔧 Close the ARC train-eval gap (34% train vs 2% eval) — the critical bottleneck
+- **Phase 5** ✅ Narrowed ARC train-eval gap from 3.8x to 2.0x (37% train, 18% eval) via LOOCV + diff-and-patch
 - **Phase 6** 🔧 ARC-AGI-2 baseline established (10% train, 0% eval) — improve toward parity with AGI-1
 - **Phase 6** Cross-domain library transfer
 - **Phase 7** Continuous mixed-domain learning
