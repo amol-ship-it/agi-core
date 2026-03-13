@@ -6601,103 +6601,105 @@ def build_task_color_primitives(task_colors: set[int]) -> list[Primitive]:
     # Non-zero colors in the task
     colors = sorted(task_colors - {0})
 
-    # keep_cN: keep only pixels of color N
+    # Keep only pixels of a specific color, zero everything else
     for c in colors:
         prims.append(Primitive(
-            name=f"keep_color_{c}", arity=1,
+            name=f"keep_only_color_{c}", arity=1,
             fn=_make_keep_color(c), domain="arc",
         ))
 
-    # erase_N: replace color N with background (0)
+    # Erase a specific color (replace with background 0)
     for c in colors:
         prims.append(Primitive(
-            name=f"erase_{c}", arity=1,
+            name=f"erase_color_{c}", arity=1,
             fn=_make_erase_color(c), domain="arc",
         ))
 
-    # fill_bg_N: fill background (0) with color N
+    # Fill background (0) with a specific color
     for c in colors:
         prims.append(Primitive(
-            name=f"fill_background_{c}", arity=1,
+            name=f"fill_background_with_color_{c}", arity=1,
             fn=_make_fill_bg(c), domain="arc",
         ))
 
-    # recolor_to_N: recolor all non-zero to color N
+    # Recolor all non-zero pixels to a specific color
     for c in colors:
         prims.append(Primitive(
-            name=f"recolor_to_{c}", arity=1,
+            name=f"recolor_all_to_color_{c}", arity=1,
             fn=_make_recolor_nonzero(c), domain="arc",
         ))
 
-    # recolor_N_to_0: replace color N with background
+    # Replace a specific color with background (0)
     for c in colors:
         prims.append(Primitive(
-            name=f"recolor_{c}_to_0", arity=1,
+            name=f"replace_color_{c}_with_background", arity=1,
             fn=_make_replace_color(c, 0), domain="arc",
         ))
 
-    # Pairwise color swaps: swap_A_B (symmetric)
+    # Swap two colors symmetrically (both directions at once)
     for i, a in enumerate(colors):
         for b in colors[i + 1:]:
             prims.append(Primitive(
-                name=f"swap_{a}_{b}", arity=1,
+                name=f"swap_color_{a}_and_color_{b}", arity=1,
                 fn=_make_swap_colors(a, b), domain="arc",
             ))
 
-    # Directed color replacement: swap_A_to_B
+    # Replace one color with another (one direction only)
     for a in colors:
         for b in colors:
             if a != b:
                 prims.append(Primitive(
-                    name=f"swap_{a}_to_{b}", arity=1,
+                    name=f"replace_color_{a}_with_color_{b}", arity=1,
                     fn=_make_replace_color(a, b), domain="arc",
                 ))
 
-    # Fill rect interiors with task colors
+    # Fill rectangle interiors with a specific color
     for c in colors:
         prims.append(Primitive(
-            name=f"fill_rect_interior_{c}", arity=1,
+            name=f"fill_rectangle_interior_color_{c}", arity=1,
             fn=lambda g, color=c: _fill_rect_interiors(g, color), domain="arc",
         ))
 
-    # Mark row/col intersections with task colors
+    # Mark row/column intersections with a specific color
     for c in colors:
         prims.append(Primitive(
-            name=f"mark_intersections_{c}", arity=1,
+            name=f"mark_intersections_color_{c}", arity=1,
             fn=lambda g, color=c: _recolor_cells_at_intersections(g, color),
             domain="arc",
         ))
 
-    # Recolor dominant-touching-accent to task colors
+    # Recolor dominant-color pixels touching accent to a specific color
     for c in colors:
         prims.append(Primitive(
-            name=f"dominant_touching_accent_{c}", arity=1,
+            name=f"recolor_dominant_touching_accent_to_color_{c}", arity=1,
             fn=_make_recolor_dominant_touching_accent(c), domain="arc",
         ))
 
-    # Fill smallest rect hole with task colors
+    # Fill the smallest rectangular hole with a specific color
     for c in colors:
         prims.append(Primitive(
-            name=f"fill_smallest_hole_{c}", arity=1,
+            name=f"fill_smallest_hole_with_color_{c}", arity=1,
             fn=_make_fill_smallest_hole(c), domain="arc",
         ))
 
-    # Recolor nonzero inside accent bbox: for each pair of task colors
+    # Recolor non-zero pixels inside an accent color's bounding box
     for accent in colors:
         for new in colors:
             if accent != new:
                 prims.append(Primitive(
-                    name=f"recolor_nonzero_in_{accent}_bbox_{new}", arity=1,
+                    name=f"recolor_nonzero_in_color_{accent}_bbox_to_color_{new}",
+                    arity=1,
                     fn=_make_recolor_nonzero_inside_bbox(accent, new),
                     domain="arc",
                 ))
 
-    # Fill bg adjacent to color with another color
+    # Fill background pixels adjacent to a target color with a fill color
     for target in colors:
         for fill in colors:
             if target != fill:
                 prims.append(Primitive(
-                    name=f"fill_adjacent_to_{target}_with_{fill}", arity=1,
+                    name=f"fill_adjacent_to_color_{target}_with_color_{fill}",
+                    arity=1,
                     fn=_fill_bg_adjacent_to_color(target, fill), domain="arc",
                 ))
 

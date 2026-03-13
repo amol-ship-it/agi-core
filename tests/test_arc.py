@@ -1870,11 +1870,11 @@ class TestVocabPruning(unittest.TestCase):
         from domains.arc.primitives import build_task_color_primitives
         prims = build_task_color_primitives({0, 1, 3})
         names = [p.name for p in prims]
-        # Should have keep_c1, keep_c3 but NOT keep_c2, keep_c4, etc.
-        self.assertIn("keep_color_1", names)
-        self.assertIn("keep_color_3", names)
-        self.assertNotIn("keep_color_2", names)
-        self.assertNotIn("keep_color_4", names)
+        # Should have keep_only_color_1, keep_only_color_3 but NOT 2, 4, etc.
+        self.assertIn("keep_only_color_1", names)
+        self.assertIn("keep_only_color_3", names)
+        self.assertNotIn("keep_only_color_2", names)
+        self.assertNotIn("keep_only_color_4", names)
 
     def test_prepare_for_task_generates_color_prims(self):
         """prepare_for_task should generate color-specific primitives."""
@@ -1889,12 +1889,12 @@ class TestVocabPruning(unittest.TestCase):
         grammar.prepare_for_task(task)
         prims = grammar.base_primitives()
         names = [p.name for p in prims]
-        self.assertIn("keep_color_1", names)
-        self.assertIn("keep_color_2", names)
-        self.assertIn("swap_1_2", names)
+        self.assertIn("keep_only_color_1", names)
+        self.assertIn("keep_only_color_2", names)
+        self.assertIn("swap_color_1_and_color_2", names)
         # Colors not in the task should NOT appear
-        self.assertNotIn("keep_color_5", names)
-        self.assertNotIn("keep_color_9", names)
+        self.assertNotIn("keep_only_color_5", names)
+        self.assertNotIn("keep_only_color_9", names)
 
 
 class TestLOOCV(unittest.TestCase):
