@@ -49,12 +49,12 @@ def save_pipeline_results(
     json_path = os.path.join(runs_dir, f"{prefix}.json")
     jsonl_path = os.path.join(runs_dir, f"{prefix}.jsonl")
 
-    # Combined JSONL: train + eval records with phase tags
+    # Combined JSONL: full per-task records from ProgressTracker with phase tags
     with open(jsonl_path, "w") as f:
-        for task_id, record in train_result.results_data.get("tasks", {}).items():
-            f.write(json.dumps({"phase": "train", "task_id": task_id, **record}) + "\n")
-        for task_id, record in eval_result.results_data.get("tasks", {}).items():
-            f.write(json.dumps({"phase": "eval", "task_id": task_id, **record}) + "\n")
+        for record in train_result.results_data.get("all_records", []):
+            f.write(json.dumps({"phase": "train", **record}) + "\n")
+        for record in eval_result.results_data.get("all_records", []):
+            f.write(json.dumps({"phase": "eval", **record}) + "\n")
 
     # Combined JSON
     train_data = train_result.results_data

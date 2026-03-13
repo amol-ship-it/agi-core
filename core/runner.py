@@ -909,6 +909,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             }
             for r in tracker.all_records
         },
+        "all_records": tracker.all_records,
         "library": [
             {
                 "name": entry.name,
@@ -922,8 +923,10 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     }
 
     if not cfg.suppress_files:
+        # Exclude all_records from JSON (it's only for pipeline JSONL assembly)
+        json_data = {k: v for k, v in results_data.items() if k != "all_records"}
         with open(results_path, "w") as f:
-            json.dump(results_data, f, indent=2)
+            json.dump(json_data, f, indent=2)
 
         save_metrics_json(metrics, metrics_json_path)
         save_metrics_csv(metrics, metrics_csv_path)
