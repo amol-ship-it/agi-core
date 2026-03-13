@@ -374,6 +374,12 @@ def _generate_index(title, source_name, task_items, task_map, tasks_dir_name,
                 b.append(_render_example_row(f"Test {i+1}", test_inp, test_exp,
                                              prediction, cell_size=thumb))
 
+        # Link to detail page
+        detail_url = f"{tasks_dir_name}/{html.escape(tid)}.html"
+        b.append(f'<div style="margin-top:8px;font-size:0.85em">'
+                 f'<a href="{detail_url}">'
+                 f'View full step-by-step transformation details &rarr;</a></div>')
+
         b.append('</div>')  # task-card
 
     return _html_page(title, '\n'.join(b), extra_css=INDEX_CSS)
