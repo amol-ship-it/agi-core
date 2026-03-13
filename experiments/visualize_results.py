@@ -334,6 +334,20 @@ def _generate_index(title, source_name, task_items, task_map, tasks_dir_name,
              f'<span style="color:#FF4136">Unsolved: {unsolved}</span>')
     b.append('</div>')
 
+    # Table of contents: colored task IDs linking to cards below
+    status_colors = {"solved": "#2ECC40", "overfit": "#FFDC00",
+                     "near-miss": "#FF851B", "unsolved": "#FF4136"}
+    b.append('<div style="margin:12px 0">')
+    b.append('<div class="section-label">Task Index</div>')
+    b.append('<div style="column-count:4;column-gap:16px;margin:6px 0">')
+    for key, tid, tdata, status, err in task_items:
+        color = status_colors.get(status, "#e0e0e0")
+        b.append(f'<div style="font-size:0.82em;margin:1px 0">'
+                 f'<span style="color:{color}">&#9679;</span> '
+                 f'<a href="#task-{html.escape(tid)}" style="color:{color}">'
+                 f'{html.escape(tid)}</a></div>')
+    b.append('</div></div>')
+
     for key, tid, tdata, status, err in task_items:
         task = task_map.get(tid)
         if task is None:
@@ -345,7 +359,7 @@ def _generate_index(title, source_name, task_items, task_map, tasks_dir_name,
         test_preds = tdata.get("test_predictions")
         prog = parse_program_tree(prog_str) or Program(root="identity")
 
-        b.append(f'<div class="task-card {status}">')
+        b.append(f'<div id="task-{html.escape(tid)}" class="task-card {status}">')
         b.append('<div class="task-card-header">')
         b.append(f'<a href="{tasks_dir_name}/{html.escape(tid)}.html">'
                  f'{html.escape(tid)}</a>')
