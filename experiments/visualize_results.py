@@ -471,7 +471,7 @@ def generate_html(results_path: str, output_base: str,
         output_base: base path prefix (without _viz suffix)
 
     Returns:
-        first index path generated
+        list of generated index paths
     """
     with open(results_path) as f:
         results = json.load(f)
@@ -486,7 +486,7 @@ def generate_html(results_path: str, output_base: str,
 
     env = ARCEnv()
     source_name = os.path.basename(results_path)
-    first_index = None
+    index_paths = []
 
     if "train_tasks" in results and "eval_tasks" in results:
         # Pipeline: separate train and eval
@@ -515,9 +515,7 @@ def generate_html(results_path: str, output_base: str,
                 max_tasks=max_tasks,
                 back_link_prefix=back_link_name,
             )
-            print(f"  {split_label}: {idx} ({n} tasks)")
-            if first_index is None:
-                first_index = idx
+            index_paths.append(idx)
     else:
         # Single run
         tasks_data = results.get("tasks", {})
@@ -538,10 +536,9 @@ def generate_html(results_path: str, output_base: str,
             max_tasks=max_tasks,
             back_link_prefix=back_link_name,
         )
-        print(f"  Results: {idx} ({n} tasks)")
-        first_index = idx
+        index_paths.append(idx)
 
-    return first_index or ""
+    return index_paths
 
 
 def main():
@@ -559,8 +556,10 @@ def main():
 
     output_base = args.output or os.path.splitext(args.results_json)[0]
 
-    generate_html(args.results_json, output_base,
-                  filter_status=args.filter, max_tasks=args.max_tasks)
+    paths = generate_html(args.results_json, output_base,
+                          filter_status=args.filter, max_tasks=args.max_tasks)
+    for p in paths:
+        print(f"  Generated: {p}")
 
 
 if __name__ == "__main__":

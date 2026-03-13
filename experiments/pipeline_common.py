@@ -124,6 +124,7 @@ def print_pipeline_summary(
     jsonl_path: str,
     log_path: str = "",
     eval_label: str = "Evaluation Results (with culture transfer)",
+    viz_paths: list[str] | None = None,
 ):
     """Print a formatted pipeline summary to stdout."""
     train_data = train_result.results_data
@@ -187,6 +188,9 @@ def print_pipeline_summary(
     print(f"    Culture file:      {train_result.culture_path}")
     if log_path:
         print(f"    Console log:       {log_path}")
+    if viz_paths:
+        for vp in viz_paths:
+            print(f"    Visualization:     {vp}")
 
     print()
     print("=" * 72)

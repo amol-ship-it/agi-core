@@ -114,16 +114,17 @@ def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
     )
 
 
-def _try_generate_viz(results_json_path: str) -> None:
-    """Generate HTML visualization from results JSON."""
+def _try_generate_viz(results_json_path: str) -> list[str]:
+    """Generate HTML visualization from results JSON. Returns list of index paths."""
     if not os.path.exists(results_json_path):
-        return
+        return []
     try:
         from .visualize_results import generate_html
         output_base = os.path.splitext(results_json_path)[0]
-        generate_html(results_json_path, output_base)
+        return generate_html(results_json_path, output_base)
     except Exception as e:
         print(f"  (visualization skipped: {e})")
+        return []
 
 
 # =============================================================================
@@ -171,7 +172,9 @@ def _run_train(args, resolved, max_tasks):
                        domain_tag="phase1_arc_train", tasks=tasks,
                        save_culture=args.save_culture)
     result = run_experiment(cfg)
-    _try_generate_viz(result.results_path)
+    viz_paths = _try_generate_viz(result.results_path)
+    for vp in viz_paths:
+        print(f"  Visualization: {vp}")
     print(f"  Culture saved to: {result.culture_path}")
 
 
@@ -182,7 +185,9 @@ def _run_eval(args, resolved, max_tasks):
                        domain_tag="phase1_arc_eval", tasks=tasks,
                        culture_path=args.culture)
     result = run_experiment(cfg)
-    _try_generate_viz(result.results_path)
+    viz_paths = _try_generate_viz(result.results_path)
+    for vp in viz_paths:
+        print(f"  Visualization: {vp}")
 
 
 def _run_pipeline(args, resolved, max_tasks):
@@ -229,13 +234,14 @@ def _run_pipeline(args, resolved, max_tasks):
         )
 
         # Generate HTML visualization from pipeline results
-        _try_generate_viz(json_path)
+        viz_paths = _try_generate_viz(json_path)
 
         print_pipeline_summary(
             train_result, eval_result,
             title="PIPELINE SUMMARY", args=args,
             json_path=json_path, jsonl_path=jsonl_path,
             log_path=log_path,
+            viz_paths=viz_paths,
         )
 
 
