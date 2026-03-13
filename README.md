@@ -180,12 +180,10 @@ Three modes. Pick one. That's the only knob most users need.
 | Mode | Tasks | Beam | Compute Cap | Eval accuracy | Use case |
 |------|-------|------|-------------|---------------|----------|
 | `quick` | 50 | off | 500K | 6.0% (3/50) | Fast dev loop (~5s) |
-| `default` | all (400) | off | 3M | 8.2% (33/400) | Full benchmark (~4 min) |
-| `contest` | all (400) | 30×15 | 100M | 8.5% (34/400) | Maximum accuracy (~9 min) |
+| `default` | all (400) | off | 3M | 7.8% (31/400) | Full benchmark (~4 min) |
+| `contest` | all (400) | 30×15 | 100M | ~8% | Maximum accuracy (~9 min) |
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
-
-**Why no beam search?** A/B testing showed beam search (width=20, gens=10) solves the same tasks as exhaustive-only, while adding wall time. All solves come from exhaustive enumeration (depth 1-3), object decomposition, conditional search, near-miss refinement, and correction. Beam is kept in contest mode as a safety net.
 
 **Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
@@ -200,10 +198,9 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 | Mode | Eval (400 tasks) | Wall time |
 |------|-----------------|-----------|
 | `quick` | 3/50 (6.0%) | **~5s** |
-| `default` | 33/400 (8.2%) | **~4 min** |
-| `contest` | 34/400 (8.5%) | **~9 min** |
+| `default` | 31/400 (7.8%) | **~4 min** |
 
-Note: training accuracy is much higher (e.g. contest: 107/400 = 26.8%) but this reflects overfitting — 170/277 train-solved programs fail on held-out test examples (61% overfit rate). Eval is the real metric.
+Note: training accuracy is higher (default: 106/400 = 26.5%) with a 29% overfit rate. The aggressive overfit-prone corrections were removed in favor of a clean, honest system — eval is the real metric.
 
 **Other domains:**
 
@@ -216,7 +213,7 @@ Note: training accuracy is much higher (e.g. contest: 107/400 = 26.8%) but this 
 **180 base ARC primitives** plus task-specific color/role primitives (~260-390 total per task, ~9,000 lines of domain code) including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
-**Diff-and-patch correction** learns neighborhood-based corrections on near-miss programs; powerful for training but prone to overfitting (see "Current status" below).
+**Simple correction** learns color remappings and small (3x3) neighborhood patches on near-miss programs.
 
 ## Options
 
@@ -253,7 +250,7 @@ Note: training accuracy is much higher (e.g. contest: 107/400 = 26.8%) but this 
    - **Object decomposition**: detects per-object transform patterns via connected components, with conditional recoloring by size, shape, or position.
    - **Conditional branching**: partitions inputs by predicates (symmetric, tall, square, etc.) and finds per-group transforms.
    - **Near-miss refinement**: takes programs with error < 20% and tries appending/prepending each primitive.
-   - **Correction cascade**: infers color remappings, neighborhood patches (3x3→11x11), and identity-seeded corrections from near-miss programs. Powerful but prone to overfitting.
+   - **Correction**: infers color remappings and small neighborhood patches (3x3) from near-miss programs.
    - **Beam search**: seeded with top enumeration results, mutates and crosses programs with semantic deduplication.
 2. **SLEEP**: Analyze all solved programs. Extract recurring sub-programs.
    Add them to the library as new reusable abstractions.
@@ -298,9 +295,9 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **Compounding produces library entries on ARC but has limited impact.** Most ARC solves are depth-1 (single primitives), so the library provides little additional coverage beyond what depth-3 exhaustive search already finds.
 
-**Overfitting is the primary challenge.** In contest mode, 277/400 programs match training examples but only 107/400 pass held-out test (61% overfit rate on training split). The multi-scale neighborhood correction cascade (3x3→11x11) is especially prone to overfitting — it learns task-specific spatial rules that don't generalize from training to test examples. LOOCV candidate ranking helps but doesn't close the gap.
+**Overfitting is reduced but still present.** In default mode, 141/400 programs match training but only 106/400 pass test (29% overfit rate). The aggressive correction cascade (5x5-11x11 neighborhoods, identity-seeded corrections) was removed in favor of clean, generalizable corrections only.
 
-**Where the ARC solve rate comes from:** 199 base primitives plus task-specific additions (~9,000 lines of domain code) encode substantial human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition, correction cascade), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
+**Where the ARC solve rate comes from:** 180 base primitives plus task-specific additions (~9,000 lines of domain code) encode human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition, correction), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
 
 ## Structure
 
@@ -340,7 +337,7 @@ agi-core/
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (551 tests)
+├── tests/                   # Test suite (545 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -359,7 +356,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (551 tests):** 73% overall. Core modules: learner 68%, runner 25% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
+**Current coverage (545 tests):** 73% overall. Core modules: learner 68%, runner 25% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
@@ -376,9 +373,9 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 2** ✅ ARC-AGI-1 eval with culture transfer
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated
 - **Phase 4** ✅ Compounding infrastructure: Zork 10/20, list_ops 20/28 with library reuse 2-6x
-- **Phase 5** ✅ Correction cascade: LOOCV + multi-scale neighborhood correction (3x3→11x11) + identity correction
-- **Phase 6** ✅ Current: ARC-AGI-1 eval 34/400 (8.5%), ARC-AGI-2 eval 0/120 (0%)
-- **Phase 7** 🔧 Reduce overfitting (61% overfit rate on corrections)
+- **Phase 5** ✅ Correction (simple color remap + 3x3 neighborhood only, aggressive corrections removed)
+- **Phase 6** ✅ Current: ARC-AGI-1 eval 31/400 (7.8%), ARC-AGI-2 eval 0/120 (0%)
+- **Phase 7** 🔧 Improve accuracy via better primitives and composition (not overfitting corrections)
 - **Phase 8** Cross-domain library transfer
 - **Phase 9** Continuous mixed-domain learning
 
