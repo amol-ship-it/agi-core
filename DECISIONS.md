@@ -1816,4 +1816,35 @@ Fixed a bug where `run_curriculum` dropped `sequential_compounding` and `adaptiv
 - Test count: 547→557
 
 ---
+
+## Session 11 — Diagnostic Analysis & Size-Adaptive Correction Evaluation
+
+### Decision 90: Near-Miss Landscape Diagnostic
+
+**Date:** 2026-03-13
+**Context:** After 10 sessions (278/800 default, 292/800 contest), the near-miss landscape was unknown. Decision 78 identified 295 near-misses but subsequent work changed the picture. Needed fresh diagnostics before committing to size-adaptive correction.
+
+**Method:** Built `experiments/diagnostic_near_miss.py` — runs the full system on all 400 training tasks and reports:
+1. Task categorization by output dimensions
+2. Near-miss landscape (prediction error distribution)
+3. Extraction primitive opportunity analysis (can extraction + correction solve tasks?)
+
+**Results (400 training tasks, default mode):**
+- Solved: 168/400 (42.0%) on training split alone
+- Dimension categories: 262 same-shape (65.5%), 100 output-smaller (25%), 36 output-larger (9%), 2 mixed
+- Near-miss distribution (232 unsolved):
+  - ≤5% error: 41 tasks (very close — likely fixable with better correction)
+  - ≤10% error: 91 tasks (39% of unsolved are near-misses)
+  - ≤15% error: 126 tasks
+  - ≤20% error: 141 tasks
+  - ≤30% error: 180 tasks (78% of unsolved are within 30% error)
+- Extraction + correction opportunity: **0 tasks solvable** (17 have shape-matching extraction but correction fails on all)
+
+**Decision:** Skip Phase 2 (size-adaptive correction). Zero tasks benefit. The opportunity hypothesis from the plan was wrong — the extraction primitives produce the right shape but the content is too far off for the correction pipeline to fix.
+
+**Key insight:** The unsolved landscape is dominated by **same-shape tasks** (137 unsolved) where identity-seeded correction already tried and failed. The 91 near-misses within 10% suggest the highest ROI is improving correction for same-shape tasks (more flexible rules, larger neighborhoods, or different correction strategies), not bridging size mismatches.
+
+**Files:** `experiments/diagnostic_near_miss.py`, `runs/diagnostic_near_miss.csv`, `runs/diagnostic_near_miss_summary.json`
+
+---
 *This document will be updated with each new session and major decision.*
