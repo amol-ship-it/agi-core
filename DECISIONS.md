@@ -3,6 +3,8 @@
 **Author:** Claude (working with vibhor-77)
 **Purpose:** Living document of all technical decisions, judgements, trade-offs, and rationale made during development. Newest entries at the bottom.
 
+> **⚠ Note (2026-03-13):** A critical solve-counting bug was found and fixed in Decision 96. All ARC solve numbers reported in Decisions 63–95 were inflated because `_make_solved_result` did not test-verify corrected programs — `test_solved=None` fell back to `train_solved=True`. Corrected numbers: ARC-AGI-1 contest 141/800 (was reported as 445/800), eval 34/400 (was 185/400). See Decision 96 for full details.
+
 ---
 
 ## Session 1 — Claude Mobile App (Early March 2026)

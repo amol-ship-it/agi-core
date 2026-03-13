@@ -33,7 +33,7 @@ python -m experiments.phase1_arc
 python -m pytest tests/ -v
 ```
 
-The default command runs all 400 training tasks, saves the learned culture, then runs all 400 evaluation tasks using that culture. Results, logs, and culture snapshots are auto-saved with timestamps. Output file paths are printed at the start so you can `tail -f` them in another terminal.
+The default command runs all 400 training tasks, saves the learned culture, then runs all 400 evaluation tasks using that culture. Results, logs, visualizations, and culture snapshots are auto-saved with timestamps. Output file paths are printed at the start so you can `tail -f` them in another terminal.
 
 **Requirements:** Python 3.10+, NumPy, SciPy, Numba. See `requirements.txt`.
 
@@ -52,7 +52,7 @@ git -C data/ARC-AGI-2 pull
 # Full pipeline: train → save culture → eval (default, recommended)
 python -m experiments.phase1_arc
 
-# Quick subset for development (50 tasks, 500K compute cap, ~25s on M1 Max)
+# Quick subset for development (50 tasks, 500K compute cap, ~5s)
 python -m experiments.phase1_arc --mode quick
 
 # Train only, save culture for later
@@ -68,7 +68,7 @@ python -m experiments.phase1_arc --workers 1
 
 ### Running a subset of tasks
 
-Tasks are **shuffled by default** using a deterministic seed (`--seed 42`), so any subset is a representative random sample. This means you can run fewer tasks and extrapolate to the full dataset:
+Tasks are **shuffled by default** using a deterministic seed (`--seed 42`), so any subset is a representative random sample:
 
 ```bash
 # Quick mode already uses 50 tasks — fastest way to iterate
@@ -83,8 +83,6 @@ python -m experiments.phase1_arc --mode quick --max-tasks 10
 # Full 400-task benchmark with quick search settings
 python -m experiments.phase1_arc --mode quick --max-tasks 0
 ```
-
-**Extrapolation:** If you solve 12/50 tasks (24%) in quick mode, you can expect roughly 96/400 (24%) on the full dataset. The seeded shuffle ensures the subset is unbiased.
 
 ### Other experiments
 
@@ -106,17 +104,23 @@ The Zork domain is fully self-contained (custom game engine, no external depende
 Every run automatically saves timestamped files. Paths are printed at the start so you can monitor progress live:
 
 ```
-runs/phase1_arc_20260311_164939.json           — combined: parameters + train/eval summaries + all tasks
-runs/phase1_arc_20260311_164939.jsonl          — all task records (train + eval) with phase tags
-runs/phase1_arc_20260311_164939_culture.json   — learned culture snapshot (for eval / cross-run transfer)
+runs/phase1_arc_pipeline_TIMESTAMP.json          — combined: parameters + train/eval summaries + all tasks
+runs/phase1_arc_pipeline_TIMESTAMP.jsonl         — all task records (train + eval) with phase tags
+runs/phase1_arc_train_TIMESTAMP_culture.json     — learned culture snapshot (for eval / cross-run transfer)
+runs/phase1_arc_pipeline_TIMESTAMP_train_viz.html — train results visualization (index)
+runs/phase1_arc_pipeline_TIMESTAMP_eval_viz.html  — eval results visualization (index)
+runs/phase1_arc_pipeline_TIMESTAMP_train_viz/     — per-task detail pages (train)
+runs/phase1_arc_pipeline_TIMESTAMP_eval_viz/      — per-task detail pages (eval)
 ```
 
 In standalone mode (`--train-only` or `--eval-only`), each phase writes its own files:
 
 ```
-runs/phase1_arc_train_20260311_164939.log      — full console output (tee'd)
-runs/phase1_arc_train_20260311_164939.jsonl    — live per-task results (tail -f friendly)
-runs/phase1_arc_train_20260311_164939.json     — final results: meta + summary + per-task + library
+runs/phase1_arc_train_TIMESTAMP.log      — full console output (tee'd)
+runs/phase1_arc_train_TIMESTAMP.jsonl    — live per-task results (tail -f friendly)
+runs/phase1_arc_train_TIMESTAMP.json     — final results: meta + summary + per-task + library
+runs/phase1_arc_train_TIMESTAMP_viz.html — results visualization (index)
+runs/phase1_arc_train_TIMESTAMP_viz/     — per-task detail pages
 ```
 
 Monitor a running benchmark in another terminal:
@@ -125,17 +129,29 @@ tail -f runs/phase1_arc_*.jsonl    # watch task results as they complete
 tail -f runs/phase1_arc_*.log      # watch full console output
 ```
 
+### Visualization
+
+HTML visualizations are auto-generated after every run. The index page shows all tasks with colored status indicators and grid previews (Input | Expected | Predicted for each example). Click any task to see the full detail page with step-by-step primitive execution showing each intermediate transformation.
+
+```bash
+# Regenerate visualization from a previous run
+python -m experiments.visualize_results runs/phase1_arc_pipeline_TIMESTAMP.json
+
+# Filter to only show overfit tasks
+python -m experiments.visualize_results runs/phase1_arc_pipeline_TIMESTAMP.json --filter overfit
+```
+
 ### Verifying individual solves
 
 The console output ends with a **SOLVED TASKS** section listing every solved task and its program:
 
 ```
-  SOLVED TASKS (73 total)
+  SOLVED TASKS (107 total)
     ✓ 007bbfb7                 program: upscale_pattern
     ✓ 00d62c1b                 program: fill_rect_interior_4
     ...
 
-  OVERFIT TASKS (7 matched training but failed test)
+  OVERFIT TASKS (170 matched training but failed test)
     ~ 22168020                 program: fill_by_symmetry
     ...
 ```
@@ -155,7 +171,7 @@ grep "007bbfb7" runs/*_phase1_train.jsonl | python -m json.tool
 python -c "import json; d=json.load(open('runs/TIMESTAMP_phase1_train.json')); print(json.dumps(d['tasks']['007bbfb7'], indent=2))"
 ```
 
-Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, `test_solved`, `test_error`, `energy`, `prediction_error`, `program`, `evaluations`, `wall_time`.
+Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, `test_solved`, `test_error`, `energy`, `prediction_error`, `program`, `evaluations`, `wall_time`, `train_predictions`, `test_predictions`.
 
 ## Presets
 
@@ -169,9 +185,9 @@ Three modes. Pick one. That's the only knob most users need.
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
 
-**Why no beam search?** A/B testing on 49 tasks showed beam search (width=20, gens=10) solves **exactly the same tasks** as exhaustive-only, while adding +13% wall time. All solves come from exhaustive enumeration (depth 1-3), object decomposition, conditional search, near-miss refinement, and color fix. Beam is kept in contest mode as a safety net.
+**Why no beam search?** A/B testing showed beam search (width=20, gens=10) solves the same tasks as exhaustive-only, while adding wall time. All solves come from exhaustive enumeration (depth 1-3), object decomposition, conditional search, near-miss refinement, and correction. Beam is kept in contest mode as a safety net.
 
-**Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Experiments show solves are **bimodal**: 76 "fast" tasks solve in <500 evals (any cap works), while 9 "slow" tasks (per_object_recolor) need ~13K evals (cap ≥ 2.8M). Quick mode uses 500K for speed; default uses 3M to capture all solves. Override with `--compute-cap`:
+**Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
 ```bash
 python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
@@ -193,13 +209,13 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 |--------|-------|--------|------|-------|
 | ARC-AGI-2 Train | 1000 | 131 | 13.1% | test-verified (550 train_solved, high overfit) |
 | ARC-AGI-2 Eval | 120 | 0 | 0.0% | With culture transfer from training |
-| Zork | 20 | 10 | 50% | Stable — compounding works: library entries reused 5-11x |
+| Zork | 20 | 10 | 50% | Compounding works: library entries reused 5-11x |
 | List Ops | 28 | ~20 | ~71% | Compounding demonstrated here |
 
 **235 ARC primitives per task** (down from 349 via task-specific vocabulary pruning) including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
-**Diff-and-patch correction** (Phase B) accounts for 89% of recent gains: 3x3 neighborhood patches act as learned cellular automaton rules on near-miss programs, with 91% train→eval generalization.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
+**Diff-and-patch correction** learns neighborhood-based corrections on near-miss programs; powerful for training but prone to overfitting (see "Current status" below).
 
 ## Options
 
@@ -217,7 +233,7 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 | `--max-generations` | from preset | Beam generations. Quick/default: `1` (off), contest: `15` |
 | `--workers` | `0` (perf cores) | Parallel workers. `0` = auto-detect performance cores |
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
-| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). Quick/default: `0` (unlimited), contest: `50M`. `0` = unlimited |
+| `--compute-cap` | from preset | Per-task eval budget (cell-normalized). `0` = unlimited |
 | `--exhaustive-depth` | `3` | Exhaustive enumeration depth (`0`=off, `2`=pairs, `3`=triples) |
 | `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
 | `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |
@@ -232,11 +248,11 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 1. **WAKE**: For each task, search for a program that transforms input to output.
    All search phases respect the per-task compute budget — large grids get fewer evaluations.
-   - **Exhaustive enumeration** (depth 1-3): systematically tries all single primitives, top-K pairs, and top-K triples. Solves ~97% of solvable tasks.
+   - **Exhaustive enumeration** (depth 1-3): systematically tries all single primitives, top-K pairs, and top-K triples.
    - **Object decomposition**: detects per-object transform patterns via connected components, with conditional recoloring by size, shape, or position.
    - **Conditional branching**: partitions inputs by predicates (symmetric, tall, square, etc.) and finds per-group transforms.
    - **Near-miss refinement**: takes programs with error < 20% and tries appending/prepending each primitive.
-   - **Color fix**: infers pixel-level color remappings from near-perfect programs.
+   - **Correction cascade**: infers color remappings, neighborhood patches (3x3→11x11), and identity-seeded corrections from near-miss programs. Powerful but prone to overfitting.
    - **Beam search**: seeded with top enumeration results, mutates and crosses programs with semantic deduplication.
 2. **SLEEP**: Analyze all solved programs. Extract recurring sub-programs.
    Add them to the library as new reusable abstractions.
@@ -279,11 +295,11 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **Compounding is demonstrated on list_ops and Zork.** On list_ops (22 primitives, depth-limited to 2), the library learns depth-2 compositions that enable depth-3+ solutions in subsequent rounds, with library reuse counts of 4-11. On Zork (20 tasks across 5 difficulty levels), compounding produces 5 library entries reused 5-11x across rounds, with hierarchical composition (e.g., `take_treasure(go_north(go_north))` built from a promoted depth-2 entry).
 
-**Compounding produces library entries on ARC but has limited impact.** With `--compounding` flag (depth-2 + 3 rounds + sequential), the system creates 3-5 library entries with 2x reuse. However, most ARC solves are depth-1 (single primitives), so the library provides little additional coverage beyond what depth-3 exhaustive search already finds.
+**Compounding produces library entries on ARC but has limited impact.** Most ARC solves are depth-1 (single primitives), so the library provides little additional coverage beyond what depth-3 exhaustive search already finds.
 
-**Overfit detection matters.** Many programs match training examples but fail test (overfit). In contest mode, 277/400 train-solved vs 107/400 test-verified on training split alone. LOOCV candidate ranking helps but doesn't eliminate the gap. Multi-scale neighborhood corrections (3x3→11x11) are powerful for training but often overfit.
+**Overfitting is the primary challenge.** In contest mode, 277/400 programs match training examples but only 107/400 pass held-out test (61% overfit rate on training split). The multi-scale neighborhood correction cascade (3x3→11x11) is especially prone to overfitting — it learns task-specific spatial rules that don't generalize from training to test examples. LOOCV candidate ranking helps but doesn't close the gap.
 
-**Where the ARC solve rate comes from:** 235 primitives per task (6,500 lines of domain code) encode substantial human knowledge about grid transformations. The multi-scale neighborhood correction cascade (3x3→5x5→7x7→9x9→11x11) learns task-specific spatial rules from near-miss programs. Identity-seeded correction captures tasks describable as local cellular automaton rules. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
+**Where the ARC solve rate comes from:** 235 primitives per task (6,500 lines of domain code) encode substantial human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition, correction cascade), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
 
 ## Structure
 
@@ -304,6 +320,7 @@ agi-core/
 ├── experiments/             # Thin domain-specific wrappers over core/runner.py
 │   ├── phase1_arc.py        # ARC-AGI-1 training & evaluation pipeline
 │   ├── phase2_arc.py        # ARC-AGI-2 baseline experiment
+│   ├── visualize_results.py # HTML visualization generator
 │   ├── zork_baseline.py     # Zork text adventure baseline
 │   └── list_compounding.py  # List ops compounding demonstration
 │
@@ -322,20 +339,7 @@ agi-core/
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (557 tests, 14 files)
-│   ├── test_arc.py
-│   ├── test_color_fix.py
-│   ├── test_compounding.py
-│   ├── test_conditional_search.py
-│   ├── test_exhaustive_enum.py
-│   ├── test_interfaces.py
-│   ├── test_learner.py
-│   ├── test_list_ops.py
-│   ├── test_memory.py
-│   ├── test_metrics.py
-│   ├── test_object_decomposition.py
-│   ├── test_symbolic_math.py
-│   └── test_zork.py
+├── tests/                   # Test suite (551 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -367,15 +371,15 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** ✅ ARC-AGI-1 training (235 primitives/task, exhaustive enumeration, diff-and-patch, wake-sleep) — 180/400 (45%)
-- **Phase 2** ✅ ARC-AGI-1 eval with culture transfer — 98/400 (24.5%)
-- **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated on list_ops and Zork
-- **Phase 4** ✅ Compounding infrastructure: `--compounding` flag, distance-based drive signals, library primitive execution. Zork: 7/20→10/20 with library reuse 5-11x. ARC: library entries produced but limited impact.
-- **Phase 5** ✅ Narrowed ARC train-eval gap from 3.8x to 1.8x (45% train, 24.5% eval) via LOOCV + 3x3/5x5 diff-and-patch + identity correction
-- **Phase 6** ✅ Multi-scale neighborhood correction (3x3→11x11) + LOOCV: ARC-AGI-1 contest 141/800 (17.6%), eval 34/400 (8.5%)
-- **Phase 7** 🔧 ARC-AGI-2: 131/1000 train (13.1%), 0/120 eval — high overfit rate
-- **Phase 6** Cross-domain library transfer
-- **Phase 7** Continuous mixed-domain learning
+- **Phase 1** ✅ ARC-AGI-1 training (235 primitives/task, exhaustive enumeration, diff-and-patch, wake-sleep)
+- **Phase 2** ✅ ARC-AGI-1 eval with culture transfer
+- **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated
+- **Phase 4** ✅ Compounding infrastructure: distance-based drive signals, library primitive execution
+- **Phase 5** ✅ Correction cascade: LOOCV + multi-scale neighborhood correction (3x3→11x11) + identity correction
+- **Phase 6** ✅ Current: ARC-AGI-1 contest 141/800 (17.6%), eval 34/400 (8.5%). ARC-AGI-2: 131/1000 train (13.1%)
+- **Phase 7** 🔧 Reduce overfitting (61% overfit rate on corrections)
+- **Phase 8** Cross-domain library transfer
+- **Phase 9** Continuous mixed-domain learning
 
 ## License
 
