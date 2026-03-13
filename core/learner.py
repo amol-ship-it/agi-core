@@ -1268,7 +1268,9 @@ class Learner:
         n_evals = 0
         solve_thresh = self.search_cfg.solve_threshold
 
-        # Use depth-1 scores from candidates to pick top-K primitives
+        # Build candidate pool: depth-1 primitives + top depth-2 programs.
+        # Depth-2 programs are wrapped as on-the-fly Primitive objects so
+        # they can be used uniformly in the conditional scoring below.
         depth1 = [sp for sp in candidates if sp.program.depth == 1]
         depth1.sort(key=lambda s: s.prediction_error)
         top_prims_names = []
@@ -1283,6 +1285,30 @@ class Learner:
         # Resolve to Primitive objects
         prim_map = {p.name: p for p in primitives}
         top_prims = [prim_map[n] for n in top_prims_names if n in prim_map]
+
+        # Add top depth-2 programs as branch candidates
+        depth2 = [sp for sp in candidates
+                   if sp.program.depth == 2 and sp.program.children]
+        depth2.sort(key=lambda s: s.prediction_error)
+        depth2_added = 0
+        DEPTH2_BRANCH_K = 8
+        for sp in depth2:
+            prog_repr = repr(sp.program)
+            if prog_repr in seen:
+                continue
+            seen.add(prog_repr)
+            # Wrap depth-2 program as a Primitive for uniform handling
+            def _make_d2_fn(prog=sp.program, env=self.env):
+                def fn(grid):
+                    return env.execute(prog, grid)
+                return fn
+            d2_prim = Primitive(
+                name=prog_repr, arity=1, fn=_make_d2_fn(), domain="arc")
+            top_prims.append(d2_prim)
+            depth2_added += 1
+            if depth2_added >= DEPTH2_BRANCH_K:
+                break
+
         if len(top_prims) < 2:
             return None, 0
 
@@ -1305,7 +1331,7 @@ class Learner:
             if not true_indices or not false_indices:
                 continue
 
-            # Score each top primitive on each group
+            # Score each candidate on each group
             true_scores: list[tuple[float, Primitive]] = []
             false_scores: list[tuple[float, Primitive]] = []
 
@@ -1314,7 +1340,7 @@ class Learner:
                 for idx in true_indices:
                     inp, expected = task.train_examples[idx]
                     try:
-                        out = self.env.execute(Program(root=prim.name), inp)
+                        out = prim.fn(inp)
                         true_err += self.drive.prediction_error(out, expected)
                     except Exception:
                         true_err += 1.0
@@ -1324,7 +1350,7 @@ class Learner:
                 for idx in false_indices:
                     inp, expected = task.train_examples[idx]
                     try:
-                        out = self.env.execute(Program(root=prim.name), inp)
+                        out = prim.fn(inp)
                         false_err += self.drive.prediction_error(out, expected)
                     except Exception:
                         false_err += 1.0
@@ -1431,6 +1457,10 @@ class Learner:
                 params=correction.params,
             )
             sp = self._evaluate_program(fixed_prog, task)
+
+            # Only accept if the correction actually reduces error
+            if sp.prediction_error >= nm.prediction_error:
+                continue
 
             if sp.prediction_error <= solve_thresh:
                 return sp
@@ -1833,7 +1863,6 @@ class Learner:
     # Private helpers
     # -------------------------------------------------------------------------
 
-    @staticmethod
     @staticmethod
     def _avg_cells(task: Task) -> int:
         """Max cell count across training input grids.

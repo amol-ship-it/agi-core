@@ -519,11 +519,12 @@ class TestTaskSpecificPrimitives(unittest.TestCase):
         base_count = len(ARC_PRIMITIVES)
         total_count = len(grammar.base_primitives())
         # No new/removed colors → no fill/remove prims, but pixel
-        # transitions (1→2, 2→1) may generate task_recolor prims.
+        # transitions (1→2, 2→1) may generate task_recolor and task_swap prims.
         task_prims = [p for p in grammar.base_primitives() if p.name.startswith("task_")]
         for p in task_prims:
-            self.assertTrue(p.name.startswith("task_recolor_"),
-                            f"Unexpected task prim: {p.name}")
+            self.assertTrue(
+                p.name.startswith("task_recolor_") or p.name.startswith("task_swap_"),
+                f"Unexpected task prim: {p.name}")
 
     def test_task_prims_executable(self):
         """Task-specific primitives should be executable via ARCEnv."""
@@ -541,6 +542,28 @@ class TestTaskSpecificPrimitives(unittest.TestCase):
         prog = Program(root="task_fill_bg_5")
         result = env.execute(prog, [[0, 1], [1, 0]])
         self.assertEqual(result, [[5, 1], [1, 5]])
+
+    def test_task_swap_prim_generated(self):
+        """When pixel transitions show A→B AND B→A, a swap prim is generated."""
+        grammar = ARCGrammar(seed=42)
+        # Grid where colors 2 and 7 are swapped between input and output
+        task = Task(
+            task_id="test_swap",
+            train_examples=[
+                ([[2, 0, 7], [7, 0, 2]], [[7, 0, 2], [2, 0, 7]]),
+                ([[2, 7], [0, 0]], [[7, 2], [0, 0]]),
+            ],
+            test_inputs=[[[2, 7]]],
+        )
+        grammar.prepare_for_task(task)
+        prim_names = {p.name for p in grammar.base_primitives()}
+        self.assertIn("task_swap_2_and_7", prim_names)
+
+        # Verify the swap prim works correctly
+        env = ARCEnv()
+        prog = Program(root="task_swap_2_and_7")
+        result = env.execute(prog, [[2, 0, 7], [7, 0, 2]])
+        self.assertEqual(result, [[7, 0, 2], [2, 0, 7]])
 
 
 # =============================================================================

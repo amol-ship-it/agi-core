@@ -1436,4 +1436,66 @@ This was latent since the numba JIT commit (b970016) but only triggered with cer
 **Verdict:** Modest improvement (+1 solve). The overlay, node replacement, and two-step features add search coverage without meaningful cost. The wider refinement pool is the right default — restricting to top-50 was premature optimization.
 
 ---
+
+### Decision 69: Fix Overfit in per_object_recolor — Default Color for Unseen Keys
+
+**Date:** 2026-03-12
+**Context:** `per_object_recolor` is the most productive primitive (13 solves in 1000-task run) but causes overfitting when test inputs contain shapes/sizes not seen in training. Strategies like `by_shape`, `by_size`, `by_size_rank`, and `by_input_color` learn a mapping from training examples, but when a test input has a novel key, the original code fell back to the object's original color — which is wrong if the task requires recoloring all objects.
+
+**Fix:** In `_make_conditional_recolor_fn` (objects.py), compute a default color as the most common output color from the learned rule. When an unseen key is encountered, use this default instead of the original color.
+
+**Result:** Recovered 2 overfit tasks (d2abd087 confirmed, 25d8a9c8 found alternative path). No regressions.
+
+---
+
+### Decision 70: Extend Conditional Search with Depth-2 Branch Candidates
+
+**Date:** 2026-03-12
+**Context:** Conditional search (`if pred then A else B`) only considered depth-1 primitives as branch candidates. Many tasks need `if pred then compose(f, g) else h` — a depth-2 composition in one branch.
+
+**Fix:** In `_try_conditional_search` (learner.py), after collecting depth-1 candidates, also add top-8 depth-2 programs (sorted by prediction error) as branch candidates. Each depth-2 program is wrapped in a closure so it can be used as a branch primitive.
+
+**Result:** +2 additional train-solves in 400-task run. However, introduces a subtle issue: conditional search may find an overfit conditional program before the original good program (observed on task 47c1f68c as run-order artifact, not consistent regression).
+
+---
+
+### Decision 71: Remove Duplicate @staticmethod Decorator
+
+**Date:** 2026-03-12
+**Context:** `_avg_cells` in learner.py had a duplicate `@staticmethod` decorator causing a warning.
+
+**Fix:** Removed the duplicate decorator.
+
+---
+
+### Decision 72: Task-Specific Primitives Generate 0 Solves
+
+**Date:** 2026-03-12
+**Context:** `Grammar.prepare_for_task` generates task-specific swap/recolor primitives. Investigated their contribution.
+
+**Finding:** In the 400-task run, task-specific primitives produced 0 solves. They overlap with existing static primitives or don't help in composition. The mechanism is architecturally sound but currently not contributing.
+
+**Decision:** Keep the mechanism (no code cost) but don't invest in expanding it until there's evidence of tasks that need it.
+
+---
+
+### Decision 73: Session 9 Cumulative Results
+
+**Date:** 2026-03-12
+**Context:** Full 400-task validation run with all Session 9 improvements (overfit fix, depth-2 conditional branches).
+
+**Results (ARC-AGI-2 training, 400 tasks):**
+| Metric | Baseline (pre-Session 9) | After Changes | Delta |
+|---|---|---|---|
+| Train-solved | 64/400 (16.0%) | 68/400 (17.0%) | +4 |
+| Test-solved | 53/400 (14.0%) | 56/400 (14.0%) | +3 |
+| Overfit | 11 | 12 | +1 |
+
+- Consistent across seeds (seed 42 and seed 123 both give 56/400)
+- ARC-AGI-2 evaluation: 0/120 (same as baseline — extremely hard set)
+- 194 unsolved tasks need output_smaller (extraction), 65 need output_larger, 606 same-size
+
+**Key insight:** 78/80 ARC solves are depth-1. Compounding can't help when solutions are shallow. The path to higher accuracy is more/better primitives covering new task categories, not deeper composition.
+
+---
 *This document will be updated with each new session and major decision.*

@@ -230,4 +230,24 @@
 
 ---
 
+## Session 9 — Claude Code CLI (March 12, 2026)
+
+### Prompt 36: Resume & Learn From Residuals
+
+> Resume the conversation from the Claude MacOS desktop app, the name is 'AGI Core'. Just read the github repository. Make sure I am synced to main and there are no pending commits or anything. Read the entire code as well as documentation and also the prompt log.
+
+[Claude synced to main, read entire codebase, documentation, and prompt logs.]
+
+### Prompt 37: Implement Residual Learning
+
+> You recommend. Yes. Can you also follow the instructions in CLAUDE.md to use the scientific method and fast feedback loops and rapid iteration and also validate and verify everything?
+
+[User approved recommendation to "learn primitives from near-miss residuals." Session analyzed 516 near-misses, implemented task-specific swap primitives and relaxed color fix. Then user gave feedback about iteration speed — demanded quick mode (~7s) for iteration.]
+
+### Prompt 38: Continued Iteration
+
+[Context resumed after session compaction. Continued residual analysis, found near-misses are mostly structural/spatial, not color-fixable. Shifted to anti-overfit improvements and conditional search extension.]
+
+---
+
 *This document will be updated with each new session.*

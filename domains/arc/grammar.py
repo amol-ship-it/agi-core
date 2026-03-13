@@ -12,7 +12,8 @@ from typing import Any
 from core import Grammar, Primitive, Program, Task, Decomposition
 from .primitives import (
     ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP,
-    _make_replace_color, _detect_any_separator_lines, _split_grid_cells,
+    _make_replace_color, _make_swap_colors,
+    _detect_any_separator_lines, _split_grid_cells,
 )
 from .objects import (
     find_foreground_shapes, find_multicolor_objects, place_subgrid,
@@ -174,6 +175,34 @@ class ARCGrammar(Grammar):
                         name=name, arity=1,
                         fn=_make_replace_color(src, best_dst), domain="arc"))
                     prim_names.add(name)
+
+        # --- Atomic color swap detection ---
+        # When transitions show A→B AND B→A consistently, generate a swap
+        # primitive. Swaps are atomic (read from original, write to copy)
+        # so they don't corrupt pixels the way sequential remaps would.
+        swap_pairs_seen: set[tuple[int, int]] = set()
+        for src, tally in by_src.items():
+            best_dst, best_count = tally.most_common(1)[0]
+            total = sum(tally.values())
+            if best_count / total < 0.70 or best_count < 2:
+                continue
+            # Check for reverse direction
+            if best_dst in by_src:
+                rev_tally = by_src[best_dst]
+                rev_best, rev_count = rev_tally.most_common(1)[0]
+                rev_total = sum(rev_tally.values())
+                if (rev_best == src and rev_count / rev_total >= 0.70
+                        and rev_count >= 2):
+                    pair = (min(src, best_dst), max(src, best_dst))
+                    if pair not in swap_pairs_seen:
+                        swap_pairs_seen.add(pair)
+                        a, b = pair
+                        name = f"task_swap_{a}_and_{b}"
+                        if name not in prim_names:
+                            self._task_prims.append(Primitive(
+                                name=name, arity=1,
+                                fn=_make_swap_colors(a, b), domain="arc"))
+                            prim_names.add(name)
 
         # Register task prims in _PRIM_MAP for execution
         for p in self._task_prims:

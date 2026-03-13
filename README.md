@@ -194,12 +194,12 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 | Domain | Tasks | Solved | Rate | Notes |
 |--------|-------|--------|------|-------|
-| ARC-AGI-2 Train | 100/1000 | 10 | 10% | Harder than AGI-1 |
+| ARC-AGI-2 Train | 400 | 56 | 14% | Harder than AGI-1 |
 | ARC-AGI-2 Eval | 120 | 0 | 0% | Cold start, no culture transfer |
 | Zork | 20 | 10 | 50% | Compounding works: library entries reused 5-11x |
 | List Ops | 28 | ~20 | ~71% | Compounding demonstrated here |
 
-**342 hand-crafted ARC primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
+**349 hand-crafted ARC primitives** including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
 
@@ -310,7 +310,7 @@ agi-core/
 │   └── list_compounding.py  # List ops compounding demonstration
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
-│   ├── arc/                 # ARC-AGI grid transformations (342 primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (349 primitives)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
@@ -366,7 +366,7 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** ✅ ARC-AGI-1 training (342 primitives, exhaustive enumeration, wake-sleep) — 85/400 (21%)
+- **Phase 1** ✅ ARC-AGI-1 training (349 primitives, exhaustive enumeration, wake-sleep) — 85/400 (21%)
 - **Phase 2** ✅ ARC-AGI-1 eval with culture transfer — ~20/400 (5%)
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated on list_ops and Zork
 - **Phase 4** ✅ Compounding infrastructure: `--compounding` flag, distance-based drive signals, library primitive execution. Zork: 7/20→10/20 with library reuse 5-11x. ARC: library entries produced but limited impact.
