@@ -176,8 +176,8 @@ class TestNewPrimitives(unittest.TestCase):
                 self.assertIsInstance(result[0], list, f"{prim.name} not list of lists")
 
     def test_primitive_count_increased(self):
-        """Should have 222+ primitives after agi-mvp-general port."""
-        self.assertGreaterEqual(len(ARC_PRIMITIVES), 200)
+        """Should have 199 base primitives after pruning unused ones."""
+        self.assertGreaterEqual(len(ARC_PRIMITIVES), 190)
 
 
 # =============================================================================
