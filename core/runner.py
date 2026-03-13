@@ -284,9 +284,10 @@ class ProgressTracker:
 
     SCOREBOARD_INTERVAL = 10
 
-    def __init__(self, jsonl_path: str, t0: float):
+    def __init__(self, jsonl_path: str, t0: float, split_label: str = ""):
         self._file = open(jsonl_path, "w")
         self._t0 = t0
+        self._split_label = split_label  # e.g. "TRAIN" or "EVAL"
 
         # Cumulative (across all rounds)
         self.done = 0
@@ -345,8 +346,9 @@ class ProgressTracker:
             if wr.wall_time > med * 10:
                 slow_tag = "  *** SLOW ***"
 
+        split_tag = f" {self._split_label}" if self._split_label else ""
         print(
-            f"  {icon} R{round_num} [{task_index:>3}/{total_tasks}] "
+            f"  {icon}{split_tag} R{round_num} [{task_index:>3}/{total_tasks}] "
             f"{wr.task_id:<20s} "
             f"E={energy_str}  gens={wr.generations_used:<4d} "
             f"evals={wr.evaluations:<6d} {wr.wall_time:.1f}s"
@@ -691,7 +693,15 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print(f"  Budget:     ~{evals_per_task:,} evals/task, ~{total_budget:,} total")
 
     # --- Run ---
-    tracker = ProgressTracker(jsonl_path, time.time())
+    # Derive split label from title for per-line output clarity
+    _title_upper = cfg.title.upper()
+    if "EVAL" in _title_upper:
+        _split = "EVAL"
+    elif "TRAIN" in _title_upper:
+        _split = "TRAIN"
+    else:
+        _split = ""
+    tracker = ProgressTracker(jsonl_path, time.time(), split_label=_split)
 
     hline("─")
     print(f"  Running {len(tasks)} tasks × {rounds} rounds on {workers} workers")
