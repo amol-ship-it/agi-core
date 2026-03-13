@@ -285,7 +285,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **The training-eval gap is significant.** ARC-AGI-1 training: 85/400 (21%) truly solved (train+test), 16 overfit. Eval: ~2/50 (4%) on quick mode. Analysis shows the gap is driven by **overfitting, not missing primitives**: deeper programs (depth-2+) are 4-5x more likely to overfit than depth-0. The fix is better generalization (Occam's razor, per-example verification), not more primitives.
 
-**Where the ARC solve rate comes from:** The 342 hand-crafted primitives (6,500 lines of domain code) encode substantial human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition), but the primitives are the primary source of ARC performance. This is honest: the architecture is generic, but ARC results depend on domain engineering.
+**Where the ARC solve rate comes from:** The 349 hand-crafted primitives (6,500 lines of domain code) encode substantial human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition), but the primitives are the primary source of ARC performance. This is honest: the architecture is generic, but ARC results depend on domain engineering.
 
 ## Structure
 
@@ -307,7 +307,8 @@ agi-core/
 │   ├── phase1_arc.py        # ARC-AGI-1 training & evaluation pipeline
 │   ├── phase2_arc.py        # ARC-AGI-2 baseline experiment
 │   ├── zork_baseline.py     # Zork text adventure baseline
-│   └── list_compounding.py  # List ops compounding demonstration
+│   ├── list_compounding.py  # List ops compounding demonstration
+│   └── analyze_residuals.py # Near-miss residual analysis (research)
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
 │   ├── arc/                 # ARC-AGI grid transformations (349 primitives)
@@ -324,9 +325,10 @@ agi-core/
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (482 tests, 13 files)
+├── tests/                   # Test suite (513 tests, 14 files)
 │   ├── test_arc.py
 │   ├── test_color_fix.py
+│   ├── test_compounding.py
 │   ├── test_conditional_search.py
 │   ├── test_exhaustive_enum.py
 │   ├── test_interfaces.py
@@ -354,6 +356,8 @@ agi-core/
 python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
+
+**Current coverage (513 tests):** 72% overall. Core modules: learner 66%, runner 27% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 73%, ARC objects 57%, ARC environment 89%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
