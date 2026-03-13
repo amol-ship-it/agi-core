@@ -248,6 +248,18 @@
 
 [Context resumed after session compaction. Continued residual analysis, found near-misses are mostly structural/spatial, not color-fixable. Shifted to anti-overfit improvements and conditional search extension.]
 
+## Session 10 — Claude Code CLI (March 13, 2026)
+
+### Prompt 39: Continue from Context Compaction
+
+[Context restored from session 9. Continued with pending documentation updates and ROI analysis.]
+
+### Prompt 40: Decomposition/Composition Principle + Cross-Domain Validation
+
+> I had told Claude during agi-mvp-general brainstorming that the ARC AGI dataset was built by humans such that other humans should be able to solve it relatively easily. Which means that the transformations are not that complex or deep, but they are more intuitive from a human point of view. Even for general learning, my observation is that whatever humans have figured out in the world can be expressed relatively simply, for example, the laws of nature, once figured out, are pretty simple and intuitive. Which just means that when we have the right primitives, or higher level abstractions constructed from composing these primitives, the problem becomes quite simple. Also, keep in mind that decomposition of a complex problem into simpler problems is just the flip side of the composition pillar. As humans, we try to decompose difficult problems into less difficult problems, and keep doing that recursively. Now, I want you to be a skeptic and challenge and experiment and validate these ideas and see if you can utilize these principles to actually improve performance not only on ARC-AGI-1, but also ARC-AGI-2 and Zork as well. i.e. I think this is a much more general and powerful principle, but we need to validate it and use it effectively.
+
+[User proposes that decomposition (breaking complex problems into simpler ones) is the flip side of composition, and that with the right primitives, solutions should be simple. Wants skeptical validation and cross-domain application (ARC-AGI-1, ARC-AGI-2, Zork). Claude validated with data: 95% of ARC solutions are depth 0-1, confirming that right vocabulary → shallow composition. The bottleneck is discovering the right vocabulary, not deeper search.]
+
 ---
 
 *This document will be updated with each new session.*

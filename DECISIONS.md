@@ -1497,5 +1497,86 @@ This was latent since the numba JIT commit (b970016) but only triggered with cer
 
 **Key insight:** 78/80 ARC solves are depth-1. Compounding can't help when solutions are shallow. The path to higher accuracy is more/better primitives covering new task categories, not deeper composition.
 
+## Session 10 — Claude Code CLI (March 13, 2026)
+
+### Decision 74: prediction_error Optimization (2.1x speedup)
+
+**Date:** 2026-03-12
+**Context:** Profiling identified `prediction_error` as the #1 bottleneck (14% of runtime, 2.16M calls). The color palette extraction used 18 `np.any(pred == c)` scans (O(9n) per array).
+
+**Change:** Replaced with `set(arr.flat) - {0}` — single pass per array, O(n).
+
+**Result:** 2.1x end-to-end speedup (7.0s → 3.3s on quick mode). Zero behavioral change (same solves).
+
+---
+
+### Decision 75: Top-k Candidate Selection (k=3)
+
+**Date:** 2026-03-12
+**Context:** ARC-AGI allows 3 attempts per task. System was only trying the single best training-perfect candidate on test.
+
+**Change:** Collect all training-perfect candidates, deduplicate by program repr, sort by size (Occam's razor), try up to 3 on test.
+
+**Finding:** All 12 overfit tasks had exactly 1 training-perfect candidate. Top-k infrastructure is ready but can't help until we generate more diverse candidates per task.
+
+---
+
+### Decision 76: LOOCV for per_object_recolor
+
+**Date:** 2026-03-12
+**Context:** per_object_recolor learns recolor rules from training examples. Some rules overfit to training-specific properties (e.g., "recolor by size" when sizes happen to match but the real rule is different).
+
+**Change:** Leave-one-out cross-validation: for each training example, learn from N-1 others, verify on held-out. Reject rules that fail LOOCV.
+
+**Result:** -4 overfit (3 direct + 1 indirect), +1 test-solve recovered (1a2e2828).
+
+---
+
+### Decision 77: Dead Code Removal
+
+**Date:** 2026-03-12
+**Context:** Audit found: (1) `Grammar.prepare_for_task` measured 0 additional solves (Decision 72), (2) `experiments/analyze_residuals.py` used stale ARC-AGI-1 task IDs.
+
+**Changes:** Gutted prepare_for_task to no-op, deleted analyze_residuals.py. Replaced 6 task-specific primitive tests with 1 no-op test.
+
+---
+
+### Decision 78: Strategic ROI Analysis — It's a Vocabulary Problem
+
+**Date:** 2026-03-13
+**Context:** Full 800-task validation (400 train + 400 eval) with all improvements.
+
+**Results:**
+| Metric | Value |
+|---|---|
+| Train solved | 91/400 (22.75%) |
+| Eval solved | 23/400 (5.75%) |
+| Total solved | 114/800 (14.2%) |
+| Overfit | 20 |
+| Train_solved total | 134 |
+
+**Key findings:**
+
+1. **95% of solutions are depth 0-1.** It's a vocabulary problem, not a search problem.
+   - Depth 0 (single prim): 57 (50%)
+   - Depth 1 (two composed): 51 (45%)
+   - Depth 2-3: 6 (5%)
+
+2. **Only 30% of 349 primitives (106) contribute to any solution.** Vocabulary bloat in some areas, critical gaps in others.
+
+3. **295 tasks within 10% error of being solved.** The near-miss goldmine:
+   - <5% error: +139 potential solves → 31.6% total
+   - <10% error: +295 potential solves → 51.1% total
+   - <15% error: +402 potential solves → 64.5% total
+
+4. **Same-shape few-changes tasks are paradoxically weakest** (18% solve rate, 69 unsolved). Tasks where output ≈ input but a few pixels change.
+
+5. **96% of compute is spent on unsolved tasks** — avg 13,118 evals/unsolved vs 2,868 evals/solved.
+
+**Strategic recommendation (ranked by ROI):**
+- Tier 1: Pixel-level correction on near-misses + systematic primitive gap analysis
+- Tier 2: Output-shape prediction for shrink tasks + more binary operators
+- Tier 3: Object movement primitives + context-dependent per-object transforms
+
 ---
 *This document will be updated with each new session and major decision.*
