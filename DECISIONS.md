@@ -1847,4 +1847,28 @@ Fixed a bug where `run_curriculum` dropped `sequential_compounding` and `adaptiv
 **Files:** `experiments/diagnostic_near_miss.py`, `runs/diagnostic_near_miss.csv`, `runs/diagnostic_near_miss_summary.json`
 
 ---
+
+### Decision 91: Remove Artificial 5x5 Rule Cap — +33 Contest Solves
+
+**Date:** 2026-03-13
+**Context:** Diagnostic analysis (Decision 90) revealed 11 tasks with valid 5x5 neighborhood rules (31–100 rules, no conflicts, no false positives) being rejected because the 5x5 cap was hardcoded to 30 while 3x3 got max_rules (100 for identity correction).
+
+**Root cause:** Line 131 of `domains/arc/environment.py` had `min(max_rules, 30)` for 5x5 — an arbitrary restriction from when 5x5 was first added (cautious default). No reason for 5x5 to be more restricted than 3x3.
+
+**Change:** Remove the `min(..., 30)` cap — 5x5 now uses the same `max_rules` as 3x3.
+
+**Results:**
+- Quick: 28→32/50 (+4)
+- Default train: 168→193/400 (+25)
+- Contest pipeline: 292→325/800 (+33) — 36.5%→40.6%
+- All 551 tests pass
+- No regression on existing solves
+
+**Why this worked beyond the 11 predicted tasks:** The diagnostic analyzed identity-seeded correction only (max_rules=100). But the cap also affected Phase 1.75 color fix correction (max_rules=50). Many composed near-miss programs that needed 5x5 correction with 31–50 rules were also unlocked.
+
+**Lesson:** Always check whether artificial safety caps from early development are still justified. A one-line change yielded +33 solves — the third-largest single improvement in the project's history.
+
+**Files:** `domains/arc/environment.py:131`
+
+---
 *This document will be updated with each new session and major decision.*
