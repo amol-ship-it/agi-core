@@ -3,7 +3,7 @@ Tests for the ARC-AGI domain plugin.
 
 Verifies that:
 1. All primitives produce valid grids
-2. Utility functions work correctly (grid_shape, valid_grid, etc.)
+2. Utility functions work correctly
 3. The environment can execute programs (unary, binary, error paths)
 4. The grammar can mutate and crossover programs
 5. The drive signal scores correctly (match, mismatch, shape mismatch, None)
@@ -23,20 +23,18 @@ from domains.arc.dataset import make_sample_tasks, load_arc_task, load_arc_datas
 from domains.arc.primitives import (
     rotate_90_cw, mirror_horizontal, mirror_vertical, transpose,
     crop_to_nonzero, gravity_down, fill_enclosed, identity,
-    grid_shape, valid_grid, empty_grid, invert_colors,
-    replace_bg_with_most_common, keep_color, remove_color,
-    most_common_color, fill_color, crop_to_color,
+    invert_colors,
+    replace_bg_with_most_common,
+    most_common_color,
     xor_halves_v, or_halves_v, xor_halves_h, or_halves_h,
-    count_colors, find_bounding_box, overlay,
+    overlay,
     _find_connected_components,
     keep_largest_object_only, keep_smallest_object_only,
     remove_largest_object, remove_smallest_object,
-    count_objects_as_grid, recolor_each_object,
+    count_objects_as_grid,
     mirror_objects_h, mirror_objects_v,
-    flood_fill_bg, sort_objects_by_size,
     extract_top_left_cell, extract_bottom_right_cell,
     remove_grid_lines, detect_grid_lines,
-    shift_rows_right, shift_rows_left,
     extend_lines, extend_diagonal_lines,
     binarize, color_to_most_common, upscale_pattern,
     denoise_majority, fill_rectangles,
@@ -45,12 +43,12 @@ from domains.arc.primitives import (
     shift_down_1, shift_up_1, shift_left_1, shift_right_1,
     complete_symmetry_h, complete_symmetry_v,
     overlay_split_halves_h, overlay_split_halves_v,
-    erode, spread_colors,
+    spread_colors,
     rotate_colors_up, rotate_colors_down,
     select_odd_one_out, overlay_grid_cells, majority_vote_cells,
     surround_pixels_3x3, draw_cross_from_pixels, draw_cross_to_contact,
     connect_same_color_h, connect_same_color_v,
-    scale_4x, scale_5x, downscale_4x, downscale_5x,
+    downscale_4x, downscale_5x,
     _detect_any_separator_lines, _split_grid_cells,
     fill_tile_pattern,
 )
@@ -117,36 +115,6 @@ class TestARCPrimitives(unittest.TestCase):
 class TestARCUtilityFunctions(unittest.TestCase):
     """Test ARC utility functions that weren't covered by primitive tests."""
 
-    def test_grid_shape(self):
-        self.assertEqual(grid_shape([[1, 2], [3, 4]]), (2, 2))
-
-    def test_grid_shape_empty(self):
-        self.assertEqual(grid_shape([]), (0, 0))
-
-    def test_grid_shape_empty_row(self):
-        self.assertEqual(grid_shape([[]]), (1, 0))
-
-    def test_valid_grid_true(self):
-        self.assertTrue(valid_grid([[1, 2], [3, 4]]))
-
-    def test_valid_grid_empty(self):
-        self.assertFalse(valid_grid([]))
-        self.assertFalse(valid_grid([[]]))
-
-    def test_valid_grid_ragged(self):
-        self.assertFalse(valid_grid([[1, 2], [3]]))
-
-    def test_valid_grid_out_of_range(self):
-        self.assertFalse(valid_grid([[10]]))
-        self.assertFalse(valid_grid([[-1]]))
-
-    def test_empty_grid(self):
-        result = empty_grid(2, 3, fill=5)
-        self.assertEqual(result, [[5, 5, 5], [5, 5, 5]])
-
-    def test_empty_grid_default_fill(self):
-        result = empty_grid(1, 2)
-        self.assertEqual(result, [[0, 0]])
 
     def test_invert_colors(self):
         result = invert_colors([[0, 1, 9]])
@@ -163,13 +131,6 @@ class TestARCUtilityFunctions(unittest.TestCase):
         result = replace_bg_with_most_common(grid)
         self.assertEqual(result, [[0, 0], [0, 0]])
 
-    def test_keep_color(self):
-        result = keep_color([[1, 2, 3], [1, 1, 2]], 1)
-        self.assertEqual(result, [[1, 0, 0], [1, 1, 0]])
-
-    def test_remove_color(self):
-        result = remove_color([[1, 2, 3], [1, 1, 2]], 1)
-        self.assertEqual(result, [[0, 2, 3], [0, 0, 2]])
 
     def test_most_common_color(self):
         self.assertEqual(most_common_color([[1, 2, 1], [0, 1, 0]]), 1)
@@ -177,33 +138,11 @@ class TestARCUtilityFunctions(unittest.TestCase):
     def test_most_common_color_all_zeros(self):
         self.assertEqual(most_common_color([[0, 0], [0, 0]]), 0)
 
-    def test_fill_color(self):
-        result = fill_color([[1, 2], [3, 4]], 5)
-        self.assertEqual(result, [[5, 5], [5, 5]])
 
     def test_crop_to_nonzero_all_zero(self):
         result = crop_to_nonzero([[0, 0], [0, 0]])
         self.assertEqual(result, [[0]])
 
-    def test_crop_to_color(self):
-        grid = [[0, 1, 0], [0, 1, 0], [0, 0, 0]]
-        result = crop_to_color(grid, 1)
-        self.assertEqual(result, [[1], [1]])
-
-    def test_crop_to_color_not_found(self):
-        result = crop_to_color([[0, 0], [0, 0]], 5)
-        self.assertEqual(result, [[0]])
-
-    def test_count_colors(self):
-        self.assertEqual(count_colors([[1, 2, 0], [3, 1, 0]]), 3)
-        self.assertEqual(count_colors([[0, 0], [0, 0]]), 0)
-
-    def test_find_bounding_box(self):
-        grid = [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
-        self.assertEqual(find_bounding_box(grid), (1, 1, 1, 1))
-
-    def test_find_bounding_box_empty(self):
-        self.assertEqual(find_bounding_box([[0, 0], [0, 0]]), (0, 0, 0, 0))
 
     def test_overlay(self):
         base = [[1, 1], [1, 1]]
@@ -632,11 +571,6 @@ class TestConnectedComponents(unittest.TestCase):
         result = count_objects_as_grid(self.grid)
         self.assertEqual(result, [[3]])
 
-    def test_recolor_each_object(self):
-        result = recolor_each_object(self.grid)
-        # Should have 3 distinct colors for 3 objects
-        colors = set(c for row in result for c in row if c != 0)
-        self.assertEqual(len(colors), 3)
 
     def test_mirror_objects_h(self):
         grid = [[1, 1, 0], [1, 0, 0], [0, 0, 0]]
@@ -654,24 +588,6 @@ class TestConnectedComponents(unittest.TestCase):
         self.assertEqual(result[0][0], 1)
         self.assertEqual(result[1][0], 1)
         self.assertEqual(result[1][1], 1)
-
-    def test_flood_fill_bg(self):
-        grid = [[1, 1, 1], [1, 0, 1], [1, 1, 1]]
-        result = flood_fill_bg(grid)
-        # Enclosed 0 should be filled with 1
-        self.assertEqual(result[1][1], 1)
-
-    def test_flood_fill_bg_not_enclosed(self):
-        grid = [[1, 0, 1], [1, 0, 1], [1, 1, 1]]
-        result = flood_fill_bg(grid)
-        # Top 0s are connected to border, should stay 0
-        self.assertEqual(result[0][1], 0)
-
-    def test_sort_objects_by_size(self):
-        result = sort_objects_by_size(self.grid)
-        # Should produce a grid with objects arranged left to right by size
-        self.assertIsInstance(result, list)
-        self.assertTrue(len(result) > 0)
 
 
 class TestGridPartitioning(unittest.TestCase):
@@ -717,19 +633,6 @@ class TestGridPartitioning(unittest.TestCase):
 class TestDiagonalAndLineOps(unittest.TestCase):
     """Test diagonal shift and line extension primitives."""
 
-    def test_shift_rows_right(self):
-        grid = [[1, 2], [3, 4]]
-        result = shift_rows_right(grid)
-        # Row 0: [1, 2, 0], Row 1: [0, 3, 4]
-        self.assertEqual(result[0], [1, 2, 0])
-        self.assertEqual(result[1], [0, 3, 4])
-
-    def test_shift_rows_left(self):
-        grid = [[1, 2], [3, 4]]
-        result = shift_rows_left(grid)
-        # Row 0: [0, 1, 2], Row 1: [3, 4, 0]
-        self.assertEqual(result[0], [0, 1, 2])
-        self.assertEqual(result[1], [3, 4, 0])
 
     def test_extend_lines(self):
         grid = [[0, 0, 0, 0, 0],
@@ -792,12 +695,10 @@ class TestColorAndPatternOps(unittest.TestCase):
         new_fns = [
             keep_largest_object_only, keep_smallest_object_only,
             remove_largest_object, remove_smallest_object,
-            count_objects_as_grid, recolor_each_object,
-            mirror_objects_h, mirror_objects_v, flood_fill_bg,
-            sort_objects_by_size,
+            count_objects_as_grid,
+            mirror_objects_h, mirror_objects_v,
             extract_top_left_cell, extract_bottom_right_cell,
             remove_grid_lines,
-            shift_rows_right, shift_rows_left,
             extend_lines, extend_diagonal_lines,
             binarize, color_to_most_common, upscale_pattern,
             denoise_majority, fill_rectangles,
@@ -988,26 +889,6 @@ class TestSplitBySeparator(unittest.TestCase):
 class TestMorphologicalOps(unittest.TestCase):
     """Test morphological operations."""
 
-    def test_erode_single_pixel(self):
-        """Single pixel should be removed by erosion."""
-        grid = [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
-        result = erode(grid)
-        self.assertEqual(result, [[0, 0, 0], [0, 0, 0], [0, 0, 0]])
-
-    def test_erode_preserves_interior(self):
-        """Interior of a 5x5 block: edge pixels adjacent to bg are removed."""
-        grid = [
-            [0, 0, 0, 0, 0],
-            [0, 1, 1, 1, 0],
-            [0, 1, 1, 1, 0],
-            [0, 1, 1, 1, 0],
-            [0, 0, 0, 0, 0],
-        ]
-        result = erode(grid)
-        # Center pixel survives
-        self.assertEqual(result[2][2], 1)
-        # Edge of the block is removed (neighbor is bg=0)
-        self.assertEqual(result[1][2], 0)
 
     def test_spread_colors(self):
         """Single pixel should spread to 4-connected neighbors."""
@@ -1073,16 +954,6 @@ class TestContextColorPrimitives(unittest.TestCase):
         result = recolor_by_neighbor_vote(grid)
         self.assertEqual(result, grid)  # no change needed
 
-    def test_swap_two_most_common(self):
-        from domains.arc.primitives import swap_two_most_common
-        # Color 1 appears 4 times, color 2 appears 3 times
-        grid = [[1, 1, 2],
-                [1, 2, 2],
-                [1, 0, 0]]
-        result = swap_two_most_common(grid)
-        self.assertEqual(result[0][0], 2)  # 1→2
-        self.assertEqual(result[0][2], 1)  # 2→1
-        self.assertEqual(result[2][1], 0)  # 0 preserved
 
     def test_fill_by_surround(self):
         from domains.arc.primitives import fill_by_surround_color
@@ -1093,15 +964,6 @@ class TestContextColorPrimitives(unittest.TestCase):
         result = fill_by_surround_color(grid)
         self.assertEqual(result[1][1], 3)
 
-    def test_cleanup_isolated(self):
-        from domains.arc.primitives import cleanup_isolated_cells
-        # Isolated cell (5) with no same-colored neighbors
-        grid = [[1, 1, 0],
-                [1, 5, 0],
-                [0, 0, 0]]
-        result = cleanup_isolated_cells(grid)
-        self.assertEqual(result[1][1], 0)  # isolated cell removed
-        self.assertEqual(result[0][0], 1)  # connected cells preserved
 
     def test_recolor_minority_to_majority(self):
         from domains.arc.primitives import recolor_minority_to_majority
@@ -1267,13 +1129,6 @@ class TestBatch4Primitives(unittest.TestCase):
         ]
         self.assertEqual(result, expected)
 
-    def test_scale_4x(self):
-        grid = [[1, 2], [3, 4]]
-        result = scale_4x(grid)
-        self.assertEqual(len(result), 8)
-        self.assertEqual(len(result[0]), 8)
-        self.assertEqual(result[0][0], 1)
-        self.assertEqual(result[0][4], 2)
 
     def test_downscale_4x(self):
         # 4x4 grid where each 4x4 block has a dominant color

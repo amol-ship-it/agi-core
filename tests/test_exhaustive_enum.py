@@ -24,7 +24,7 @@ from domains.arc.primitives import (
     anti_diagonal_mirror, make_symmetric_h, make_symmetric_v,
     repeat_pattern_right, repeat_pattern_down,
     add_border, remove_border,
-    sort_rows_by_color_count, sort_cols_by_color_count,
+    sort_rows_by_color_count,
     unique_rows, unique_cols, recolor_by_size_rank,
     extend_lines_h, extend_lines_v,
     rotate_90_cw, mirror_horizontal,
@@ -116,10 +116,6 @@ class TestNewPrimitives(unittest.TestCase):
         counts = [sum(1 for c in row if c != 0) for row in result]
         self.assertEqual(counts, sorted(counts))
 
-    def test_sort_cols_by_color_count(self):
-        grid = [[1, 0], [1, 0], [0, 1]]
-        result = sort_cols_by_color_count(grid)
-        self.assertIsInstance(result, list)
 
     def test_unique_rows(self):
         grid = [[1, 2], [3, 4], [1, 2]]
