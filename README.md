@@ -198,9 +198,9 @@ Three modes. Pick one. That's the only knob most users need.
 
 | Mode | Tasks | Beam | Compute Cap | Vocabulary | Use case |
 |------|-------|------|-------------|------------|----------|
-| `quick` | 50 | off | 500K | full/minimal | Fast dev loop (~5s) |
-| `default` | all (400) | off | 3M | full/minimal | Full benchmark (~4 min) |
-| `contest` | all (400) | 30×15 | 100M | full/minimal | Maximum accuracy |
+| `quick` | 50 | off | 500K | full/minimal/atomic | Fast dev loop (~4s) |
+| `default` | all (400) | off | 3M | full/minimal/atomic | Full benchmark (~1.5 min) |
+| `contest` | all (400) | 30×15 | 100M | full/minimal/atomic | Maximum accuracy |
 
 Three vocabulary modes (`--vocabulary`):
 - `full`: 180 hand-crafted primitives (max single-round coverage)
@@ -217,14 +217,23 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 ### Expected performance
 
-**ARC-AGI-1** — eval accuracy (test-verified solves on held-out evaluation set):
+**ARC-AGI-1** — eval accuracy (test-verified solves on held-out evaluation set, measured 2026-03-14):
 
-| Vocabulary | All 400 (quick cap) | All 400 (default cap) |
-|-----------|--------------------|-----------------------|
-| `full` (180 prims) | 25/400 (6.2%) | **35/400 (8.8%)** |
-| `minimal` (60 prims) | 26/400 (6.5%) | **35/400 (8.8%)** |
+| Vocabulary | Training (400 tasks) | Eval (400 tasks) | Time |
+|-----------|---------------------|-----------------|------|
+| `full` (180 prims) | 112/400 (28.0%) | **35/400 (8.8%)** | ~1.5 min |
+| `minimal` (60 prims) | 95/400 (23.8%) | **35/400 (8.8%)** | ~1.5 min |
+| `atomic` (27 ops) | — | — | ~1.5 min |
 
-Note: training accuracy is higher (full: 112/400 = 28.0%, minimal: 95/400 = 23.8%) with overfit rate ~24%. Cross-reference composition rule added +5 eval solves with zero overfit. Both vocabularies converge at ~35/400 eval (8.8%) at default compute cap.
+Quick mode (50 training tasks, 500K compute cap, ~4s):
+
+| Vocabulary | Training solves |
+|-----------|----------------|
+| `full` | 21/50 (42%) |
+| `minimal` | 16/50 (32%) |
+| `atomic` | 4/50 (8%) |
+
+Atomic vocabulary solves fewer tasks per round (fewer primitives) but forces deeper compositions (depth-2+), which is the input for compounding via library learning.
 
 **Other domains:**
 
@@ -234,9 +243,10 @@ Note: training accuracy is higher (full: 112/400 = 28.0%, minimal: 95/400 = 23.8
 | Zork | 20 | 10 | 50% | 5 library entries, reuse 2-6x (5 rounds) |
 | List Ops | 28 | 20 | 71.4% | 8 library entries, reuse 2-6x (3 rounds) |
 
-**Two vocabulary modes:** `full` (180 hand-crafted primitives) or `minimal` (60 fundamental action+perception primitives designed for composition and compounding). Both include task-specific color primitives (~30-40 per task). The minimal set beats full at the same compute budget by covering more of the program space.
+**Three vocabulary modes:** `full` (180 hand-crafted primitives), `minimal` (60 fundamental action+perception primitives), or `atomic` (~27 atomic ops + combinators). All include task-specific color primitives (~30-40 per task).
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
+**Near-miss sleep** extracts subtrees from programs that almost solved tasks (error < 15%), providing richer composition data for library learning.
 **Simple correction** learns color remappings and small (3x3) neighborhood patches on near-miss programs.
 
 ## Options
@@ -257,8 +267,9 @@ Note: training accuracy is higher (full: 112/400 = 28.0%, minimal: 95/400 = 23.8
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
 | `--compute-cap` | from preset | Per-task eval budget (cell-normalized). `0` = unlimited |
 | `--exhaustive-depth` | `3` | Exhaustive enumeration depth (`0`=off, `2`=pairs, `3`=triples) |
-| `--exhaustive-pair-top-k` | `50` | Top-K singles for pair enumeration pool |
+| `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
 | `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |
+| `--vocabulary` | `full` | Primitive vocabulary: `full`, `minimal`, or `atomic` |
 | `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
 | `--no-log` | off | Disable log file (console only) |

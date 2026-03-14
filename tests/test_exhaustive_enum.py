@@ -480,7 +480,7 @@ class TestNewConfigFields(unittest.TestCase):
     def test_search_config_exhaustive_defaults(self):
         cfg = SearchConfig()
         self.assertEqual(cfg.exhaustive_depth, 3)
-        self.assertEqual(cfg.exhaustive_pair_top_k, 50)
+        self.assertEqual(cfg.exhaustive_pair_top_k, 40)
         self.assertEqual(cfg.exhaustive_triple_top_k, 15)
 
     def test_search_config_eval_budget_default(self):

@@ -2310,10 +2310,10 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 
 **Exp 3 — Atomic + compounding** (no code changes, experiment with existing `--vocabulary atomic --rounds 3`).
 
-**Exp 4 — Kill dead phases, reallocate compute**:
+**Exp 4 — Kill dead phases**:
 - Removed `_phase_fixed_point` from `_wake_phases()` pipeline (0 solves ever).
 - Method still exists for re-enablement.
-- Widened `exhaustive_pair_top_k` from 40→50 to use freed compute.
+- Tested widening `exhaustive_pair_top_k` from 40→50: **reverted** — measured eval regression from 35/400 (8.8%) to 33/400 (8.2%). Wider pool dilutes search, doesn't help.
 
 **Verification:** 631 tests pass. Quick 20-task run: 7/20 solved (matching baseline), 7 near-misses captured in culture file.
 
