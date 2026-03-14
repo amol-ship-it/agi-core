@@ -6308,18 +6308,30 @@ def compact_shape(grid: Grid) -> Grid:
 # =============================================================================
 
 def _build_minimal_primitives() -> list[Primitive]:
-    """Build a minimal set of truly fundamental grid primitives (~25).
+    """Build a minimal set of fundamental primitives: action + perception.
 
-    These are atomic operations that cannot be meaningfully decomposed
-    into simpler grid transforms. Everything else should be DISCOVERED
-    by the wake-sleep loop through depth-2/3 composition.
+    Two categories, reflecting the decomposition/composition duality:
 
-    Design principle: with fewer primitives, solutions require composition,
-    which creates depth-2+ programs that the sleep phase can extract and
-    promote to the library — enabling genuine compounding.
+    ACTION primitives (~27): transform a grid (composition half)
+      - Geometric, spatial, object, color, fill operations
+
+    PERCEPTION primitives (~16): understand/analyze a grid (decomposition half)
+      - Pattern detection, grid structure parsing, symmetry completion,
+        line extension, stacking/repetition, deduplication
+
+    With both halves, depth-2 compositions become meaningful:
+      perception(action(x)) — e.g. crop_to_nonzero(extract_repeating_tile(x))
+      action(perception(x)) — e.g. fill_tile_pattern(remove_grid_lines(x))
+
+    Total: ~43 base primitives + ~30 task-specific color primitives = ~73 per task.
+    Depth-2 exhaustive: 73 × 40 = 2,920 pairs (very tractable).
     """
     unary_ops = [
-        # --- Geometric (7): truly atomic, cannot be decomposed ---
+        # =================================================================
+        # ACTION PRIMITIVES — transform the grid
+        # =================================================================
+
+        # --- Geometric (7): truly atomic ---
         ("identity",                    identity),
         ("rotate_90_clockwise",         rotate_90_cw),
         ("rotate_90_counterclockwise",  rotate_90_ccw),
@@ -6327,7 +6339,7 @@ def _build_minimal_primitives() -> list[Primitive]:
         ("mirror_horizontal",           mirror_horizontal),
         ("mirror_vertical",             mirror_vertical),
         ("transpose",                   transpose),
-        # --- Spatial (6): fundamental cropping/scaling ---
+        # --- Spatial (6): cropping/scaling ---
         ("crop_to_nonzero",             crop_to_nonzero),
         ("top_half",                    get_top_half),
         ("left_half",                   get_left_half),
@@ -6349,8 +6361,35 @@ def _build_minimal_primitives() -> list[Primitive]:
         ("gravity_down",                gravity_down),
         ("gravity_up",                  gravity_up),
         ("outline",                     outline),
-        # --- Denoising (1): basic signal processing ---
+        # --- Signal processing (1) ---
         ("denoise_3x3",                 denoise_3x3),
+
+        # =================================================================
+        # PERCEPTION PRIMITIVES — understand/analyze the grid
+        # =================================================================
+
+        # --- Pattern detection (3): find and use repeating structure ---
+        ("extract_repeating_tile",      extract_repeating_tile),
+        ("fill_tile_pattern",           fill_tile_pattern),
+        ("upscale_pattern",             upscale_pattern),
+        # --- Grid structure (3): parse grids divided by lines ---
+        ("remove_grid_lines",           remove_grid_lines),
+        ("select_odd_one_out",          select_odd_one_out),
+        ("overlay_grid_cells",          overlay_grid_cells),
+        # --- Symmetry completion (3): detect and complete symmetry ---
+        ("complete_symmetry_horizontal", complete_symmetry_h),
+        ("complete_symmetry_vertical",  complete_symmetry_v),
+        ("complete_symmetry_diagonal",  complete_symmetry_diagonal),
+        # --- Spatial analysis (2): detect and extend patterns ---
+        ("extend_lines_to_contact",     extend_lines_to_contact),
+        ("draw_cross_from_pixels",      draw_cross_from_pixels),
+        # --- Stacking/repetition (3): compose with mirror/repeat ---
+        ("stack_with_mirror_vertical",  stack_with_mirror_v),
+        ("stack_with_mirror_horizontal", stack_with_mirror_h),
+        ("repeat_pattern_right",        repeat_pattern_right),
+        # --- Deduplication (2): find unique structure ---
+        ("deduplicate_rows",            deduplicate_rows),
+        ("unique_columns",              unique_cols),
     ]
 
     prims = []
