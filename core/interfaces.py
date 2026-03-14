@@ -229,6 +229,17 @@ class Grammar(ABC):
         """
         return frozenset()
 
+    def task_priority_primitives(self, task: Task) -> list[str]:
+        """Return primitives likely relevant for this specific task.
+
+        Based on structural analysis of the task's inputs, returns primitive
+        names that should be boosted in pool construction. Unlike
+        essential_pair_concepts (static), these are task-adaptive.
+
+        Default: empty (no task-specific priorities).
+        """
+        return []
+
     def prepare_for_task(self, task: Task) -> None:
         """Called before the wake phase begins on a task.
 

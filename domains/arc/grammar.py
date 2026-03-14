@@ -91,6 +91,73 @@ class ARCGrammar(Grammar):
             return frozenset()
         return _ARC_ESSENTIAL_PAIR_CONCEPTS
 
+    def task_priority_primitives(self, task: Task) -> list[str]:
+        """Return primitives likely relevant for this task based on input structure.
+
+        Detects structural properties of the task's training inputs and returns
+        primitive names that are most likely to help. Used to boost pool
+        construction in exhaustive enumeration.
+        """
+        if not task.train_examples:
+            return []
+
+        first_inp = task.train_examples[0][0]
+        if not first_inp or not first_inp[0]:
+            return []
+
+        hints: list[str] = []
+
+        # Detect separators → grid partition primitives
+        try:
+            h_lines, v_lines = _detect_any_separator_lines(first_inp)
+            if h_lines or v_lines:
+                hints.extend([
+                    "select_odd_one_out", "overlay_grid_cells",
+                    "majority_vote_cells", "remove_grid_lines",
+                ])
+        except Exception:
+            pass
+
+        # Detect objects → per-object primitives
+        shapes = find_foreground_shapes(first_inp)
+        if shapes and len(shapes) >= 2:
+            hints.extend([
+                "keep_largest_object_only", "remove_largest_object",
+                "mirror_objects_h", "mirror_objects_v",
+                "hollow_objects", "fill_rectangles",
+                "surround_pixels_3x3", "connect_pixels_to_rectangle",
+            ])
+
+        # Detect symmetry → completion primitives
+        h, w = len(first_inp), len(first_inp[0])
+        for pred_name, pred_fn in ARC_PREDICATES:
+            try:
+                if pred_name == "is_symmetric_h" and not pred_fn(first_inp):
+                    hints.extend(["complete_symmetry_h", "mirror_horizontal_merge"])
+                if pred_name == "is_symmetric_v" and not pred_fn(first_inp):
+                    hints.extend(["complete_symmetry_v", "mirror_vertical_merge"])
+                if pred_name == "is_mostly_empty" and pred_fn(first_inp):
+                    hints.extend([
+                        "extend_lines", "spread_colors",
+                        "draw_cross_from_pixels", "draw_cross_to_contact",
+                        "connect_same_color_horizontal",
+                        "connect_same_color_vertical",
+                    ])
+            except Exception:
+                continue
+
+        # Check output size relative to input
+        first_out = task.train_examples[0][1]
+        if first_out:
+            oh, ow = len(first_out), len(first_out[0]) if first_out[0] else 0
+            if oh < h or ow < w:
+                hints.extend(["crop_to_nonzero", "compress_columns",
+                              "keep_unique_rows"])
+            if oh > h or ow > w:
+                hints.extend(["upscale_pattern", "fill_tile_pattern"])
+
+        return hints
+
     def base_primitives(self) -> list[Primitive]:
         if self._vocabulary == "minimal":
             return list(ARC_MINIMAL_PRIMITIVES) + self._task_prims

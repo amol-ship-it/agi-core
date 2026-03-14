@@ -1903,6 +1903,21 @@ class Learner:
             if len(pair_pool) >= top_scorer_cap:
                 break
 
+        # Phase 1.5: task-priority primitives (predicate-guided)
+        # Inject primitives detected as likely relevant for this task's structure.
+        task_priority = self.grammar.task_priority_primitives(task)
+        remaining_priority = [
+            n for n in task_priority
+            if n not in seen_names and n in prim_by_name
+        ]
+        remaining_priority.sort(
+            key=lambda n: depth1_scores.get(n, 1.0))
+        for name in remaining_priority:
+            if len(pair_pool) >= pair_top_k:
+                break
+            pair_pool.append(name)
+            seen_names.add(name)
+
         # Phase 2: essentials not already included, sorted by depth-1
         # score (most task-relevant first)
         remaining_essentials = [
