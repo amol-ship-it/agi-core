@@ -597,12 +597,11 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
     log_path = os.path.join(runs_dir, f"{prefix}.log")
     jsonl_path = os.path.join(runs_dir, f"{prefix}.jsonl")
     results_path = os.path.join(runs_dir, f"{prefix}.json")
-    library_path = os.path.join(runs_dir, f"{prefix}_library.json")
     metrics_json_path = os.path.join(runs_dir, f"{prefix}_metrics.json")
     metrics_csv_path = os.path.join(runs_dir, f"{prefix}_metrics.csv")
 
     culture_path = (cfg.save_culture if cfg.save_culture
-                     else library_path.replace("_library.json", "_culture.json"))
+                     else os.path.join(runs_dir, f"{prefix}_culture.json"))
 
     tee = None
     if not cfg.no_log and not cfg.suppress_files:
@@ -612,7 +611,7 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
     results_data = {}
     try:
         results_data = _run_experiment(cfg, run_timestamp, log_path, jsonl_path,
-                                       results_path, library_path,
+                                       results_path,
                                        metrics_json_path, metrics_csv_path,
                                        culture_path)
     except KeyboardInterrupt:
@@ -632,8 +631,7 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
 
 
 def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
-                    library_path, metrics_json_path, metrics_csv_path,
-                    culture_path):
+                    metrics_json_path, metrics_csv_path, culture_path):
     """Core run logic, separated so tee cleanup always happens."""
     machine = detect_machine()
     workers = cfg.workers if cfg.workers > 0 else Learner.performance_core_count()
@@ -678,7 +676,6 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     if not cfg.suppress_files:
         print(f"  Results (final):  {results_path}")
         print(f"  Metrics:          {metrics_json_path}")
-        print(f"  Library:          {library_path}")
         if not cfg.no_log:
             print(f"  Console log:      {log_path}")
     print()
@@ -982,9 +979,6 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         save_metrics_json(metrics, metrics_json_path)
         save_metrics_csv(metrics, metrics_csv_path)
 
-        # Save legacy library format
-        memory.save(library_path)
-
     # Always save culture file (needed for pipeline eval transfer)
     memory.save_culture(culture_path)
 
@@ -997,7 +991,6 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         print(f"  Results (final):  {results_path}")
         print(f"  Metrics JSON:     {metrics_json_path}")
         print(f"  Metrics CSV:      {metrics_csv_path}")
-        print(f"  Library:          {library_path}")
     print(f"  Culture:          {culture_path}")
     if not cfg.no_log:
         print(f"  Console log:      {log_path}")
@@ -1011,7 +1004,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
 
 
 # =============================================================================
-# Pipeline utilities (absorbed from experiments/pipeline_common.py)
+# Pipeline utilities
 # =============================================================================
 
 @contextmanager

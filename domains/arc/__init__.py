@@ -20,7 +20,6 @@ from .grammar import ARCGrammar
 from .drive import ARCDrive
 from .dataset import load_arc_task, load_arc_dataset, make_sample_tasks, find_arc_data
 
-# Re-export everything needed by external consumers
 __all__ = [
     "ARCEnv", "ARCGrammar", "ARCDrive",
     "ARC_PRIMITIVES",

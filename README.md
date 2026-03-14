@@ -114,7 +114,7 @@ python -m common --domain list-ops --mode quick
 python -m common --domain arc-agi-2 --mode quick
 ```
 
-The existing experiment scripts (`python -m experiments.phase1_arc` etc.) continue to work for backward compatibility and domain-specific CLI args.
+The experiment scripts (`python -m experiments.phase1_arc` etc.) support domain-specific CLI args (e.g. `--data-dir`, `--train-only`).
 
 The Zork domain is fully self-contained (custom game engine, no external dependencies). ARC-AGI-2 requires the dataset clone above.
 
@@ -333,7 +333,6 @@ agi-core/
 │   ├── results.py           # ParetoEntry, WakeResult, SleepResult, RoundResult
 │   ├── transition_matrix.py # DreamCoder-style generative prior P(child|parent)
 │   ├── learner.py           # Wake-sleep loop + beam search (the algorithm)
-│   ├── runner.py            # Backward-compat shim (re-exports from common.benchmark)
 │   ├── memory.py            # Default in-memory store
 │   └── metrics.py           # Compounding curve measurement
 │
@@ -367,7 +366,7 @@ agi-core/
 │       ├── __init__.py      # Game engine + all 4 interfaces
 │       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (553 tests)
+├── tests/                   # Test suite (549 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -386,7 +385,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (553 tests):** 73% overall. Core modules: learner 68%, all other core modules 95-100%. Benchmark runner in `common/benchmark.py`. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
+**Current coverage (549 tests):** 73% overall. Core modules: learner 68%, all other core modules 95-100%. Benchmark runner in `common/benchmark.py`. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
 
 ## Documentation
 

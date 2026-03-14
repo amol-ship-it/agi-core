@@ -184,32 +184,18 @@ class TestFindArcData:
         find_arc_data("training", "arc-agi-2")
 
 
-class TestBackwardCompat:
-    """Verify backward-compatible import paths."""
-
-    def test_core_import(self):
-        from core import ExperimentConfig, run_experiment, make_parser, PRESETS
-        assert callable(run_experiment)
-        assert isinstance(PRESETS, dict)
-
-    def test_core_runner_import(self):
-        from core.runner import ExperimentConfig, PRESETS, fmt_duration, parse_human_int
-        assert callable(fmt_duration)
-        assert callable(parse_human_int)
+class TestImportPaths:
+    """Verify canonical import paths."""
 
     def test_common_import(self):
         from common import ExperimentConfig, run_experiment, run_pipeline
         assert callable(run_experiment)
         assert callable(run_pipeline)
 
-    def test_pipeline_utilities_import(self):
+    def test_common_benchmark_import(self):
         from common.benchmark import pipeline_tee, save_pipeline_results
         assert callable(pipeline_tee)
         assert callable(save_pipeline_results)
-
-    def test_phase1_find_arc_data(self):
-        from experiments.phase1_arc import find_arc_data
-        assert callable(find_arc_data)
 
     def test_domain_adapter_from_core(self):
         from core import DomainAdapter

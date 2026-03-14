@@ -21,9 +21,6 @@ from common.benchmark import (
 )
 from domains.arc.adapter import ARCAdapter
 
-# Backward-compatible re-export used by downstream scripts
-from domains.arc.dataset import find_arc_data  # noqa: F401
-
 
 _adapter = ARCAdapter(benchmark="arc-agi-1")
 
@@ -89,11 +86,6 @@ def _try_generate_viz(results_json_path: str) -> list[str]:
         return []
 
 
-# Keep _load_tasks as backward-compatible function for downstream consumers
-def _load_tasks(split, data_dir, max_tasks):
-    return _adapter.load_tasks(split, data_dir, max_tasks)
-
-
 def main():
     parser = make_parser(
         description="ARC-AGI-1 Curriculum Training & Evaluation",
@@ -103,10 +95,6 @@ def main():
                         help="Path to ARC-AGI data dir (auto-detected if not set)")
     parser.add_argument("--train-only", action="store_true")
     parser.add_argument("--eval-only", action="store_true")
-    parser.add_argument("--eval", action="store_true", dest="eval_only",
-                        help="Alias for --eval-only")
-    parser.add_argument("--pipeline", action="store_true",
-                        help="(default behavior, kept for backward compat)")
     args = parser.parse_args()
 
     preset = PRESETS[args.mode]

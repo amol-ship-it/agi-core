@@ -177,31 +177,3 @@ class InMemoryStore(Memory):
             f"Culture loaded from {path} "
             f"({len(self._library)} library, {len(self._solutions)} solutions)")
 
-    # Legacy API compatibility
-    def save(self, path: str) -> None:
-        """Save library to JSON (legacy format for backward compat)."""
-        data = {
-            "library": [
-                {
-                    "name": e.name,
-                    "program": repr(e.program),
-                    "usefulness": e.usefulness,
-                    "reuse_count": e.reuse_count,
-                    "source_tasks": e.source_tasks,
-                    "domain": e.domain,
-                }
-                for e in self._library
-            ],
-            "solutions_count": len(self._solutions),
-            "episodes_count": len(self._episodes),
-        }
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.info(f"Memory saved to {path} ({len(self._library)} library entries)")
-
-    def load(self, path: str):
-        """Load from JSON (legacy API). Returns raw data for backward compat."""
-        with open(path) as f:
-            data = json.load(f)
-        logger.info(f"Memory loaded from {path} ({len(data.get('library', []))} library entries)")
-        return data

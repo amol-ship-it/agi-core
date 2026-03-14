@@ -82,10 +82,6 @@ def main():
                         help="Override training data dir (default: ARC-AGI-2 training or ARC-AGI-1 fallback)")
     parser.add_argument("--train-only", action="store_true")
     parser.add_argument("--eval-only", action="store_true")
-    parser.add_argument("--eval", action="store_true", dest="eval_only",
-                        help="Alias for --eval-only")
-    parser.add_argument("--pipeline", action="store_true",
-                        help="(default behavior, kept for backward compat)")
     args = parser.parse_args()
 
     preset = PRESETS[args.mode]

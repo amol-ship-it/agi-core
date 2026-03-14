@@ -419,13 +419,13 @@ class Memory(ABC):
     # --- Persistence ---
 
     @abstractmethod
-    def save(self, path: str) -> None:
-        """Persist memory to disk."""
+    def save_culture(self, path: str) -> None:
+        """Save the learned culture (library + solutions) to disk."""
         ...
 
     @abstractmethod
-    def load(self, path: str) -> None:
-        """Load memory from disk."""
+    def load_culture(self, path: str) -> None:
+        """Load a previously saved culture from disk."""
         ...
 
 

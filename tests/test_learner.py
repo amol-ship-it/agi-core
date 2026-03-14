@@ -984,55 +984,55 @@ class TestNearMissRefine(unittest.TestCase):
 # =============================================================================
 
 class TestRunnerHelpers(unittest.TestCase):
-    """Test runner.py utility functions."""
+    """Test benchmark utility functions."""
 
     def test_fmt_duration_seconds(self):
-        from core.runner import fmt_duration
+        from common.benchmark import fmt_duration
         self.assertEqual(fmt_duration(12.3), "12.3s")
 
     def test_fmt_duration_minutes(self):
-        from core.runner import fmt_duration
+        from common.benchmark import fmt_duration
         self.assertEqual(fmt_duration(272), "4m32s")
 
     def test_fmt_duration_hours(self):
-        from core.runner import fmt_duration
+        from common.benchmark import fmt_duration
         self.assertEqual(fmt_duration(4980), "1h23m")
 
     def test_parse_human_int_plain(self):
-        from core.runner import parse_human_int
+        from common.benchmark import parse_human_int
         self.assertEqual(parse_human_int("1000"), 1000)
 
     def test_parse_human_int_suffixes(self):
-        from core.runner import parse_human_int
+        from common.benchmark import parse_human_int
         self.assertEqual(parse_human_int("50M"), 50_000_000)
         self.assertEqual(parse_human_int("500K"), 500_000)
         self.assertEqual(parse_human_int("2B"), 2_000_000_000)
 
     def test_parse_human_int_commas(self):
-        from core.runner import parse_human_int
+        from common.benchmark import parse_human_int
         self.assertEqual(parse_human_int("8,000,000"), 8_000_000)
 
     def test_parse_human_int_empty_raises(self):
         import argparse
-        from core.runner import parse_human_int
+        from common.benchmark import parse_human_int
         with self.assertRaises(argparse.ArgumentTypeError):
             parse_human_int("")
 
     def test_parse_human_int_invalid_raises(self):
         import argparse
-        from core.runner import parse_human_int
+        from common.benchmark import parse_human_int
         with self.assertRaises(argparse.ArgumentTypeError):
             parse_human_int("abc")
 
     def test_detect_machine(self):
-        from core.runner import detect_machine
+        from common.benchmark import detect_machine
         info = detect_machine()
         self.assertIn("platform", info)
         self.assertIn("cpu_count", info)
         self.assertIn("python", info)
 
     def test_resolve_from_preset(self):
-        from core.runner import resolve_from_preset, PRESETS
+        from common.benchmark import resolve_from_preset, PRESETS
         import argparse
         args = argparse.Namespace(
             rounds=None, beam_width=None, max_generations=None,
@@ -1044,7 +1044,7 @@ class TestRunnerHelpers(unittest.TestCase):
         self.assertEqual(resolved["compute_cap"], 500_000)
 
     def test_resolve_from_preset_overrides(self):
-        from core.runner import resolve_from_preset, PRESETS
+        from common.benchmark import resolve_from_preset, PRESETS
         import argparse
         args = argparse.Namespace(
             rounds=5, beam_width=200, max_generations=None,
@@ -1059,7 +1059,7 @@ class TestRunnerHelpers(unittest.TestCase):
 
     def test_task_ids_filtering(self):
         """Task ID filtering works with exact and prefix match."""
-        from core.runner import ExperimentConfig
+        from common.benchmark import ExperimentConfig
         from core.types import Task
 
         tasks = [
@@ -1104,7 +1104,7 @@ class TestRunnerHelpers(unittest.TestCase):
 
     def test_compute_cap_presets(self):
         """All presets have expected compute_cap values."""
-        from core.runner import PRESETS
+        from common.benchmark import PRESETS
         self.assertEqual(PRESETS["quick"]["compute_cap"], 500_000)
         self.assertEqual(PRESETS["default"]["compute_cap"], 3_000_000)
         self.assertEqual(PRESETS["contest"]["compute_cap"], 100_000_000)

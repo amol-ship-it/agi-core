@@ -5,12 +5,8 @@ Verifies:
 1. Episodic memory: record and replay
 2. Library: add, get, update usefulness
 3. Solutions: store and retrieve
-4. Persistence: save to JSON and load back
 """
 
-import json
-import os
-import tempfile
 import unittest
 
 from core.types import Program, ScoredProgram, LibraryEntry
@@ -119,42 +115,6 @@ class TestInMemoryStoreSolutions(unittest.TestCase):
         sols = store.get_solutions()
         sols.clear()
         self.assertEqual(len(store.get_solutions()), 1)
-
-
-class TestInMemoryStorePersistence(unittest.TestCase):
-
-    def test_save_and_load(self):
-        store = InMemoryStore()
-        store.add_to_library(LibraryEntry(
-            name="lib_0",
-            program=Program(root="f", children=[Program(root="x")]),
-            usefulness=2.5,
-            source_tasks=["t1", "t2"],
-            domain="test",
-        ))
-        store.record_episode("t1", "obs", None, 0.5)
-        sp = ScoredProgram(program=Program(root="x"), energy=0.1, prediction_error=0.1, complexity_cost=0.0)
-        store.store_solution("t1", sp)
-
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-
-        try:
-            store.save(path)
-            # Verify JSON is valid
-            with open(path) as f:
-                data = json.load(f)
-            self.assertEqual(len(data["library"]), 1)
-            self.assertEqual(data["library"][0]["name"], "lib_0")
-            self.assertAlmostEqual(data["library"][0]["usefulness"], 2.5)
-            self.assertEqual(data["solutions_count"], 1)
-            self.assertEqual(data["episodes_count"], 1)
-
-            # Load back
-            data_loaded = store.load(path)
-            self.assertEqual(len(data_loaded["library"]), 1)
-        finally:
-            os.unlink(path)
 
 
 if __name__ == "__main__":
