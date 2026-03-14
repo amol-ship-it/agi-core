@@ -199,12 +199,12 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 **ARC-AGI-1** — eval accuracy (test-verified solves on held-out evaluation set):
 
-| Vocabulary | Quick (50) | All 400 (quick cap) |
-|-----------|-----------|---------------------|
-| `full` (180 prims) | 3/50 (6.0%) | 25/400 (6.2%) |
-| `minimal` (60 prims) | 1/20 (5.0%) | 26/400 (6.5%) |
+| Vocabulary | All 400 (quick cap) | All 400 (default cap) |
+|-----------|--------------------|-----------------------|
+| `full` (180 prims) | 25/400 (6.2%) | **36/400 (9.0%)** |
+| `minimal` (60 prims) | 26/400 (6.5%) | — |
 
-Note: training accuracy is higher (default: 106/400 = 26.5%) with a 29% overfit rate. The aggressive overfit-prone corrections were removed in favor of a clean, honest system — eval is the real metric.
+Note: training accuracy is higher (default: 110/400 = 27.5%) with overfit rate reduced to 24% (was 61% before cleanup). Cross-reference composition rule added +5 eval solves with zero overfit.
 
 **Other domains:**
 
