@@ -6323,8 +6323,15 @@ def _build_minimal_primitives() -> list[Primitive]:
       perception(action(x)) — e.g. crop_to_nonzero(extract_repeating_tile(x))
       action(perception(x)) — e.g. fill_tile_pattern(remove_grid_lines(x))
 
-    Total: ~43 base primitives + ~30 task-specific color primitives = ~73 per task.
-    Depth-2 exhaustive: 73 × 40 = 2,920 pairs (very tractable).
+    Total: ~50 base primitives + ~30 task-specific color primitives = ~80 per task.
+    Depth-2 exhaustive: 80 × 40 = 3,200 pairs (very tractable).
+
+    Derived from decomposition analysis: each primitive represents either
+    an atomic operation or a distinct concept that can't be composed from
+    the others. Three categories:
+      1. Action primitives — transform the grid
+      2. Perception primitives — detect structure in the grid
+      3. Composition enablers — operations that make other compositions possible
     """
     unary_ops = [
         # =================================================================
@@ -6339,18 +6346,20 @@ def _build_minimal_primitives() -> list[Primitive]:
         ("mirror_horizontal",           mirror_horizontal),
         ("mirror_vertical",             mirror_vertical),
         ("transpose",                   transpose),
-        # --- Spatial (6): cropping/scaling ---
+        # --- Spatial (7): cropping/scaling ---
         ("crop_to_nonzero",             crop_to_nonzero),
         ("top_half",                    get_top_half),
         ("left_half",                   get_left_half),
         ("scale_2x",                    scale_2x),
         ("scale_3x",                    scale_3x),
         ("tile_2x2",                    tile_2x2),
-        # --- Object (4): connected component operations ---
+        ("remove_border",              remove_border),
+        # --- Object (5): connected component operations ---
         ("extract_largest_object",      extract_largest_object),
         ("extract_smallest_object",     extract_smallest_object),
         ("remove_largest_object",       remove_largest_object),
         ("keep_largest_object_only",    keep_largest_object_only),
+        ("keep_smallest_object_only",   keep_smallest_object_only),
         # --- Color (4): structural color operations ---
         ("invert_colors",               invert_colors),
         ("swap_most_least",             swap_most_least),
@@ -6361,11 +6370,14 @@ def _build_minimal_primitives() -> list[Primitive]:
         ("gravity_down",                gravity_down),
         ("gravity_up",                  gravity_up),
         ("outline",                     outline),
-        # --- Signal processing (1) ---
+        # --- Signal processing (2) ---
         ("denoise_3x3",                 denoise_3x3),
+        ("remove_color_noise",          remove_color_noise),
+        # --- Shift (1): cyclic row/column shift ---
+        ("shift_down_1",                shift_down_1),
 
         # =================================================================
-        # PERCEPTION PRIMITIVES — understand/analyze the grid
+        # PERCEPTION PRIMITIVES — detect structure in the grid
         # =================================================================
 
         # --- Pattern detection (3): find and use repeating structure ---
@@ -6380,9 +6392,18 @@ def _build_minimal_primitives() -> list[Primitive]:
         ("complete_symmetry_horizontal", complete_symmetry_h),
         ("complete_symmetry_vertical",  complete_symmetry_v),
         ("complete_symmetry_diagonal",  complete_symmetry_diagonal),
-        # --- Spatial analysis (2): detect and extend patterns ---
+        # --- Spatial analysis (4): detect and extend/connect patterns ---
         ("extend_lines_to_contact",     extend_lines_to_contact),
         ("draw_cross_from_pixels",      draw_cross_from_pixels),
+        ("connect_same_color_horizontal", connect_same_color_h),
+        ("connect_same_color_vertical", connect_same_color_v),
+        # --- Row/column cross-reference (1): infer from row+col context ---
+        ("fill_grid_intersections",     fill_grid_intersections),
+
+        # =================================================================
+        # COMPOSITION ENABLERS — make other compositions possible
+        # =================================================================
+
         # --- Stacking/repetition (3): compose with mirror/repeat ---
         ("stack_with_mirror_vertical",  stack_with_mirror_v),
         ("stack_with_mirror_horizontal", stack_with_mirror_h),
@@ -6390,6 +6411,9 @@ def _build_minimal_primitives() -> list[Primitive]:
         # --- Deduplication (2): find unique structure ---
         ("deduplicate_rows",            deduplicate_rows),
         ("unique_columns",              unique_cols),
+        # --- Downscale (2): parameterized majority downscale ---
+        ("downscale_2x",                downscale_2x),
+        ("downscale_3x",                downscale_3x),
     ]
 
     prims = []
