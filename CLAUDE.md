@@ -45,5 +45,6 @@ These instructions apply to every session automatically.
 ## Core Architecture Invariant
 
 - The core loop (`core/`) must NEVER import anything domain-specific.
-- Each domain lives under `domains/<name>/` and provides all 4 interfaces (Environment, Grammar, DriveSignal, Memory).
-- Experiment scripts in `experiments/` are thin wrappers that wire domain plugins into the generic `core/runner.py`.
+- Each domain lives under `domains/<name>/` and provides a `DomainAdapter` plus all 4 interfaces (Environment, Grammar, DriveSignal, Memory).
+- `common/benchmark.py` provides the benchmark runner, pipeline, presets, and progress tracking. The unified CLI is `python -m common --domain <name>`.
+- Experiment scripts in `experiments/` are thin wrappers that wire domain adapters into the generic `common/benchmark.py` runner.

@@ -386,7 +386,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (520 tests):** 73% overall. Core modules: learner 68%, runner 25% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
+**Current coverage (553 tests):** 73% overall. Core modules: learner 68%, all other core modules 95-100%. Benchmark runner in `common/benchmark.py`. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
 
 ## Documentation
 

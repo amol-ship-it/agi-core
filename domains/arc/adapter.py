@@ -133,6 +133,8 @@ class ARCAdapter(DomainAdapter):
 
     def post_run_hooks(self, result) -> list[str]:
         """Generate HTML visualization from results."""
+        if not result:
+            return []
         results_path = result.results_path
         if not results_path or not os.path.exists(results_path):
             return []

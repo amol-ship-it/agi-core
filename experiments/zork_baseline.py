@@ -54,7 +54,7 @@ def main():
         energy_alpha=1.0,
         energy_beta=0.001,
         solve_threshold=0.001,
-        exhaustive_depth=args.exhaustive_depth if hasattr(args, 'exhaustive_depth') and args.exhaustive_depth is not None else defaults.get("exhaustive_depth", 2),
+        exhaustive_depth=args.exhaustive_depth if args.exhaustive_depth is not None else defaults.get("exhaustive_depth", 2),
         exhaustive_pair_top_k=defaults.get("exhaustive_pair_top_k", 30),
         exhaustive_triple_top_k=15,
         sequential_compounding=getattr(args, 'sequential_compounding', False),

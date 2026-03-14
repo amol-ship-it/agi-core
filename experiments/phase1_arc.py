@@ -47,8 +47,8 @@ def _make_config(args, resolved, max_tasks, tasks, timestamp,
         min_occurrences = 1
         energy_beta = 0.01
 
-    domain_tag = "phase1_arc_train" if split_label == "TRAIN" else (
-        "phase1_arc_eval" if split_label == "EVAL" else "phase1_arc")
+    domain_tag = "phase1_arc_train" if "TRAIN" in split_label else (
+        "phase1_arc_eval" if "EVAL" in split_label else "phase1_arc")
 
     env, grammar, drive = _adapter.create_interfaces(seed=args.seed, vocabulary=vocabulary)
     return ExperimentConfig(

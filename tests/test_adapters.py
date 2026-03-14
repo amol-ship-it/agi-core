@@ -202,9 +202,10 @@ class TestBackwardCompat:
         assert callable(run_experiment)
         assert callable(run_pipeline)
 
-    def test_pipeline_common_import(self):
-        from experiments.pipeline_common import pipeline_tee, save_pipeline_results
+    def test_pipeline_utilities_import(self):
+        from common.benchmark import pipeline_tee, save_pipeline_results
         assert callable(pipeline_tee)
+        assert callable(save_pipeline_results)
 
     def test_phase1_find_arc_data(self):
         from experiments.phase1_arc import find_arc_data
