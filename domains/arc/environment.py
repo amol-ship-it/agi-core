@@ -132,32 +132,34 @@ class ARCEnv(Environment):
         first_inp = task.train_examples[0][0]
         first_out = task.train_examples[0][1]
 
-        # --- Strategy 1: Boolean ops on halves ---
-        # Grid split by ONE separator into 2 equal halves → output is
-        # AND/OR/XOR of the halves, optionally recolored.
+        # --- Detect consistent separators across all training examples ---
         try:
             h_lines, v_lines = _detect_any_separator_lines(first_inp)
         except Exception:
             h_lines, v_lines = [], []
 
-        out_h, out_w = len(first_out), len(first_out[0]) if first_out else 0
-
-        # Vertical split: find the consistent separator across all examples
-        # (must be same position and same color in every training input)
-        if v_lines and not h_lines:
-            # Find separators consistent across all examples
+        # Intersect with all other examples to find truly consistent separators
+        if h_lines or v_lines:
+            consistent_h = set(h_lines)
             consistent_v = set(v_lines)
             for inp, _ in task.train_examples[1:]:
                 try:
-                    _, vl = _detect_any_separator_lines(inp)
+                    hl, vl = _detect_any_separator_lines(inp)
+                    consistent_h &= set(hl)
                     consistent_v &= set(vl)
                 except Exception:
+                    consistent_h = set()
                     consistent_v = set()
+            h_lines = sorted(consistent_h)
             v_lines = sorted(consistent_v)
 
+        out_h, out_w = len(first_out), len(first_out[0]) if first_out else 0
+
+        # --- Strategy 1: Boolean ops on halves ---
+        # Grid split by ONE separator into 2 equal halves → output is
+        # AND/OR/XOR of the halves, optionally recolored.
         if len(v_lines) == 1 and not h_lines:
-            vc = v_lines[0]
-            vc = v_lines[0]
+            sep_v = v_lines[0]
             for op_name, op_fn in [
                 ("and", lambda a, b: int(a != 0 and b != 0)),
                 ("or",  lambda a, b: int(a != 0 or b != 0)),
@@ -165,7 +167,7 @@ class ARCEnv(Environment):
             ]:
                 out_colors = {int(c) for row in first_out for c in row if c != 0}
                 for recolor in sorted(out_colors | {1}):
-                    def _make_bool_v(sep_col=vc, op=op_fn, rc=recolor):
+                    def _make_bool_v(sep_col=sep_v, op=op_fn, rc=recolor):
                         def fn(grid):
                             arr = np.array(grid, dtype=np.int32)
                             # Use the known separator column position
@@ -190,17 +192,7 @@ class ARCEnv(Environment):
                         _PRIM_MAP[name] = prim
                         return (name, fn)
 
-        # Horizontal split — also find consistent separator
-        if h_lines and not v_lines:
-            consistent_h = set(h_lines)
-            for inp, _ in task.train_examples[1:]:
-                try:
-                    hl, _ = _detect_any_separator_lines(inp)
-                    consistent_h &= set(hl)
-                except Exception:
-                    consistent_h = set()
-            h_lines = sorted(consistent_h)
-
+        # Horizontal split
         if len(h_lines) == 1 and not v_lines:
             hr = h_lines[0]
             for op_name, op_fn in [
@@ -260,38 +252,49 @@ class ARCEnv(Environment):
 
                                 result_cells = [c for c in gc]  # copy list
 
-                                # For each row of cells, find colored cells and
-                                # fill empty cells between same-colored ones
-                                for row in range(nr):
-                                    row_cells = [(col, gc[row * nc + col])
-                                                 for col in range(nc)]
-                                    # Find cells with content
-                                    colored = {}
-                                    for col, cell in row_cells:
-                                        colors = {int(cell[r][c])
-                                                  for r in range(len(cell))
-                                                  for c in range(len(cell[0]))
-                                                  if cell[r][c] != 0}
-                                        if colors:
-                                            for clr in colors:
-                                                colored.setdefault(clr, []).append(col)
+                                def _cell_colors(cell):
+                                    return {int(cell[r][c])
+                                            for r in range(len(cell))
+                                            for c in range(len(cell[0]))
+                                            if cell[r][c] != 0}
 
-                                    # Fill between endpoints of each color
+                                def _cell_empty(cell):
+                                    return not any(cell[r][c] != 0
+                                                   for r in range(len(cell))
+                                                   for c in range(len(cell[0])))
+
+                                # Row propagation: fill empty cells between
+                                # same-colored cells in the same row
+                                for row in range(nr):
+                                    colored = {}
+                                    for col in range(nc):
+                                        for clr in _cell_colors(gc[row * nc + col]):
+                                            colored.setdefault(clr, []).append(col)
                                     for clr, cols in colored.items():
                                         if len(cols) >= 2:
                                             lo, hi = min(cols), max(cols)
                                             template = gc[row * nc + cols[0]]
                                             for col in range(lo, hi + 1):
                                                 idx = row * nc + col
-                                                cell = result_cells[idx]
-                                                # If cell is empty, fill with template
-                                                has_content = any(
-                                                    cell[r][c] != 0
-                                                    for r in range(len(cell))
-                                                    for c in range(len(cell[0])))
-                                                if not has_content:
+                                                if _cell_empty(result_cells[idx]):
                                                     result_cells[idx] = [
-                                                        row[:] for row in template]
+                                                        r[:] for r in template]
+
+                                # Column propagation: same but vertically
+                                for col in range(nc):
+                                    colored = {}
+                                    for row in range(nr):
+                                        for clr in _cell_colors(gc[row * nc + col]):
+                                            colored.setdefault(clr, []).append(row)
+                                    for clr, rows in colored.items():
+                                        if len(rows) >= 2:
+                                            lo, hi = min(rows), max(rows)
+                                            template = gc[rows[0] * nc + col]
+                                            for row in range(lo, hi + 1):
+                                                idx = row * nc + col
+                                                if _cell_empty(result_cells[idx]):
+                                                    result_cells[idx] = [
+                                                        r[:] for r in template]
 
                                 # Recompose
                                 from .grammar import ARCGrammar
