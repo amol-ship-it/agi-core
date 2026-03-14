@@ -69,6 +69,182 @@ class ARCEnv(Environment):
         _PRIM_MAP[name] = prim
         return (name, fn)
 
+    def try_for_each_object(self, task, candidate_programs, top_k=10):
+        """Try applying top-K programs per-object.
+
+        Takes scored programs from enumeration (including depth-2+ compositions)
+        and applies each one per-object. This enables compositions like
+        for_each_object(mirror_h(crop_to_nonzero)).
+        """
+        if not task.train_examples:
+            return None
+        # Only same-dims tasks
+        for inp, out in task.train_examples:
+            if len(inp) != len(out) or (inp and out and len(inp[0]) != len(out[0])):
+                return None
+
+        from .objects import apply_transform_per_object, _get_background_color, _test_on_examples
+        bg = _get_background_color(task.train_examples[0][0])
+
+        # Sort by error, try top-K
+        sorted_cands = sorted(candidate_programs, key=lambda s: s.prediction_error)[:top_k]
+        for sp in sorted_cands:
+            prog = sp.program
+
+            def _make_per_obj_fn(p=prog, env=self, bg_color=bg):
+                def transform(subgrid):
+                    return env.execute(p, subgrid)
+
+                def fn(grid):
+                    result = apply_transform_per_object(grid, transform, bg_color)
+                    return result if result is not None else grid
+                return fn
+
+            per_obj_fn = _make_per_obj_fn()
+            if _test_on_examples(per_obj_fn, task.train_examples):
+                name = f"for_each_object({repr(prog)})"
+                prim = Primitive(name=name, arity=1, fn=per_obj_fn, domain="arc")
+                _PRIM_MAP[name] = prim
+                return (name, per_obj_fn)
+
+        return None
+
+    def try_cross_reference(self, task, primitives):
+        """Try solving via cross-reference: use one grid part to transform another.
+
+        Strategy 1: Grid has separator lines → cells. Try using each cell as a
+        mask/template applied to the others via overlay or boolean ops.
+
+        Strategy 2: Two objects of different sizes. The smaller one acts as a
+        pattern/template applied at the position of (or overlaid onto) the larger.
+        """
+        if not task.train_examples:
+            return None
+
+        from .primitives import (
+            _detect_any_separator_lines, _split_grid_cells, Grid,
+        )
+        from .objects import (
+            find_foreground_shapes, find_multicolor_objects,
+            _get_background_color, _test_on_examples, place_subgrid,
+        )
+        import numpy as np
+
+        # --- Strategy 1: Grid cells cross-reference ---
+        # If the grid has separator lines, try: output = apply(template_cell, target_cell)
+        first_inp = task.train_examples[0][0]
+        try:
+            h_lines, v_lines = _detect_any_separator_lines(first_inp)
+        except Exception:
+            h_lines, v_lines = [], []
+
+        if h_lines or v_lines:
+            cells_first = _split_grid_cells(first_inp)
+            if cells_first and len(cells_first) >= 2:
+                # Try using the smallest non-empty cell as template
+                # applied to other cells via overlay
+                n_cells = len(cells_first)
+
+                for template_idx in range(min(n_cells, 4)):
+                    def _make_xref(tidx=template_idx):
+                        def xref_fn(grid):
+                            try:
+                                cells = _split_grid_cells(grid)
+                                if not cells or len(cells) <= tidx:
+                                    return grid
+                                template = cells[tidx]
+                                # Apply template as overlay to each other cell
+                                result_cells = []
+                                for i, cell in enumerate(cells):
+                                    if i == tidx:
+                                        result_cells.append(cell)
+                                        continue
+                                    # Overlay: template non-zero pixels onto cell
+                                    th, tw = len(template), len(template[0]) if template else 0
+                                    ch, cw = len(cell), len(cell[0]) if cell else 0
+                                    if th != ch or tw != cw:
+                                        result_cells.append(cell)
+                                        continue
+                                    merged = [row[:] for row in cell]
+                                    for r in range(th):
+                                        for c in range(tw):
+                                            if template[r][c] != 0:
+                                                merged[r][c] = template[r][c]
+                                    result_cells.append(merged)
+                                # Recompose — use grammar's recompose if available
+                                from .grammar import ARCGrammar
+                                from core.types import Decomposition
+                                g = ARCGrammar()
+                                h_l, v_l = _detect_any_separator_lines(grid)
+                                sep_color = 0
+                                h_grid, w_grid = len(grid), len(grid[0]) if grid else 0
+                                if h_l:
+                                    sep_color = grid[h_l[0]][0]
+                                elif v_l:
+                                    sep_color = grid[0][v_l[0]]
+                                decomp = Decomposition(
+                                    strategy="grid_partition",
+                                    parts=cells,
+                                    context={"h_lines": h_l, "v_lines": v_l,
+                                             "sep_color": sep_color, "bg_color": 0,
+                                             "grid_h": h_grid, "grid_w": w_grid},
+                                )
+                                return g.recompose(decomp, result_cells)
+                            except Exception:
+                                return grid
+                        return xref_fn
+
+                    fn = _make_xref()
+                    if _test_on_examples(fn, task.train_examples):
+                        name = f"cross_ref_cell_{template_idx}_overlay"
+                        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+                        _PRIM_MAP[name] = prim
+                        return (name, fn)
+
+        # --- Strategy 2: Small object as template for large object ---
+        bg = _get_background_color(first_inp)
+        shapes = find_foreground_shapes(first_inp)
+        if shapes and len(shapes) >= 2:
+            sizes = sorted(set(s["size"] for s in shapes))
+            if len(sizes) >= 2:
+                small_size = sizes[0]
+                large_size = sizes[-1]
+                if large_size >= small_size * 2:
+                    # Small object might be a pattern to stamp onto large
+                    def _make_stamp_small_on_large(bg_c=bg):
+                        def stamp_fn(grid):
+                            objs = find_foreground_shapes(grid)
+                            if len(objs) < 2:
+                                return grid
+                            by_size = sorted(objs, key=lambda o: o["size"])
+                            small = by_size[0]
+                            template = small["subgrid"]
+                            result = [row[:] for row in grid]
+                            # Zero out the small object
+                            sr, sc = small["position"]
+                            for r in range(len(template)):
+                                for c in range(len(template[0])):
+                                    if template[r][c] != 0:
+                                        tr, tc = sr + r, sc + c
+                                        if 0 <= tr < len(grid) and 0 <= tc < len(grid[0]):
+                                            result[tr][tc] = bg_c
+                            # Overlay template onto each larger object
+                            for obj in by_size[1:]:
+                                pos = obj["position"]
+                                result = place_subgrid(result, template, pos,
+                                                       transparent_color=bg_c)
+                            return result
+                        return stamp_fn
+
+                    fn = _make_stamp_small_on_large()
+                    if _test_on_examples(fn, task.train_examples):
+                        name = "cross_ref_stamp_small_on_large"
+                        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+                        _PRIM_MAP[name] = prim
+                        return (name, fn)
+
+        return None
+
     # -------------------------------------------------------------------------
     # Output correction: infer post-hoc fixes for near-miss programs
     # -------------------------------------------------------------------------

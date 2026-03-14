@@ -301,6 +301,48 @@ class Learner:
 
         logger.debug(f"  [wake] Phase 1.1 object decomp: {time.time()-t_phase:.2f}s")
 
+        # --- Phase 1.12: For-each-object with top enumeration candidates ---
+        # Try applying the top-K enumeration results per-object. This enables
+        # depth-2+ compositions per-object, e.g. for_each_object(mirror_h(crop)).
+        t_phase = time.time()
+        if enum_candidates and _budget_ok() and (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
+            fe_result = self.env.try_for_each_object(task, enum_candidates, top_k=10)
+            if fe_result is not None:
+                name, fn = fe_result
+                prog = Program(root=name)
+                sp = self._evaluate_program(prog, task)
+                n_evals += 1
+                self._update_pareto_front(pareto, sp)
+                if best_so_far is None or sp.energy < best_so_far.energy:
+                    best_so_far = sp
+                enum_candidates.append(sp)
+
+                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                    return _make_solved_result("for-each-object")
+
+        logger.debug(f"  [wake] Phase 1.12 for-each-object: {time.time()-t_phase:.2f}s")
+
+        # --- Phase 1.13: Cross-reference ---
+        # Try using one part of the grid to inform transformation of another.
+        # E.g., small object as template, grid cell as mask for other cells.
+        t_phase = time.time()
+        if _budget_ok() and (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
+            xref_result = self.env.try_cross_reference(task, all_prims)
+            if xref_result is not None:
+                name, fn = xref_result
+                prog = Program(root=name)
+                sp = self._evaluate_program(prog, task)
+                n_evals += 1
+                self._update_pareto_front(pareto, sp)
+                if best_so_far is None or sp.energy < best_so_far.energy:
+                    best_so_far = sp
+                enum_candidates.append(sp)
+
+                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                    return _make_solved_result("cross-reference")
+
+        logger.debug(f"  [wake] Phase 1.13 cross-reference: {time.time()-t_phase:.2f}s")
+
         # --- Phase 1.15: Grammar-based decomposition ---
         # The grammar's decompose() breaks inputs into parts; we try applying
         # each primitive to all parts and recompose. This is the generic

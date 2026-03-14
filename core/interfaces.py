@@ -85,6 +85,44 @@ class Environment(ABC):
         """
         return None
 
+    def try_for_each_object(
+        self,
+        task: "Task",
+        candidate_programs: list["ScoredProgram"],
+        top_k: int = 10,
+    ) -> Optional[tuple[str, Any]]:
+        """Try applying top-K candidate programs per-object.
+
+        Unlike try_object_decomposition (which tries individual primitives),
+        this takes already-scored programs (including depth-2+ compositions)
+        and applies each per-object. This enables compositions like
+        for_each_object(mirror_h(crop_to_nonzero)).
+
+        Returns (name, transform_fn) if a pixel-perfect decomposition
+        is found, or None.
+
+        Default: no per-object support (returns None).
+        """
+        return None
+
+    def try_cross_reference(
+        self,
+        task: "Task",
+        primitives: list["Primitive"],
+    ) -> Optional[tuple[str, Any]]:
+        """Try solving a task using cross-reference: one grid part informs another.
+
+        Common ARC patterns:
+        - A small pattern acts as a mask/template for a larger region
+        - Grid divided by separators; one cell is the "key" that transforms others
+        - An object's color/shape determines how another object is modified
+
+        Returns (name, transform_fn) or None.
+
+        Default: no cross-reference support (returns None).
+        """
+        return None
+
     def infer_output_correction(
         self,
         program_outputs: list[Any],
