@@ -268,6 +268,10 @@ Examples:
     parser.add_argument("--adaptive-realloc", action="store_true",
                         help="Re-run near-miss tasks with boosted compute budget "
                              "(3x budget, wider search breadth)")
+    parser.add_argument("--vocabulary", type=str, default="full",
+                        choices=["full", "minimal"],
+                        help="Primitive vocabulary: 'full' (180 prims) or 'minimal' (~26 "
+                             "fundamentals, forces composition and compounding)")
     return parser
 
 

@@ -79,6 +79,7 @@ def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
                  suppress_files=False):
     """Build an ExperimentConfig with ARC-specific defaults."""
     compounding = getattr(args, "compounding", False)
+    vocabulary = getattr(args, "vocabulary", "full")
     exhaustive_depth = args.exhaustive_depth
     rounds = resolved["rounds"]
     sequential = args.sequential_compounding
@@ -94,7 +95,8 @@ def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
 
     return ExperimentConfig(
         title=title, domain_tag=domain_tag, tasks=tasks,
-        environment=ARCEnv(), grammar=ARCGrammar(seed=args.seed), drive=ARCDrive(),
+        environment=ARCEnv(), grammar=ARCGrammar(seed=args.seed, vocabulary=vocabulary),
+        drive=ARCDrive(),
         rounds=rounds, beam_width=resolved["beam_width"],
         max_generations=resolved["max_generations"],
         workers=resolved["workers"], seed=args.seed,

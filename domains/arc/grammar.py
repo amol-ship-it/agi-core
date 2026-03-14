@@ -12,7 +12,8 @@ from typing import Any
 
 from core import Grammar, Primitive, Program, Task, Decomposition
 from .primitives import (
-    ARC_PRIMITIVES, ARC_PREDICATES, _PRIM_MAP, register_prim,
+    ARC_PRIMITIVES, ARC_MINIMAL_PRIMITIVES, ARC_PREDICATES,
+    _PRIM_MAP, register_prim,
     _detect_any_separator_lines, _split_grid_cells, Grid,
     build_task_color_primitives,
 )
@@ -71,19 +72,28 @@ class ARCGrammar(Grammar):
     - Leaves are unary primitives applied directly to the input grid
     - Internal nodes compose the outputs of their children
 
+    Vocabulary modes:
+    - "full": 180 hand-crafted primitives (maximum coverage, minimal composition)
+    - "minimal": ~26 fundamental primitives (forces composition, enables compounding)
     """
 
-    def __init__(self, seed: int = 42):
+    def __init__(self, seed: int = 42, vocabulary: str = "full"):
         self._rng = random.Random(seed)
         self._task_prims: list[Primitive] = []
+        self._vocabulary = vocabulary
 
     def get_predicates(self) -> list[tuple[str, callable]]:
         return list(ARC_PREDICATES)
 
     def essential_pair_concepts(self) -> frozenset[str]:
+        if self._vocabulary == "minimal":
+            # With minimal vocab, all primitives are essential for composition
+            return frozenset()
         return _ARC_ESSENTIAL_PAIR_CONCEPTS
 
     def base_primitives(self) -> list[Primitive]:
+        if self._vocabulary == "minimal":
+            return list(ARC_MINIMAL_PRIMITIVES) + self._task_prims
         return list(ARC_PRIMITIVES) + self._task_prims
 
     def prepare_for_task(self, task: Task) -> None:

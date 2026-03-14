@@ -6307,8 +6307,64 @@ def compact_shape(grid: Grid) -> Grid:
 # Build the ARC primitive registry
 # =============================================================================
 
+def _build_minimal_primitives() -> list[Primitive]:
+    """Build a minimal set of truly fundamental grid primitives (~25).
+
+    These are atomic operations that cannot be meaningfully decomposed
+    into simpler grid transforms. Everything else should be DISCOVERED
+    by the wake-sleep loop through depth-2/3 composition.
+
+    Design principle: with fewer primitives, solutions require composition,
+    which creates depth-2+ programs that the sleep phase can extract and
+    promote to the library — enabling genuine compounding.
+    """
+    unary_ops = [
+        # --- Geometric (7): truly atomic, cannot be decomposed ---
+        ("identity",                    identity),
+        ("rotate_90_clockwise",         rotate_90_cw),
+        ("rotate_90_counterclockwise",  rotate_90_ccw),
+        ("rotate_180",                  rotate_180),
+        ("mirror_horizontal",           mirror_horizontal),
+        ("mirror_vertical",             mirror_vertical),
+        ("transpose",                   transpose),
+        # --- Spatial (6): fundamental cropping/scaling ---
+        ("crop_to_nonzero",             crop_to_nonzero),
+        ("top_half",                    get_top_half),
+        ("left_half",                   get_left_half),
+        ("scale_2x",                    scale_2x),
+        ("scale_3x",                    scale_3x),
+        ("tile_2x2",                    tile_2x2),
+        # --- Object (4): connected component operations ---
+        ("extract_largest_object",      extract_largest_object),
+        ("extract_smallest_object",     extract_smallest_object),
+        ("remove_largest_object",       remove_largest_object),
+        ("keep_largest_object_only",    keep_largest_object_only),
+        # --- Color (4): structural color operations ---
+        ("invert_colors",               invert_colors),
+        ("swap_most_least",             swap_most_least),
+        ("binarize",                    binarize),
+        ("color_to_most_common",        color_to_most_common),
+        # --- Fill/physics (4): fundamental spatial operations ---
+        ("fill_enclosed",               fill_enclosed),
+        ("gravity_down",                gravity_down),
+        ("gravity_up",                  gravity_up),
+        ("outline",                     outline),
+        # --- Denoising (1): basic signal processing ---
+        ("denoise_3x3",                 denoise_3x3),
+    ]
+
+    prims = []
+    for name, fn in unary_ops:
+        prims.append(Primitive(name=name, arity=1, fn=fn, domain="arc"))
+
+    # Arity-2: overlay (combine two grids)
+    prims.append(Primitive(name="overlay", arity=2, fn=overlay, domain="arc"))
+
+    return prims
+
+
 def _build_arc_primitives() -> list[Primitive]:
-    """Build the complete list of ARC primitives."""
+    """Build the complete list of ARC primitives (full vocabulary)."""
     prims = []
 
     # Arity-1 primitives (Grid -> Grid): the core set
@@ -6652,7 +6708,12 @@ def build_task_color_primitives(task_colors: set[int]) -> list[Primitive]:
 
 
 ARC_PRIMITIVES = _build_arc_primitives()
+ARC_MINIMAL_PRIMITIVES = _build_minimal_primitives()
 _PRIM_MAP = {p.name: p for p in ARC_PRIMITIVES}
+# Ensure minimal primitives are also in the map
+for _p in ARC_MINIMAL_PRIMITIVES:
+    if _p.name not in _PRIM_MAP:
+        _PRIM_MAP[_p.name] = _p
 
 
 def register_prim(p: Primitive) -> None:

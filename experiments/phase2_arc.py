@@ -113,7 +113,9 @@ def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
                  suppress_files=False):
     return ExperimentConfig(
         title=title, domain_tag=domain_tag, tasks=tasks,
-        environment=ARCEnv(), grammar=ARCGrammar(seed=args.seed), drive=ARCDrive(),
+        environment=ARCEnv(),
+        grammar=ARCGrammar(seed=args.seed, vocabulary=getattr(args, "vocabulary", "full")),
+        drive=ARCDrive(),
         rounds=resolved["rounds"], beam_width=resolved["beam_width"],
         max_generations=resolved["max_generations"],
         workers=resolved["workers"], seed=args.seed,
