@@ -177,11 +177,15 @@ Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, 
 
 Three modes. Pick one. That's the only knob most users need.
 
-| Mode | Tasks | Beam | Compute Cap | Eval accuracy | Use case |
-|------|-------|------|-------------|---------------|----------|
-| `quick` | 50 | off | 500K | 6.0% (3/50) | Fast dev loop (~5s) |
-| `default` | all (400) | off | 3M | 7.8% (31/400) | Full benchmark (~4 min) |
-| `contest` | all (400) | 30×15 | 100M | ~8% | Maximum accuracy (~9 min) |
+| Mode | Tasks | Beam | Compute Cap | Vocabulary | Use case |
+|------|-------|------|-------------|------------|----------|
+| `quick` | 50 | off | 500K | full/minimal | Fast dev loop (~5s) |
+| `default` | all (400) | off | 3M | full/minimal | Full benchmark (~4 min) |
+| `contest` | all (400) | 30×15 | 100M | full/minimal | Maximum accuracy |
+
+Two vocabulary modes (`--vocabulary`):
+- `full`: 180 hand-crafted primitives (max single-round coverage)
+- `minimal`: 60 fundamental primitives (action + perception + composition rules — cleaner, less overfit, designed for compounding)
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
 
@@ -195,10 +199,10 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 **ARC-AGI-1** — eval accuracy (test-verified solves on held-out evaluation set):
 
-| Mode | Eval (400 tasks) | Wall time |
-|------|-----------------|-----------|
-| `quick` | 3/50 (6.0%) | **~5s** |
-| `default` | 31/400 (7.8%) | **~4 min** |
+| Vocabulary | Quick (50) | All 400 (quick cap) |
+|-----------|-----------|---------------------|
+| `full` (180 prims) | 3/50 (6.0%) | 25/400 (6.2%) |
+| `minimal` (60 prims) | 1/20 (5.0%) | 26/400 (6.5%) |
 
 Note: training accuracy is higher (default: 106/400 = 26.5%) with a 29% overfit rate. The aggressive overfit-prone corrections were removed in favor of a clean, honest system — eval is the real metric.
 
