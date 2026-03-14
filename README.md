@@ -340,7 +340,7 @@ agi-core/
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (545 tests)
+├── tests/                   # Test suite (516 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -359,7 +359,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (545 tests):** 73% overall. Core modules: learner 68%, runner 25% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
+**Current coverage (516 tests):** 73% overall. Core modules: learner 68%, runner 25% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
 
 ## Documentation
 

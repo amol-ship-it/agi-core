@@ -2192,5 +2192,27 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 
 **The pivotal insight:** User said "even the intuitive conceptual operations are a composition of some basic operations" — this led to splitting primitives into ACTION (transform) and PERCEPTION (understand), adding composition rules beyond pipelining (FOR_EACH, CROSS_REFERENCE, CONDITIONAL), and discovering that the right composition rules find simple generalizable solutions where brute-force corrections can only overfit.
 
+## Session 13 — Repository Audit & Cleanup
+
+### Decision 106: Dead code removal — 1,425 lines from primitives.py
+
+**Context:** Session 12 removed primitives from registries (Decisions 98-99) but left their function definitions in place. This accumulated ~70 dead functions across ~1,425 lines.
+
+**Analysis method:** Automated audit of all `def` in primitives.py cross-referenced against both registries (ARC_PRIMITIVES, ARC_PREDICATES) and all call sites. Categorized functions as: truly dead (50), shadowed duplicates (4), test-only dead (18), dead helper chains (3), live helpers (25+).
+
+**Action:** Removed all dead functions, shadowed duplicates, test-only dead code, and corresponding test methods/imports. Added `import functools` to top-level (was previously scoped inside a dead function).
+
+**Result:** primitives.py: 6,974 → 5,549 lines. Tests: 545 → 516 (removed tests for dead functions). All 516 pass. No accuracy regression.
+
+**Rationale:** Smaller codebase = easier to reason about, faster grepping, clearer signal on what's live vs dead. The removed functions can always be recovered from git history if needed.
+
+### Decision 107: Remove dead --verbose parameter
+
+**Context:** `--verbose` flag existed in `ExperimentConfig` and was passed through all experiment scripts but was never consumed by any code.
+
+**Action:** Removed from `runner.py` (CLI arg + dataclass field), all 6 experiment scripts, and README.
+
+**Result:** 12 fewer lines of dead plumbing. Zero behavioral change.
+
 ---
 *This document will be updated with each new session and major decision.*

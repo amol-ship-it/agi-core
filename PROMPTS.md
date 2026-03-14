@@ -368,6 +368,14 @@ Also provided latest ARC-AGI-2 numbers: 312/1000 (31.2%) train, 9/120 (7.5%) eva
 
 > Can you update all the documentation, including the prompt and decisions log files? I would like to make my entire prompt and reasoning history available in GitHub for people to understand the through process as well as the decision process and twists and turns that happened along the way.
 
+## Session 13 — Repository Audit, Cleanup & Strategic Experiments (March 2026)
+
+### Prompt 57: Repository Audit and Strategic Next Steps
+
+> Implement the following plan: Repository Audit, Cleanup, and Strategic Next Steps
+
+[User provided a detailed plan with two parts: (A) Code cleanup — add .DS_Store to .gitignore, remove dead --verbose parameter, remove ~70 dead functions from primitives.py (~1,425 lines), update README test counts; (B) Strategic experiments — per-object conditional transforms, more cross-reference strategies, fixed-point with depth-2 compositions, predicate-guided enumeration pruning. The plan followed the established scientific method: hypothesis → small test → measure → commit if positive.]
+
 ---
 
 *This document will be updated with each new session.*
