@@ -202,9 +202,10 @@ Three modes. Pick one. That's the only knob most users need.
 | `default` | all (400) | off | 3M | full/minimal | Full benchmark (~4 min) |
 | `contest` | all (400) | 30×15 | 100M | full/minimal | Maximum accuracy |
 
-Two vocabulary modes (`--vocabulary`):
+Three vocabulary modes (`--vocabulary`):
 - `full`: 180 hand-crafted primitives (max single-round coverage)
 - `minimal`: 60 fundamental primitives (action + perception + composition rules — cleaner, less overfit, designed for compounding)
+- `atomic`: ~27 atomic operations + combinators (forces deeper compositions, validates composition thesis)
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
 
@@ -256,7 +257,7 @@ Note: training accuracy is higher (full: 112/400 = 28.0%, minimal: 95/400 = 23.8
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
 | `--compute-cap` | from preset | Per-task eval budget (cell-normalized). `0` = unlimited |
 | `--exhaustive-depth` | `3` | Exhaustive enumeration depth (`0`=off, `2`=pairs, `3`=triples) |
-| `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
+| `--exhaustive-pair-top-k` | `50` | Top-K singles for pair enumeration pool |
 | `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |
 | `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
@@ -274,8 +275,10 @@ Note: training accuracy is higher (full: 112/400 = 28.0%, minimal: 95/400 = 23.8
    - **Near-miss refinement**: takes programs with error < 20% and tries appending/prepending each primitive.
    - **Correction**: infers color remappings and small neighborhood patches (3x3) from near-miss programs.
    - **Beam search**: seeded with top enumeration results, mutates and crosses programs with semantic deduplication.
-2. **SLEEP**: Analyze all solved programs. Extract recurring sub-programs.
-   Add them to the library as new reusable abstractions.
+2. **SLEEP**: Analyze all solved programs AND near-miss programs (error < 15%).
+   Extract recurring sub-programs, quality-weighted by prediction accuracy.
+   Add them to the library as new reusable abstractions. Train composition
+   priors (transition matrix) on both solved and near-miss programs.
 3. **REPEAT**: The grown library biases future search toward proven compositions.
    This is the compounding mechanism.
 
@@ -315,7 +318,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **Compounding is demonstrated on list_ops and Zork.** On list_ops (22 primitives, depth-limited to 2), the library learns depth-2 compositions that enable depth-3+ solutions in subsequent rounds — 8 library entries with reuse 2-6x across 3 rounds. On Zork (20 tasks, 5 difficulty levels), compounding produces 5 library entries reused 2-6x across rounds, with hierarchical composition (e.g., `take_treasure(go_north(go_north))` built from a promoted depth-2 entry).
 
-**Compounding produces library entries on ARC but has limited impact.** Most ARC solves are depth-1 (single primitives), so the library provides little additional coverage beyond what depth-3 exhaustive search already finds.
+**Compounding now produces library entries on ARC.** Sequential compounding with immediate promotion creates library entries that are reused in subsequent tasks. Near-miss sleep extracts subtrees from depth-2+ programs that almost solved tasks (error < 15%), providing richer composition data than perfect solutions alone.
 
 **Overfitting is reduced but still present.** In default mode, 141/400 programs match training but only 106/400 pass test (29% overfit rate). The aggressive correction cascade (5x5-11x11 neighborhoods, identity-seeded corrections) was removed in favor of clean, generalizable corrections only.
 
@@ -323,10 +326,10 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 ### Current limitations
 
-- **ARC results are dominated by single-primitive matches.** ~95% of ARC solves are depth-1 (one primitive). The beam search, sleep phase, transition matrix, and library compounding contribute minimally to ARC results. The system is effectively a systematic primitive enumerator on this domain.
+- **ARC results are dominated by single-primitive matches.** ~95% of ARC solves are depth-1 (one primitive). Sequential compounding produces library entries that are reused, but most coverage still comes from exhaustive enumeration rather than library-mediated composition.
 - **The "domain-agnostic core" contains ARC-shaped hooks.** `try_object_decomposition`, `try_for_each_object`, `try_conditional_per_object`, and `try_cross_reference` are baked into the Environment interface but only meaningful for grid domains. Zork/ListOps return `None` for all of them, skipping ~60% of the wake pipeline.
 - **Zork and SymbolicMath are toy-scale.** They validate the adapter architecture but have too few tasks (4-20) to constitute evidence of domain generality.
-- **Beam search ROI is poor.** Exhaustive enumeration (phases 1-1.75) catches nearly all solves. Beam search (phase 2) adds ~1/400 tasks despite being the most expensive phase.
+- **Beam search ROI is poor.** Exhaustive enumeration (phases 1-1.75) catches nearly all solves. Beam search (phase 2) adds ~1/400 tasks despite being the most expensive phase. Fixed-point iteration has been removed (0 solves ever).
 
 ## Structure
 
@@ -356,8 +359,9 @@ agi-core/
 │   └── list_compounding.py  # List ops compounding demonstration
 │
 ├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
-│   ├── arc/                 # ARC-AGI grid transformations (60 minimal / 180 full)
+│   ├── arc/                 # ARC-AGI grid transformations (60 minimal / 180 full / 27 atomic)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
+│   │   ├── atomic_primitives.py # ~27 atomic ops + combinators for composition thesis
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
 │   │   ├── grammar.py       # ARCGrammar
@@ -373,7 +377,7 @@ agi-core/
 │       ├── __init__.py      # Game engine + all 4 interfaces
 │       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (557 tests)
+├── tests/                   # Test suite (631 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -392,7 +396,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (557 tests):** 79% overall. Core modules: learner 80%, all other core modules 95-100%. Benchmark runner: `common/benchmark.py` 58% (covered by integration smoke tests). Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 78%, Zork 95%, list_ops 94%.
+**Current coverage (631 tests):** 79% overall. Core modules: learner 80%, all other core modules 95-100%. Benchmark runner: `common/benchmark.py` 58% (covered by integration smoke tests). Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 78%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
@@ -412,8 +416,8 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 5** ✅ Cleanup: removed overfit correction cascade, pruned dead primitives (235→180)
 - **Phase 6** ✅ Minimal vocabulary (60 fundamental primitives: action + perception)
 - **Phase 7** ✅ Composition rules: FOR_EACH, CROSS_REFERENCE (+10 zero-overfit solves)
-- **Phase 8** ✅ Current: ARC-AGI-1 eval 36/400 (9.0%), minimal vocab 26/400 (6.5%)
-- **Phase 9** 🔧 More composition rules (mask application, counting-based repetition)
+- **Phase 8** ✅ ARC-AGI-1 eval 36/400 (9.0%), minimal vocab 26/400 (6.5%)
+- **Phase 9** ✅ Atomic vocabulary (~27 ops + combinators), near-miss sleep, first library entries on ARC
 - **Phase 10** 🔧 Compounding with richer compositions across domains
 - **Phase 11** Cross-domain library transfer
 - **Phase 12** Continuous mixed-domain learning

@@ -388,4 +388,14 @@ Results: Part A completed cleanly (all tests pass, no regression). Part B: all 4
 
 ---
 
+### Prompt 59 (2026-03-14)
+
+> Implement the following plan: Strategic Plan: Compounding via Approximability
+
+[User provided a detailed 4-experiment plan to unlock compounding on ARC. Analysis identified three root causes of broken compounding: (1) arity-0 callable bug silently disabling parameterized prims, (2) sleep only reading perfect solutions (95% depth-1, no subtrees), (3) 333 near-misses invisible to learning. Experiments: Exp 1 — fix arity-0 callable execution in `_eval_tree`; Exp 2 — near-miss sleep (store programs with error<0.15, extract subtrees with quality weighting, train transition matrix on near-misses); Exp 3 — atomic vocabulary + compounding (combine existing features); Exp 4 — remove fixed-point iteration (0 solves), widen pair pool 40→50.
+
+Results: All 4 experiments implemented. 631 tests pass (9 new). 50-task sequential compounding run: 21/50 solved (42%), 6 library entries created via immediate promotion, library entries reused in subsequent rounds (first-ever non-zero library on ARC). 14 near-misses captured with depth-2+ compositions. Culture file now includes near-misses for cross-run transfer.]
+
+---
+
 *This document will be updated with each new session.*
