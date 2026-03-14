@@ -2311,8 +2311,7 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 **Exp 3 — Atomic + compounding** (no code changes, experiment with existing `--vocabulary atomic --rounds 3`).
 
 **Exp 4 — Kill dead phases**:
-- Removed `_phase_fixed_point` from `_wake_phases()` pipeline (0 solves ever).
-- Method still exists for re-enablement.
+- Removed `_phase_fixed_point` from `_wake_phases()` pipeline (0 solves ever). Method body removed in Decision 102.
 - Tested widening `exhaustive_pair_top_k` from 40→50: **reverted** — measured eval regression from 35/400 (8.8%) to 33/400 (8.2%). Wider pool dilutes search, doesn't help.
 
 **Verification:** 631 tests pass. Quick 20-task run: 7/20 solved (matching baseline), 7 near-misses captured in culture file.
@@ -2321,12 +2320,28 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 - `domains/arc/environment.py` — arity-0 callable fix
 - `core/memory.py` — near-miss storage + serialization
 - `core/interfaces.py` — Memory interface near-miss methods
-- `core/config.py` — SleepConfig near-miss params, exhaustive_pair_top_k 40→50
+- `core/config.py` — SleepConfig near-miss params
 - `core/learner.py` — near-miss storage in wake, near-miss extraction in sleep, remove fixed-point from pipeline
 - `tests/test_memory.py` — 7 new near-miss tests
 - `tests/test_arc.py` — 2 new arity-0 callable tests
 - `tests/test_compounding.py` — 1 new near-miss sleep test
 - `tests/test_exhaustive_enum.py` — updated pair_top_k default
+
+---
+
+### Decision 102: Remove backward-compat experiment scripts and dead code
+
+**Date:** 2026-03-14
+
+**Removed experiment scripts** (-527 lines): `experiments/phase1_arc.py`, `phase2_arc.py`, `zork_baseline.py`, `list_compounding.py`. All functionality available via `python -m common --domain <name>`. Kept `visualize_results.py` (used by ARC adapter post-run hooks), `diagnostic_near_miss.py`, `nbr_cap_tuning.py`.
+
+**Removed `--compounding` flag**: Accepted by CLI but never validated. One measurement showed eval regression (5%→2%). Individual flags (`--sequential-compounding`, `--rounds 3`) cover the useful parts.
+
+**Removed dead code from `core/learner.py`** (-74 lines): `_phase_fixed_point` method body (removed from pipeline earlier but body was kept), `_try_fixed_point` helper (only called by dead phase), unused `Decomposition` import.
+
+**Considered removing minimal/full vocabularies**: Decided against. Atomic solves 4/50 (8%) vs full 21/50 (42%). Until compounding bridges that gap, full/minimal serve as baselines to measure progress.
+
+**README updated**: All examples use unified CLI (`python -m common`). Options table updated with `--domain`, `--run-mode`, `--split`. Structure tree updated.
 
 ---
 *This document will be updated with each new session and major decision.*

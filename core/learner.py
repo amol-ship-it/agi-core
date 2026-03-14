@@ -24,7 +24,6 @@ from typing import Optional
 from .types import (
     Program,
     Task,
-    Decomposition,
     ScoredProgram,
     LibraryEntry,
     Primitive,
@@ -411,20 +410,6 @@ class Learner:
         ctx.enum_candidates.extend(refined)
         logger.debug(f"  [wake] Phase 1.5 near-miss refine: {time.time()-t:.2f}s")
         return "near-miss refinement" if ctx.solved else None
-
-    def _phase_fixed_point(self, ctx: _WakeContext) -> Optional[str]:
-        """Phase 1.6: Apply near-miss programs repeatedly until stable."""
-        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
-            return None
-        t = time.time()
-        result = self._try_fixed_point(ctx.enum_candidates, ctx.task)
-        if result is not None:
-            ctx.n_evals += 1
-            self._update_pareto_front(ctx.pareto, result)
-            ctx.update_best(result)
-            ctx.enum_candidates.append(result)
-        logger.debug(f"  [wake] Phase 1.6 fixed-point: {time.time()-t:.2f}s")
-        return "fixed-point iteration" if ctx.solved else None
 
     def _phase_color_fix(self, ctx: _WakeContext) -> Optional[str]:
         """Phase 1.75: Learn color remapping from near-miss programs."""
@@ -1665,68 +1650,6 @@ class Learner:
                 best_fix = sp
 
         return best_fix
-
-    def _try_fixed_point(
-        self,
-        candidates: list[ScoredProgram],
-        task: Task,
-        threshold: float = 0.20,
-        max_iters: int = 20,
-    ) -> Optional[ScoredProgram]:
-        """Try applying near-miss programs repeatedly until stable (fixed point).
-
-        Many ARC tasks require iterative application: fill propagation, pattern
-        growth, color spreading. For each near-miss depth-1 program, we apply
-        it repeatedly and check if the converged result matches the expected.
-        """
-        solve_thresh = self.search_cfg.solve_threshold
-        near_misses = [
-            sp for sp in candidates
-            if solve_thresh < sp.prediction_error <= threshold
-            and sp.program.depth <= 2  # depth-1 and depth-2 programs
-        ]
-        if not near_misses:
-            return None
-
-        near_misses.sort(key=lambda s: s.prediction_error)
-        near_misses = near_misses[:10]
-
-        best_result: Optional[ScoredProgram] = None
-
-        for nm in near_misses:
-            nm_prog = nm.program
-
-            # Build a fixed-point version
-            fp_name = f"iterate_{repr(nm_prog)}"
-
-            def _make_fp(prog=nm_prog, iters=max_iters, env=self.env):
-                def fp_fn(grid):
-                    current = grid
-                    for _ in range(iters):
-                        result = env.execute(prog, current)
-                        if not isinstance(result, list) or not result:
-                            return current
-                        if result == current:
-                            return current
-                        current = result
-                    return current
-                return fp_fn
-
-            fp_fn = _make_fp()
-            fp_prim = Primitive(name=fp_name, arity=1, fn=fp_fn, domain="")
-            self.env.register_primitive(fp_prim)
-
-            prog = Program(root=fp_name)
-            sp = self._evaluate_program(prog, task)
-
-            if sp.prediction_error <= solve_thresh:
-                return sp
-            if sp.prediction_error < nm.prediction_error:
-                # Fixed-point improved over single application
-                if best_result is None or sp.energy < best_result.energy:
-                    best_result = sp
-
-        return best_result
 
     def _try_grammar_decomposition(
         self,

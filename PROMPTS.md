@@ -398,4 +398,12 @@ Results: All 4 experiments implemented. 631 tests pass (9 new). 50-task sequenti
 
 ---
 
+### Prompt 60 (2026-03-14)
+
+> Should we only keep the unified CLI and remove backward-compat experiment scripts? Also remove --compounding flag and any dead code.
+
+[User also asked about removing minimal/full vocabularies to only keep atomic. Advised against — atomic solves 4/50 vs full 21/50, compounding not yet bridging the gap. Removed: 4 experiment scripts (-527 lines), --compounding flag, dead fixed-point code (-74 lines from learner.py), unused Decomposition import. Updated all README examples to unified CLI. 631 tests pass.]
+
+---
+
 *This document will be updated with each new session.*
