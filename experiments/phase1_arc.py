@@ -110,7 +110,7 @@ def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
         adaptive_realloc=getattr(args, "adaptive_realloc", False),
         min_occurrences=min_occurrences,
         culture_path=culture_path, save_culture=save_culture,
-        runs_dir=args.runs_dir, no_log=args.no_log, verbose=args.verbose,
+        runs_dir=args.runs_dir, no_log=args.no_log,
         task_ids=getattr(args, "task_ids", ""), mode=args.mode,
         timestamp=timestamp, suppress_files=suppress_files,
     )

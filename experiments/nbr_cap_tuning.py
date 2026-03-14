@@ -74,7 +74,6 @@ def main():
             exhaustive_triple_top_k=15,
             runs_dir="runs",
             no_log=True,
-            verbose=False,
             mode="quick",
             suppress_files=True,
         )
@@ -102,7 +101,6 @@ def main():
             culture_path=train_result.culture_path,
             runs_dir="runs",
             no_log=True,
-            verbose=False,
             mode="quick",
             suppress_files=True,
         )

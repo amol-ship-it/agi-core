@@ -64,7 +64,6 @@ def main():
         sequential_compounding=getattr(args, 'sequential_compounding', False),
         runs_dir=args.runs_dir,
         no_log=args.no_log,
-        verbose=args.verbose,
         mode=args.mode,
     )
 

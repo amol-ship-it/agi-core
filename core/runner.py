@@ -244,8 +244,6 @@ Examples:
                         help="Directory for all run artifacts")
     parser.add_argument("--no-log", action="store_true",
                         help="Disable log file (console only)")
-    parser.add_argument("--verbose", action="store_true",
-                        help="Debug logging")
     parser.add_argument("--exhaustive-depth", type=int, default=3,
                         help="Exhaustive enumeration depth (0=disabled, 2=pairs, 3=triples)")
     parser.add_argument("--exhaustive-pair-top-k", type=int, default=40,
@@ -496,7 +494,6 @@ class ExperimentConfig:
     # Output
     runs_dir: str = DEFAULT_RUNS_DIR
     no_log: bool = False
-    verbose: bool = False
     mode: str = "default"
 
     # Task filtering

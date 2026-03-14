@@ -242,7 +242,6 @@ Note: training accuracy is higher (default: 110/400 = 27.5%) with overfit rate r
 | `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
 | `--no-log` | off | Disable log file (console only) |
-| `--verbose` | off | Enable debug logging |
 
 ## How It Works
 

@@ -92,7 +92,6 @@ def main():
         sequential_compounding=True,  # always compound for this experiment
         runs_dir=args.runs_dir,
         no_log=args.no_log,
-        verbose=args.verbose,
         mode=args.mode,
     )
 
