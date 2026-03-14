@@ -214,7 +214,7 @@ Note: training accuracy is higher (default: 110/400 = 27.5%) with overfit rate r
 | Zork | 20 | 10 | 50% | 5 library entries, reuse 2-6x (5 rounds) |
 | List Ops | 28 | 20 | 71.4% | 8 library entries, reuse 2-6x (3 rounds) |
 
-**180 base ARC primitives** plus task-specific color/role primitives (~260-390 total per task, ~9,000 lines of domain code) including grid partitioning, object decomposition, symmetry completion, connected components, diagonal ops, sub-grid propagation, and per-object conditional recoloring.
+**Two vocabulary modes:** `full` (180 hand-crafted primitives) or `minimal` (60 fundamental action+perception primitives designed for composition and compounding). Both include task-specific color primitives (~30-40 per task). The minimal set beats full at the same compute budget by covering more of the program space.
 **Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
 **Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
 **Simple correction** learns color remappings and small (3x3) neighborhood patches on near-miss programs.
@@ -327,7 +327,7 @@ agi-core/
 │   └── list_compounding.py  # List ops compounding demonstration
 │
 ├── domains/                 # Domain implementations (all 4 interfaces)
-│   ├── arc/                 # ARC-AGI grid transformations (199 base primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (60 minimal / 180 full)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
@@ -373,15 +373,18 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 ## Roadmap
 
 - **Phase 0** ✅ Extract invariant core with pluggable interfaces
-- **Phase 1** ✅ ARC-AGI-1 training (199 base primitives, exhaustive enumeration, diff-and-patch, wake-sleep)
+- **Phase 1** ✅ ARC-AGI-1 training (exhaustive enumeration, object decomposition, wake-sleep)
 - **Phase 2** ✅ ARC-AGI-1 eval with culture transfer
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated
 - **Phase 4** ✅ Compounding infrastructure: Zork 10/20, list_ops 20/28 with library reuse 2-6x
-- **Phase 5** ✅ Correction (simple color remap + 3x3 neighborhood only, aggressive corrections removed)
-- **Phase 6** ✅ Current: ARC-AGI-1 eval 31/400 (7.8%), ARC-AGI-2 eval 0/120 (0%)
-- **Phase 7** 🔧 Improve accuracy via better primitives and composition (not overfitting corrections)
-- **Phase 8** Cross-domain library transfer
-- **Phase 9** Continuous mixed-domain learning
+- **Phase 5** ✅ Cleanup: removed overfit correction cascade, pruned dead primitives (235→180)
+- **Phase 6** ✅ Minimal vocabulary (60 fundamental primitives: action + perception)
+- **Phase 7** ✅ Composition rules: FOR_EACH, CROSS_REFERENCE (+10 zero-overfit solves)
+- **Phase 8** ✅ Current: ARC-AGI-1 eval 36/400 (9.0%), minimal vocab 26/400 (6.5%)
+- **Phase 9** 🔧 More composition rules (mask application, counting-based repetition)
+- **Phase 10** 🔧 Compounding with richer compositions across domains
+- **Phase 11** Cross-domain library transfer
+- **Phase 12** Continuous mixed-domain learning
 
 ## License
 

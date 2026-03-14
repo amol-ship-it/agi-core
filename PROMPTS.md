@@ -290,4 +290,84 @@ Also provided latest ARC-AGI-2 numbers: 312/1000 (31.2%) train, 9/120 (7.5%) eva
 
 ---
 
+## Session 12 — Claude Code CLI (March 13-14, 2026)
+
+### Prompt 44: Deep Audit, Cleanup, and Get Back on Track
+
+> Deeply understand and audit this entire repository: agi-core, what are the goals, and how we are doing it. Validate everything and follow the guidelines on CLAUDE.md. Clean up the whole repository. Then suggest next steps. There was a huge screwup and unnecessary complications caused this morning because you (Claude Code) changed the meaning of the solved numbers and they got inflated. Then a whole bunch of unnecessary primitives got added I think regarding diff and patch. I would like us to get back on track towards the big picture goal. I would like us to get closer to 100% held out public eval accuracy on ARC-AGI-1 and ARC-AGI-2 and Zork, without any sort of cheating or data leakage, no matter how unintentional. But I would also like to keep the core abstraction intact here if it makes sense, and if not, you let me know.
+
+[Claude performed a complete repository audit. Found: 36 completely unused primitives, 19 more that never solved anything, and the correction cascade with 97% overfit rate (9 test-verified solves vs 290 overfits). Confirmed core abstraction is sound. Removed 55 dead primitives (235→180), removed overfit correction cascade (-275 lines), overfit dropped from 309→58. See Decisions 98-100.]
+
+### Prompt 45: Primitive Discovery by Evolution
+
+> Yes. I think we might need to remove a whole bunch of primitives which are useless. And we might want to figure out a general exploration methodology to discover good primitives by evolution or something? What do you think? In any case, we should start with the basic steps.
+
+[Approved primitive pruning. Claude performed data-driven analysis: 87 of 235 primitives appear in any test-verified solve, 148 never appear. Removed 55 in two rounds. Discussed evolutionary primitive discovery — user interested but wanted basics first.]
+
+### Prompt 46: Starting from Scratch — Path A vs Path B
+
+> Pretend that you were starting from scratch. What would you do?
+
+[Claude proposed two paths: Path A (keep 180 primitives, incrementally add more) vs Path B (reduce to ~20 fundamentals, force composition, enable compounding). Key argument for Path B: the current system is a lookup table of hand-crafted transforms, not a learning system. With fewer primitives, solutions require composition, which creates depth-2+ programs the sleep phase can extract and promote — enabling genuine compounding.]
+
+### Prompt 47: Path B
+
+> Path B
+
+[User chose Path B. Claude created minimal vocabulary of 27 fundamental primitives, added `--vocabulary minimal|full` flag. Initial results: 6/50 train (vs 20/50 full) — much lower as expected. Compounding flat across 5 rounds because all 6 solves were depth-1.]
+
+### Prompt 48: Intuitive Operations ARE Compositions
+
+> Yes, but even the intuitive conceptual operations are a composition of some basic operations.
+
+[User pushed back on the claim that operations like fill_tile_pattern can't be composed. Pointed out they ARE compositions of more basic cognitive operations — just not compositions of grid transforms. This led to the insight that the primitives were all ACTION primitives (transform the grid) but missing PERCEPTION primitives (understand the grid). The decomposition half of decomposition/composition duality was missing.]
+
+### Prompt 49: Add Perceptual Primitives
+
+> Yes
+
+[Claude added 16 perception primitives: pattern detection (extract_repeating_tile, fill_tile_pattern, upscale_pattern), grid structure (remove_grid_lines, select_odd_one_out, overlay_grid_cells), symmetry completion, line extension, stacking/repetition. Results: 27→43 primitives, 6→13 train solves — 2x improvement. Depth-2 compositions emerged: select_odd_one_out(crop_to_nonzero), extend_lines_to_contact(connect_same_color_vertical).]
+
+### Prompt 50: Analyze Composability of Missing Primitives
+
+> Instead of just guessing like this, why don't you try thinking whether the intuitive or conceptual primitives can be composed out of the basic primitives in a simple way? Or find what are the missing composition rules as well as basic primitives that would allow us to do something like that.
+
+[Claude analyzed all 20 high-value missing primitives by reading their actual code. Found: 3 composable from existing minimal prims (mirror_horizontal_merge = overlay(grid, mirror_h(grid))), 7 need one new basic primitive (clustered into ~4 new ops), 8 are fundamentally new concepts (clustered into ~3 concept families). Added 9 highest-value missing primitives to get 52→60 minimal vocab. See Decision 103.]
+
+### Prompt 51: Find the Minimal Basis for ALL ARC Tasks
+
+> The goal is not just to close the gap with the 106/400 primitives, even they have a very low coverage. It is to discover an exploration and compounding mechanism, using the 4 pillars continuous cycle. Also, we will want to look at all the 400 tasks, understand the minimal set of primitives and composition rules that would cover almost all of the transformations. Note that it might be ok to have a deeper depth of composition with the basic primitives. That's because higher level composed abstractions will naturally emerge, and the transformation will be low depth on the higher level abstractions.
+
+[User reframed the goal: not "close the gap to 106" but "cover nearly all 400 tasks." Deeper compositions are fine because compounding will naturally promote recurring depth-2 sub-programs into depth-1 library entries. Claude analyzed all 400 training tasks and identified 16 irreducible operations covering ~95% of tasks, plus 3 composition rules beyond pipelining: FOR_EACH (48% of tasks), CONDITIONAL (66%), CROSS_REFERENCE (36%). A pure pipeline can only express ~15% of tasks.]
+
+### Prompt 52: Implement Composition Rules
+
+> Yes!
+
+[Claude implemented FOR_EACH objects (try top-K enumeration candidates per-object) and CROSS_REFERENCE (boolean ops on grid halves, cell propagation, small-on-large stamping). Key bug found and fixed: cross-reference phase was skipped due to eval budget exhaustion — fixed by making it budget-exempt. Cross-reference solved 10 tasks (5 train + 5 eval), ALL test-verified, ZERO overfit. Every one was previously overfit by the old correction cascade.]
+
+### Prompt 53: Iterate on Composition Rules
+
+> Continue
+
+[Claude iterated on cross-reference: fixed separator consistency across training examples, added column propagation alongside row propagation, fixed closure variable bug. Full vocab default mode with cross-reference: 36/400 eval (9.0%), up from 31/400 (7.8%). Minimal vocab at quick cap: 26/400 eval, beating full vocab's 25/400 at same compute budget.]
+
+### Prompt 54: Balance Both Approaches
+
+> both in a balanced methodical way
+
+[Claude ran both vocabulary modes at 400 tasks. Key finding: minimal vocab (60 prims) beats full vocab (180 prims) at same compute budget because smaller search space = better coverage per evaluation. Cross-reference finds solutions impossible with pipelining.]
+
+### Prompt 55: Keep Going
+
+> you decide / ok / continue
+
+[Claude continued iterating: scanned for more cross-reference patterns (boolean mask, color-preserving mask — no additional hits). Ran compounding experiment at 400 tasks with minimal vocab: 83→84 (+1) across 3 rounds — real but modest compounding. Full vocab default mode confirmed: 36/400 eval (9.0%), 110/400 train (27.5%).]
+
+### Prompt 56: Update Documentation
+
+> Can you update all the documentation, including the prompt and decisions log files? I would like to make my entire prompt and reasoning history available in GitHub for people to understand the through process as well as the decision process and twists and turns that happened along the way.
+
+---
+
 *This document will be updated with each new session.*

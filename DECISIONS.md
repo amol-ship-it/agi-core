@@ -1992,4 +1992,205 @@ The entire gain came from one architectural insight: the 5x5 neighborhood rule c
 **Files:** `core/results.py`, `core/learner.py`, `core/runner.py`, `experiments/visualize_results.py`
 
 ---
+
+## Session 12 — Claude Code CLI (March 13-14, 2026)
+
+### Decision 98: Data-driven primitive pruning (235 → 180)
+
+**Date:** 2026-03-13
+**Context:** User asked for full repository audit after inflated-numbers screwup. Claude analyzed all 800 ARC tasks to find which primitives actually contribute to solves.
+
+**Data:**
+- 87 of 235 primitives appear in at least 1 test-verified solve
+- 148 never appear in any solve
+- 36 never appear in ANY best program across all 800 tasks (completely dead)
+- 19 more appear in best programs but never solve anything (not even on training)
+
+**Decision:** Remove all 55 in two rounds.
+
+**Round 1:** 36 completely dead primitives removed (235→199). Examples: cleanup_isolated_cells, complete_tile_from_modal_*, compress_rows, count_*, max/min_color_per_cell, xor_grid_cells.
+
+**Round 2:** 19 more never-solve primitives removed (199→180). Examples: bottom_half, erode, scale_4x/5x, shift_rows_left/right, sort_columns_by_color_count.
+
+**Result:** 23% smaller search space, zero accuracy loss (verified: 20/50 train, 3/50 eval identical before and after). Quick mode runs faster (7.4s → 5.0s).
+
+---
+
+### Decision 99: Remove overfit-prone correction cascade
+
+**Date:** 2026-03-13
+**Context:** Correction cascade had 97% overfit rate — 9 test-verified solves vs 290 overfit programs. The neighborhood corrections (3x3→11x11) and identity-seeded correction were the worst offenders.
+
+**Decision:** Remove:
+- Identity-seeded correction (Phase 1.76) — most overfit-prone, learned entire transform as neighborhood rules from scratch
+- 5x5 through 11x11 neighborhood corrections — memorized training-specific pixel patterns
+- Chained corrections (depth 2) — compounded overfitting
+- `try_5x5` parameter throughout
+
+**Kept:** Color remapping (generalizes well), adjacency correction (moderate), 3x3 neighborhood (radius=1, capped at 10 rules), row/column corrections.
+
+**Result:** -275 lines of code. Same accuracy (20/50 train, 3/50 eval). Overfit dropped from 32→3 on 50 tasks. Full 400-task run: overfit 309→58. Lost 2 eval solves (33→31) — those were corrections that happened to generalize.
+
+**Trade-off:** Accepted the -2 eval regression because the 251 fewer false overfits make the system much more honest and trustworthy. The correction cascade was creating an illusion of progress.
+
+---
+
+### Decision 100: Path B — Minimal vocabulary (60 fundamental primitives)
+
+**Date:** 2026-03-13
+**Context:** User asked "Pretend you were starting from scratch. What would you do?" Two paths proposed:
+- Path A: Keep 180 primitives, incrementally add more (engineering — better lookup table)
+- Path B: Reduce to fundamentals, force composition, enable compounding (science — test the thesis)
+
+**Decision:** Path B. User chose it because it aligns with the core philosophy: "one algorithm, with the right primitives, solutions are simple."
+
+**Implementation:** Created `_build_minimal_primitives()` with three categories:
+
+1. **Action primitives (27→33):** Geometric (7), spatial (9), object (5), color (4), fill/physics (4), signal processing (2), shift (1), logical halves (3)
+
+2. **Perception primitives (16):** Pattern detection (extract_repeating_tile, fill_tile_pattern, upscale_pattern), grid structure (remove_grid_lines, select_odd_one_out, overlay_grid_cells), symmetry completion (3), spatial analysis (connect_same_color_h/v, fill_grid_intersections, extend_lines_to_contact, draw_cross_from_pixels)
+
+3. **Composition enablers (7):** Stacking (stack_with_mirror_v/h, repeat_pattern_right), deduplication (deduplicate_rows, unique_columns), downscale (2x, 3x)
+
+Total: 60 base primitives + ~30 task-specific color primitives = ~90 per task.
+
+**Key insight:** The gap between action-only (27 prims, 6/50 train) and action+perception (43 prims, 13/50 train) proved that the missing piece was PERCEPTION — the decomposition half of decomposition/composition duality. Adding perception primitives doubled the solve rate with only 16 more primitives.
+
+**Result at 400 tasks:** Minimal (60) gets 26/400 eval vs full (180) 25/400 eval at quick compute cap. The smaller search space means better coverage per evaluation. At higher compute caps (default mode), full still wins (36 vs ~26) because it has more specialized depth-1 solutions.
+
+---
+
+### Decision 101: Composability analysis of high-value primitives
+
+**Date:** 2026-03-13
+**Context:** User said "instead of just guessing, try thinking whether the intuitive primitives can be composed from basic ones."
+
+**Method:** Read the actual implementation of all 20 high-value missing primitives and classified each:
+
+**COMPOSABLE from existing minimal set (3):**
+- `mirror_horizontal_merge` = `overlay(grid, mirror_h(grid))` — depth 2
+- `make_symmetric_vertical` = `stack_with_mirror_v(top_half(grid))` — depth 2
+- `gravity_right` = `transpose(gravity_down(transpose(grid)))` — depth 3
+
+**NEEDS ONE NEW BASIC (7, clustered into 4 new primitives):**
+- `downscale_nx(n)` — parameterized majority downscale (covers 3 variants)
+- `cyclic_shift(axis, amount)` — covers all 4 shift directions
+- `remove_isolated_pixels` — clean denoising concept
+- `keep_smallest_object_only` — trivial dual of existing
+
+**FUNDAMENTALLY NEW CONCEPTS (8, clustered into 3 families):**
+- Connect same-color along axis (vertical, horizontal, diagonal)
+- Row/column cross-reference (fill_grid_intersections, mark_intersections)
+- Marker-object spatial operations (project_markers, stamp_pattern)
+
+**Decision:** Added the 9 highest-value to minimal set (52→60).
+
+---
+
+### Decision 102: Three composition rules beyond pipelining
+
+**Date:** 2026-03-13
+**Context:** Analysis of all 400 training tasks showed a pure pipeline `f(g(h(x)))` can only express ~15% of tasks. Three additional composition rules are needed:
+
+1. **FOR_EACH (48% of tasks):** Apply a sub-program to each object independently. Generalized the hardcoded `try_object_decomposition` to accept top-K enumeration candidates (including depth-2+ compositions).
+
+2. **CROSS_REFERENCE (36% of tasks):** One part of the grid informs the transformation of another. Implemented three strategies:
+   - Boolean ops on grid halves (AND/OR/XOR split by separator)
+   - Cell propagation (colored markers in cells fill between them along rows/columns)
+   - Small-on-large stamping (smallest object used as template for larger objects)
+
+3. **CONDITIONAL (66% of tasks):** Already existed in the system but limited. Enhanced to work with depth-2+ branch programs.
+
+**Implementation:** Added as new Environment interface methods (`try_for_each_object`, `try_cross_reference`) with ARC-specific implementations. Core learner stays domain-agnostic — just calls the interface methods in new search phases (1.12 for-each-object, 1.13 cross-reference).
+
+---
+
+### Decision 103: Cross-reference — the highest-ROI composition rule
+
+**Date:** 2026-03-13
+**Result:** 10 test-verified solves (5 train + 5 eval), **zero overfit**.
+
+| Task | Strategy | Test-verified |
+|------|----------|:---:|
+| 0520fde7 | AND halves vertical, recolor 2 | ✓ |
+| 3428a4f5 | XOR halves horizontal, recolor 3 | ✓ |
+| 99b1bc43 | XOR halves horizontal, recolor 3 | ✓ |
+| ce4f8723 | OR halves horizontal, recolor 3 | ✓ |
+| 06df4c85 | Cell propagation (row + column) | ✓ |
+| 195ba7dc | OR halves vertical, recolor 1 | ✓ |
+| 34b99a2b | XOR halves vertical, recolor 2 | ✓ |
+| 506d28a5 | OR halves horizontal, recolor 3 | ✓ |
+| 5d2a5c43 | OR halves vertical, recolor 8 | ✓ |
+| e133d23d | OR halves vertical, recolor 2 | ✓ |
+
+**Critical finding:** Every single one of these tasks was previously OVERFIT by the full 180-primitive correction cascade. The cross-reference composition rule finds the ACTUAL transformation (boolean AND of halves, cell propagation) instead of memorizing pixel-level corrections that don't generalize.
+
+**Implementation bugs fixed:**
+1. Separator consistency: must intersect separator positions across all training examples (one example might have spurious uniform columns)
+2. Closure variable: used fixed separator position in closures instead of re-detecting per call
+3. Budget bypass: cross-reference is a single evaluation — must run regardless of eval budget exhaustion
+
+**Impact on full vocab default mode:** 31/400 eval → 36/400 eval (+5). The cross-reference solves add to existing solves without regressing anything.
+
+---
+
+### Decision 104: Minimal vocab beats full vocab at same compute budget
+
+**Date:** 2026-03-14
+**Context:** Ran both vocabulary modes on all 400 tasks at quick compute cap (500K).
+
+**Results:**
+| Vocab | Train | Eval | Overfit |
+|-------|-------|------|---------|
+| Full (180 prims) | 99/400 (24.8%) | 25/400 (6.2%) | 41 |
+| Minimal (60 prims) | 83/400 (20.8%) | 26/400 (6.5%) | 26 |
+
+**Key insight:** Minimal vocab achieves HIGHER eval accuracy at the same compute budget. With 180 primitives, depth-3 exhaustive search over top-15 = 3,375 triples. With 60 primitives, the same budget covers a larger fraction of the program space. The cross-reference composition rule also contributes 10 solves that pipelining can't reach regardless of vocabulary size.
+
+At higher compute caps (default mode, 3M), full vocab wins (36 vs ~26) because it has more specialized depth-1 solutions. The compute cap is the key variable — with unlimited compute, more primitives = more coverage. With limited compute, fewer primitives = better sampling.
+
+**Implication for the architecture:** The right approach is minimal fundamentals + composition rules for time-limited search (contest mode), and full vocabulary for unlimited compute. Both should be available as options.
+
+---
+
+### Decision 105: Compounding with minimal vocabulary at scale
+
+**Date:** 2026-03-14
+**Context:** Tested wake-sleep compounding on 400 training tasks with 60 minimal primitives, 3 rounds, sequential processing.
+
+**Results:**
+```
+Round 1: 83/400 (20.8%) solved, 18 overfit
+Round 2: 84/400 (21.0%) solved, 18 overfit
+Round 3: 84/400 (21.0%) solved, 18 overfit
+```
+
+**Analysis:** +1 compound solve. Real but modest. The earlier 43-primitive experiment showed +4 at 400 tasks — the larger vocabulary (60 vs 43) means more depth-1 coverage, leaving less room for compounding to add depth-2+ solutions via the library.
+
+**Structural issue:** On ARC, reusable abstractions are individual primitives, not compositions. No depth-2 sub-tree appears in 2+ different tasks. Compounding promotes shared sub-trees, but the sharing is at depth-1 (e.g., `crop_to_nonzero` appears in 8 tasks). This means compounding works by making the transition matrix slightly better at guiding beam search, not by providing reusable building blocks.
+
+**Contrast with list_ops:** Compounding works well on list_ops (89% → 96.4% across 5 rounds) because list_ops has a depth-2 cap, forcing the system to rely on the library for depth-3+ programs. On ARC with depth-3 exhaustive search, the library adds marginal value.
+
+**Implications:** To make compounding more impactful on ARC, either (a) limit exhaustive depth and rely on library for deeper programs, or (b) find cross-task compositional patterns that the current analysis misses.
+
+---
+
+### Session 12 Summary
+
+**Starting state:** 235 primitives, 33/400 eval (8.2%), 309 overfit, correction cascade with 97% overfit rate.
+
+**Ending state:** 60/180 primitives (minimal/full), 36/400 eval (9.0%), 54 overfit, cross-reference composition rule adding 10 zero-overfit solves.
+
+**Key decisions and their impact:**
+| Decision | Impact |
+|----------|--------|
+| Dead primitive pruning (235→180) | 23% smaller search, zero accuracy loss |
+| Remove correction cascade | -275 lines, overfit 309→58 |
+| Minimal vocabulary (60 prims) | Beats full at same compute budget |
+| Cross-reference composition rule | +10 test-verified solves, zero overfit |
+| Compounding at 400 tasks | +1 solve (modest but real) |
+
+**The pivotal insight:** User said "even the intuitive conceptual operations are a composition of some basic operations" — this led to splitting primitives into ACTION (transform) and PERCEPTION (understand), adding composition rules beyond pipelining (FOR_EACH, CROSS_REFERENCE, CONDITIONAL), and discovering that the right composition rules find simple generalizable solutions where brute-force corrections can only overfit.
+
+---
 *This document will be updated with each new session and major decision.*
