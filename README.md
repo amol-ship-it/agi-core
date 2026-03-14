@@ -97,6 +97,25 @@ python -m experiments.zork_baseline --mode quick
 python -m domains.symbolic_math
 ```
 
+### Unified CLI
+
+All domains can be run through a single entry point:
+
+```bash
+# Equivalent to: python -m experiments.phase1_arc --mode quick --max-tasks 10
+python -m common --domain arc-agi-1 --mode quick --max-tasks 10
+
+# Full pipeline (train -> eval)
+python -m common --domain arc-agi-1 --run-mode pipeline
+
+# Other domains
+python -m common --domain zork --mode quick
+python -m common --domain list-ops --mode quick
+python -m common --domain arc-agi-2 --mode quick
+```
+
+The existing experiment scripts (`python -m experiments.phase1_arc` etc.) continue to work for backward compatibility and domain-specific CLI args.
+
 The Zork domain is fully self-contained (custom game engine, no external dependencies). ARC-AGI-2 requires the dataset clone above.
 
 ### Auto-saved artifacts
@@ -309,38 +328,46 @@ agi-core/
 ├── core/                    # THE INVARIANT CORE — never imports domain code
 │   ├── __init__.py          # Public API (re-exports everything)
 │   ├── types.py             # Data types: Primitive, Program, Task, ScoredProgram, LibraryEntry
-│   ├── interfaces.py        # 4 abstract interfaces (Environment, Grammar, DriveSignal, Memory)
+│   ├── interfaces.py        # 5 abstract interfaces (Environment, Grammar, DriveSignal, Memory, DomainAdapter)
 │   ├── config.py            # SearchConfig, SleepConfig, CurriculumConfig
 │   ├── results.py           # ParetoEntry, WakeResult, SleepResult, RoundResult
 │   ├── transition_matrix.py # DreamCoder-style generative prior P(child|parent)
 │   ├── learner.py           # Wake-sleep loop + beam search (the algorithm)
-│   ├── runner.py            # Generic experiment runner (TeeWriter, ProgressTracker, presets)
+│   ├── runner.py            # Backward-compat shim (re-exports from common.benchmark)
 │   ├── memory.py            # Default in-memory store
 │   └── metrics.py           # Compounding curve measurement
 │
-├── experiments/             # Thin domain-specific wrappers over core/runner.py
+├── common/                  # Benchmark infrastructure (runner, pipeline, CLI)
+│   ├── __init__.py          # Public API
+│   ├── benchmark.py         # ExperimentConfig, run_experiment, run_pipeline, presets, progress
+│   └── __main__.py          # Unified CLI: python -m common --domain arc-agi-1 --mode quick
+│
+├── experiments/             # Thin domain-specific wrappers
 │   ├── phase1_arc.py        # ARC-AGI-1 training & evaluation pipeline
 │   ├── phase2_arc.py        # ARC-AGI-2 baseline experiment
 │   ├── visualize_results.py # HTML visualization generator
 │   ├── zork_baseline.py     # Zork text adventure baseline
 │   └── list_compounding.py  # List ops compounding demonstration
 │
-├── domains/                 # Domain implementations (all 4 interfaces)
+├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
 │   ├── arc/                 # ARC-AGI grid transformations (60 minimal / 180 full)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
 │   │   ├── grammar.py       # ARCGrammar
 │   │   ├── drive.py         # ARCDrive
-│   │   └── dataset.py       # Task loading + sample tasks
+│   │   ├── dataset.py       # Task loading, sample tasks, data auto-detection
+│   │   └── adapter.py       # ARCAdapter (DomainAdapter for ARC-AGI-1/2)
 │   ├── symbolic_math/       # 1D symbolic regression (15 math primitives)
 │   │   └── __init__.py      # All 4 interfaces in one file
 │   ├── list_ops/            # List operations (22 primitives, compounding demo)
-│   │   └── __init__.py      # All 4 interfaces in one file
+│   │   ├── __init__.py      # All 4 interfaces in one file
+│   │   └── adapter.py       # ListOpsAdapter
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
-│       └── __init__.py      # Game engine + all 4 interfaces
+│       ├── __init__.py      # Game engine + all 4 interfaces
+│       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (520 tests)
+├── tests/                   # Test suite (553 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)

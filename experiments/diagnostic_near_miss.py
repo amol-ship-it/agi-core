@@ -25,8 +25,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from core import (
-    ExperimentConfig, Task, Program, ScoredProgram,
+from core import Task, Program, ScoredProgram
+from common.benchmark import (
+    ExperimentConfig,
     run_experiment, resolve_from_preset, PRESETS,
 )
 from core.learner import Learner
@@ -34,7 +35,10 @@ from core.config import SearchConfig
 from domains.arc import (
     ARCEnv, ARCGrammar, ARCDrive, load_arc_dataset,
 )
-from experiments.phase1_arc import find_arc_data, _load_tasks
+from domains.arc.dataset import find_arc_data
+from domains.arc.adapter import ARCAdapter
+_arc_adapter = ARCAdapter(benchmark="arc-agi-1")
+_load_tasks = lambda split, data_dir, max_tasks: _arc_adapter.load_tasks(split, data_dir, max_tasks)
 
 
 # =============================================================================

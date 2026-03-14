@@ -5,12 +5,12 @@ Tests the core hypothesis: does library learning (sleep) improve
 performance on harder tasks (wake)?
 
 Protocol:
-  Round 1: Wake on all 28 tasks → sleep → extract library.
+  Round 1: Wake on all 28 tasks -> sleep -> extract library.
            Level 1 (depth 1) should mostly solve. Level 2 (depth 2)
            should partially solve. Level 3 (depth 3) is unlikely
            without library help.
 
-  Round 2+: Wake again with library → sleep → iterate.
+  Round 2+: Wake again with library -> sleep -> iterate.
            Library entries from solved tasks become 0-arity primitives.
            A depth-2 program using a library entry = depth-3+ effective
            depth. Level 3 solve rate should increase each round.
@@ -25,21 +25,14 @@ Usage:
 
 from __future__ import annotations
 
-import sys
+from common.benchmark import (
+    ExperimentConfig, run_experiment, make_parser,
+    resolve_from_preset, PRESETS,
+)
+from domains.list_ops.adapter import ListOpsAdapter
 
-from core import (
-    ExperimentConfig,
-    run_experiment,
-    make_parser,
-    resolve_from_preset,
-    PRESETS,
-)
-from domains.list_ops import (
-    ListEnv,
-    ListGrammar,
-    ListDrive,
-    get_sample_tasks,
-)
+
+_adapter = ListOpsAdapter()
 
 
 def main():
@@ -60,6 +53,7 @@ def main():
     if rounds < 3 and args.mode != "quick":
         rounds = 3  # need multiple rounds to test compounding
 
+    from domains.list_ops import get_sample_tasks
     tasks = get_sample_tasks(seed=args.seed_tasks)
     print(f"\n  List Operations Compounding Experiment")
     print(f"  Tasks: {len(tasks)} ({sum(1 for t in tasks if t.difficulty == 1.0)} L1, "
@@ -68,31 +62,33 @@ def main():
     print(f"  Rounds: {rounds}")
     print(f"  Sequential compounding: {args.sequential_compounding or True}")
 
+    defaults = _adapter.config_defaults()
+    env, grammar, drive = _adapter.create_interfaces(seed=args.seed)
+
     config = ExperimentConfig(
         title="List Ops Compounding",
         domain_tag="list_ops",
         tasks=tasks,
-        environment=ListEnv(),
-        grammar=ListGrammar(seed=args.seed),
-        drive=ListDrive(),
+        environment=env, grammar=grammar, drive=drive,
         rounds=rounds,
         beam_width=resolved["beam_width"],
         max_generations=resolved["max_generations"],
-        workers=1,  # sequential for compounding
+        workers=defaults.get("workers", 1),
         seed=args.seed,
-        compute_cap=0,  # no compute cap (fast domain)
+        compute_cap=defaults.get("compute_cap", 0),
         mutations_per_candidate=2,
         crossover_fraction=0.3,
         energy_alpha=1.0,
         energy_beta=0.001,
         solve_threshold=0.001,
-        exhaustive_depth=2,         # only depth 1-2 exhaustive
-        exhaustive_pair_top_k=22,   # all 22 primitives in pair pool
+        exhaustive_depth=defaults.get("exhaustive_depth", 2),
+        exhaustive_pair_top_k=defaults.get("exhaustive_pair_top_k", 22),
         exhaustive_triple_top_k=15,
         sequential_compounding=True,  # always compound for this experiment
         runs_dir=args.runs_dir,
         no_log=args.no_log,
         mode=args.mode,
+        default_cell_size=_adapter.default_cell_size(),
     )
 
     run_experiment(config)

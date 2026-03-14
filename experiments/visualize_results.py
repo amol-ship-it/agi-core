@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core import Program
 from domains.arc import ARCEnv, load_arc_dataset
-from experiments.phase1_arc import find_arc_data
+from domains.arc.dataset import find_arc_data
 
 
 ARC_COLORS = {

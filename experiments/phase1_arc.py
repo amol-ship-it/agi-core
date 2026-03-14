@@ -1,14 +1,10 @@
 """
 ARC-AGI-1 Training & Evaluation.
 
-Thin wrapper around the generic core runner. Provides:
-- ARC dataset loading (auto-detects or uses built-in samples)
-- ARC-specific search tuning (energy_beta, solve_threshold)
-- Train/eval pipeline: train produces a culture file, eval loads it
-- Auto-generated HTML visualization of results
+Thin wrapper around the generic benchmark runner + ARC domain adapter.
 
 Usage:
-    python -m experiments.phase1_arc                      # full pipeline (train → eval)
+    python -m experiments.phase1_arc                      # full pipeline (train -> eval)
     python -m experiments.phase1_arc --mode quick          # fast dev loop (pipeline)
     python -m experiments.phase1_arc --train-only          # train on training set only
     python -m experiments.phase1_arc --eval-only --culture runs/XXX_culture.json
@@ -18,65 +14,23 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime
 
-from core import (
+from common.benchmark import (
     ExperimentConfig, run_experiment, make_parser,
-    resolve_from_preset, PRESETS,
+    resolve_from_preset, PRESETS, run_pipeline,
 )
-from domains.arc import (
-    ARCEnv, ARCGrammar, ARCDrive, make_sample_tasks, load_arc_dataset,
-)
-from .pipeline_common import save_pipeline_results, print_pipeline_summary, pipeline_tee
+from domains.arc.adapter import ARCAdapter
+
+# Backward-compatible re-export used by downstream scripts
+from domains.arc.dataset import find_arc_data  # noqa: F401
 
 
-# =============================================================================
-# ARC dataset auto-detection
-# =============================================================================
-
-ARC_DATA_SEARCH_PATHS = [
-    "data/ARC-AGI/data/{split}",
-    "../ARC-AGI/data/{split}",
-    os.path.expanduser("~/ARC-AGI/data/{split}"),
-    "data/arc-agi/data/{split}",
-]
+_adapter = ARCAdapter(benchmark="arc-agi-1")
 
 
-def find_arc_data(split: str = "training") -> str | None:
-    for pattern in ARC_DATA_SEARCH_PATHS:
-        path = pattern.format(split=split)
-        if os.path.isdir(path):
-            return path
-    return None
-
-
-def _load_tasks(split, data_dir, max_tasks):
-    data_dir = data_dir or find_arc_data(split)
-    if data_dir:
-        print(f"  Loading ARC-AGI {split} tasks from {data_dir}...")
-        tasks = load_arc_dataset(data_dir, max_tasks=max_tasks)
-        print(f"  Loaded {len(tasks)} tasks")
-    elif split == "training":
-        print("  ARC dataset not found. Using built-in sample tasks.")
-        print("    (git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI)")
-        tasks = make_sample_tasks()
-        if max_tasks > 0:
-            tasks = tasks[:max_tasks]
-        print(f"  Created {len(tasks)} sample ARC tasks")
-    else:
-        print(f"  ERROR: {split.capitalize()} data not found. Searched:")
-        for p in ARC_DATA_SEARCH_PATHS:
-            print(f"    {p.format(split=split)}")
-        sys.exit(1)
-    if not tasks:
-        print("  ERROR: No tasks loaded.")
-        sys.exit(1)
-    return tasks
-
-
-def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
-                 culture_path="", save_culture="", timestamp="",
-                 suppress_files=False):
+def _make_config(args, resolved, max_tasks, tasks, timestamp,
+                 *, culture_path="", save_culture="", suppress_files=False,
+                 split_label=""):
     """Build an ExperimentConfig with ARC-specific defaults."""
     compounding = getattr(args, "compounding", False)
     vocabulary = getattr(args, "vocabulary", "full")
@@ -93,10 +47,14 @@ def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
         min_occurrences = 1
         energy_beta = 0.01
 
+    domain_tag = "phase1_arc_train" if split_label == "TRAIN" else (
+        "phase1_arc_eval" if split_label == "EVAL" else "phase1_arc")
+
+    env, grammar, drive = _adapter.create_interfaces(seed=args.seed, vocabulary=vocabulary)
     return ExperimentConfig(
-        title=title, domain_tag=domain_tag, tasks=tasks,
-        environment=ARCEnv(), grammar=ARCGrammar(seed=args.seed, vocabulary=vocabulary),
-        drive=ARCDrive(),
+        title=f"ARC-AGI-1 {split_label}" if split_label else "ARC-AGI-1",
+        domain_tag=domain_tag, tasks=tasks,
+        environment=env, grammar=grammar, drive=drive,
         rounds=rounds, beam_width=resolved["beam_width"],
         max_generations=resolved["max_generations"],
         workers=resolved["workers"], seed=args.seed,
@@ -113,11 +71,13 @@ def _make_config(args, resolved, max_tasks, *, title, domain_tag, tasks,
         runs_dir=args.runs_dir, no_log=args.no_log,
         task_ids=getattr(args, "task_ids", ""), mode=args.mode,
         timestamp=timestamp, suppress_files=suppress_files,
+        split_label=split_label,
+        default_cell_size=_adapter.default_cell_size(),
     )
 
 
 def _try_generate_viz(results_json_path: str) -> list[str]:
-    """Generate HTML visualization from results JSON. Returns list of index paths."""
+    """Generate HTML visualization from results JSON."""
     if not os.path.exists(results_json_path):
         return []
     try:
@@ -129,9 +89,10 @@ def _try_generate_viz(results_json_path: str) -> list[str]:
         return []
 
 
-# =============================================================================
-# Main
-# =============================================================================
+# Keep _load_tasks as backward-compatible function for downstream consumers
+def _load_tasks(split, data_dir, max_tasks):
+    return _adapter.load_tasks(split, data_dir, max_tasks)
+
 
 def main():
     parser = make_parser(
@@ -157,94 +118,38 @@ def main():
             if not args.culture:
                 print("  ERROR: --eval-only requires --culture <path>")
                 sys.exit(1)
-            _run_eval(args, resolved, max_tasks)
+            tasks = _adapter.load_tasks("evaluation", args.data_dir, max_tasks)
+            cfg = _make_config(args, resolved, max_tasks, tasks, "",
+                               culture_path=args.culture, split_label="EVALUATION")
+            result = run_experiment(cfg)
+            for vp in _try_generate_viz(result.results_path):
+                print(f"  Visualization: {vp}")
         elif args.train_only:
-            _run_train(args, resolved, max_tasks)
+            tasks = _adapter.load_tasks("training", args.data_dir, max_tasks)
+            cfg = _make_config(args, resolved, max_tasks, tasks, "",
+                               save_culture=args.save_culture, split_label="TRAINING")
+            result = run_experiment(cfg)
+            for vp in _try_generate_viz(result.results_path):
+                print(f"  Visualization: {vp}")
+            print(f"  Culture saved to: {result.culture_path}")
         else:
-            _run_pipeline(args, resolved, max_tasks)
+            run_pipeline(
+                make_train_config=lambda a, r, m, tasks, ts: _make_config(
+                    a, r, m, tasks, ts, suppress_files=True, split_label="TRAINING"),
+                make_eval_config=lambda a, r, m, tasks, cp, ts: _make_config(
+                    a, r, m, tasks, ts, culture_path=cp, suppress_files=True,
+                    split_label="EVALUATION"),
+                load_train_tasks=lambda m: _adapter.load_tasks("training", args.data_dir, m),
+                load_eval_tasks=lambda m: _adapter.load_tasks("evaluation", args.data_dir, m),
+                args=args, resolved=resolved, max_tasks=max_tasks,
+                pipeline_prefix="phase1_arc_pipeline",
+                pipeline_title="ARC-AGI-1 FULL PIPELINE (Train -> Eval)",
+                domain_name="phase1_arc",
+                try_generate_viz=_try_generate_viz,
+            )
     except KeyboardInterrupt:
         print("\n\nAborted by user.\n")
         sys.exit(1)
-
-
-def _run_train(args, resolved, max_tasks):
-    tasks = _load_tasks("training", args.data_dir, max_tasks)
-    cfg = _make_config(args, resolved, max_tasks,
-                       title="ARC-AGI-1 TRAINING",
-                       domain_tag="phase1_arc_train", tasks=tasks,
-                       save_culture=args.save_culture)
-    result = run_experiment(cfg)
-    viz_paths = _try_generate_viz(result.results_path)
-    for vp in viz_paths:
-        print(f"  Visualization: {vp}")
-    print(f"  Culture saved to: {result.culture_path}")
-
-
-def _run_eval(args, resolved, max_tasks):
-    tasks = _load_tasks("evaluation", args.data_dir, max_tasks)
-    cfg = _make_config(args, resolved, max_tasks,
-                       title="ARC-AGI-1 EVALUATION",
-                       domain_tag="phase1_arc_eval", tasks=tasks,
-                       culture_path=args.culture)
-    result = run_experiment(cfg)
-    viz_paths = _try_generate_viz(result.results_path)
-    for vp in viz_paths:
-        print(f"  Visualization: {vp}")
-
-
-def _run_pipeline(args, resolved, max_tasks):
-    shared_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    prefix = f"phase1_arc_pipeline_{shared_ts}"
-    log_path = os.path.join(args.runs_dir, f"{prefix}.log")
-    os.makedirs(args.runs_dir, exist_ok=True)
-
-    with pipeline_tee(log_path):
-        print("=" * 72)
-        print("  PIPELINE MODE: Train → Save Culture → Evaluate")
-        print("=" * 72)
-        print()
-
-        # Step 1: Train
-        print("  STEP 1/2: Training...")
-        print()
-        train_tasks = _load_tasks("training", args.data_dir, max_tasks)
-        train_cfg = _make_config(args, resolved, max_tasks,
-                                 title="ARC-AGI-1 TRAINING",
-                                 domain_tag="phase1_arc_train", tasks=train_tasks,
-                                 timestamp=shared_ts, suppress_files=True)
-        train_result = run_experiment(train_cfg)
-        print(f"\n  Culture file: {train_result.culture_path}")
-
-        # Step 2: Evaluate
-        print()
-        print("  STEP 2/2: Evaluating with learned culture...")
-        print()
-        eval_tasks = _load_tasks("evaluation", args.data_dir, max_tasks)
-        eval_cfg = _make_config(args, resolved, max_tasks,
-                                title="ARC-AGI-1 EVALUATION",
-                                domain_tag="phase1_arc_eval", tasks=eval_tasks,
-                                culture_path=train_result.culture_path,
-                                timestamp=shared_ts, suppress_files=True)
-        eval_result = run_experiment(eval_cfg)
-
-        # Save combined pipeline artifacts
-        json_path, jsonl_path = save_pipeline_results(
-            train_result, eval_result,
-            prefix=prefix, runs_dir=args.runs_dir,
-            title="ARC-AGI-1 FULL PIPELINE (Train → Eval)",
-            domain="phase1_arc", args=args, resolved=resolved,
-        )
-
-        # Generate HTML visualization from pipeline results
-        viz_paths = _try_generate_viz(json_path)
-
-        print_pipeline_summary(
-            train_result, eval_result,
-            title="PIPELINE SUMMARY", args=args,
-            json_path=json_path, jsonl_path=jsonl_path,
-            log_path=log_path,
-            viz_paths=viz_paths,
-        )
 
 
 if __name__ == "__main__":

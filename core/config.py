@@ -41,8 +41,12 @@ class SearchConfig:
 
     # Per-task eval budget (0 = unlimited). When > 0, expensive phases
     # (beam search, near-miss refinement) are skipped once n_evals exceeds
-    # this. Set by runner.py using cell-normalized compute cap.
+    # this. Set by the benchmark runner using cell-normalized compute cap.
     eval_budget: int = 0
+
+    # Base cell size for per-task compute cap normalization.
+    # 800 = median ARC grid size. Domains with different scale should override.
+    eval_budget_base_cells: int = 800
 
 
 @dataclass

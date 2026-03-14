@@ -427,3 +427,77 @@ class Memory(ABC):
     def load(self, path: str) -> None:
         """Load memory from disk."""
         ...
+
+
+# =============================================================================
+# Domain Adapter — plug-in interface for benchmark infrastructure
+# =============================================================================
+
+class DomainAdapter(ABC):
+    """Adapter interface for plugging a domain into the benchmark infrastructure.
+
+    Each domain implements this to provide:
+    - Domain identification (name)
+    - Interface construction (environment, grammar, drive)
+    - Task loading (from files or generators)
+    - Domain-specific configuration defaults
+
+    The core loop never imports domain code — domains implement this interface.
+    The benchmark infrastructure (common/) uses it to orchestrate experiments.
+    """
+
+    @abstractmethod
+    def name(self) -> str:
+        """Short identifier for this domain (e.g. 'arc-agi-1', 'zork')."""
+        ...
+
+    @abstractmethod
+    def create_interfaces(self, seed: int = 42, **kwargs) -> tuple[Environment, Grammar, DriveSignal]:
+        """Create the 3 pluggable interfaces for this domain.
+
+        Args:
+            seed: random seed for reproducibility
+            **kwargs: domain-specific options (e.g. vocabulary='full')
+
+        Returns:
+            (environment, grammar, drive) tuple
+        """
+        ...
+
+    @abstractmethod
+    def load_tasks(self, split: str, data_dir: Optional[str] = None,
+                   max_tasks: int = 0) -> list[Task]:
+        """Load tasks for the given split.
+
+        Args:
+            split: 'training' or 'evaluation'
+            data_dir: override data directory (None = auto-detect)
+            max_tasks: limit number of tasks (0 = all)
+
+        Returns:
+            list of Task objects
+        """
+        ...
+
+    def config_defaults(self) -> dict:
+        """Return domain-specific ExperimentConfig overrides.
+
+        These are merged into ExperimentConfig construction, with CLI
+        args taking precedence. Typical overrides: energy_beta,
+        solve_threshold, exhaustive_depth, workers.
+        """
+        return {}
+
+    def default_cell_size(self) -> int:
+        """Default cell size for compute cap normalization.
+
+        800 = median ARC grid size. Override for non-grid domains.
+        """
+        return 800
+
+    def post_run_hooks(self, result) -> list[str]:
+        """Run after experiment completes. Returns list of artifact paths.
+
+        E.g., generate HTML visualization. The `result` is an ExperimentResult.
+        """
+        return []

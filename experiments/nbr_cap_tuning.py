@@ -13,7 +13,7 @@ import os
 import sys
 from datetime import datetime
 
-from core import (
+from common.benchmark import (
     ExperimentConfig,
     run_experiment,
     make_parser,
@@ -21,7 +21,7 @@ from core import (
     PRESETS,
 )
 from domains.arc import ARCEnv, ARCGrammar, ARCDrive, load_arc_dataset
-from experiments.phase1_arc import find_arc_data
+from domains.arc.dataset import find_arc_data
 
 
 def main():

@@ -2233,4 +2233,31 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 **Assessment:** Neutral at 400-task scale. The experiments add composition strategies that don't yet trigger on enough tasks to move aggregate numbers. They provide infrastructure for future gains when combined with additional primitives or when specific tasks are targeted.
 
 ---
+
+## Decision 108 — Refactor to Domain Adapter Architecture (2026-03-14)
+
+**Problem:** Pipeline logic duplicated ~80% between phase1_arc.py and phase2_arc.py. `ExperimentConfig` construction was boilerplate-heavy. `core/runner.py` contained ARC-specific constants (`DEFAULT_CELLS=800`). The core architecture invariant (core/ never imports domain code) was violated by runner.py living in core/.
+
+**Decision:** Introduce a three-layer architecture:
+- **`core/`** = pure algorithm (types, interfaces, learner, memory, config, results, metrics)
+- **`common/`** = benchmark infrastructure (runner, pipeline, CLI, progress tracking, presets)
+- **`domains/*/adapter.py`** = DomainAdapter implementations
+
+**Key changes:**
+1. Moved `core/runner.py` → `common/benchmark.py` (997 lines of experiment infrastructure)
+2. Absorbed `experiments/pipeline_common.py` into `common/benchmark.py`
+3. Added `DomainAdapter` ABC to `core/interfaces.py` (name, create_interfaces, load_tasks, config_defaults, default_cell_size, post_run_hooks)
+4. Added `split_label` and `default_cell_size` fields to `ExperimentConfig`
+5. Added `eval_budget_base_cells` to `SearchConfig` (replaces hardcoded `DEFAULT_CELLS = 800`)
+6. Created adapters: `ARCAdapter` (parameterized for AGI-1/2), `ListOpsAdapter`, `ZorkAdapter`
+7. Moved `find_arc_data()` from experiment script to `domains/arc/dataset.py`
+8. Added generic `run_pipeline()` to `common/benchmark.py`
+9. Created unified CLI: `python -m common --domain arc-agi-1 --mode quick`
+10. Simplified experiment scripts to thin wrappers using adapters
+
+**Backward compatibility:** All existing import paths preserved via lazy re-exports in `core/runner.py` and `core/__init__.py`. `from core import ExperimentConfig` and `from core.runner import PRESETS` still work.
+
+**Tests:** 520 original tests pass unchanged + 33 new adapter compliance/backward-compat tests = 553 total.
+
+---
 *This document will be updated with each new session and major decision.*

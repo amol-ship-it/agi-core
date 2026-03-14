@@ -1,11 +1,12 @@
 """
-ARC-AGI dataset loading and sample tasks.
+ARC-AGI dataset loading, sample tasks, and data directory auto-detection.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 
 from core import Task
 from .primitives import (
@@ -191,4 +192,41 @@ def make_sample_tasks() -> list[Task]:
     ))
 
     return tasks
+
+
+# =============================================================================
+# Data directory auto-detection
+# =============================================================================
+
+ARC1_DATA_SEARCH_PATHS = [
+    "data/ARC-AGI/data/{split}",
+    "../ARC-AGI/data/{split}",
+    os.path.expanduser("~/ARC-AGI/data/{split}"),
+    "data/arc-agi/data/{split}",
+]
+
+ARC2_DATA_SEARCH_PATHS = [
+    "data/ARC-AGI-2/data/{split}",
+    "../ARC-AGI-2/data/{split}",
+    os.path.expanduser("~/ARC-AGI-2/data/{split}"),
+    "data/arc-agi-2/data/{split}",
+]
+
+
+def find_arc_data(split: str = "training", benchmark: str = "arc-agi-1") -> str | None:
+    """Auto-detect ARC data directory.
+
+    Args:
+        split: 'training' or 'evaluation'
+        benchmark: 'arc-agi-1' or 'arc-agi-2'
+
+    Returns:
+        Path to data directory, or None if not found.
+    """
+    paths = ARC2_DATA_SEARCH_PATHS if benchmark == "arc-agi-2" else ARC1_DATA_SEARCH_PATHS
+    for pattern in paths:
+        path = pattern.format(split=split)
+        if os.path.isdir(path):
+            return path
+    return None
 

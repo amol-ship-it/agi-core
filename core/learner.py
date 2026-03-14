@@ -211,11 +211,11 @@ class Learner:
         # Budget is in "ops" = depth-weighted evaluations × cell factor.
         # A depth-2 eval costs 2 ops (applies 2 primitives), depth-3 costs 3.
         # This makes the budget a true proxy for compute, not just eval count.
-        DEFAULT_CELLS = 800
+        base_cells = cfg.eval_budget_base_cells
         cells = self._avg_cells(task)
         if cfg.eval_budget > 0:
             # Scale inversely with grid size: larger grids get fewer evals.
-            eval_budget = max(cfg.eval_budget * DEFAULT_CELLS // max(cells, 1), 500)
+            eval_budget = max(cfg.eval_budget * base_cells // max(cells, 1), 500)
             eval_budget = min(eval_budget, cfg.eval_budget * 4)  # cap at 4x base
         else:
             eval_budget = 0  # unlimited

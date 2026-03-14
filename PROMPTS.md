@@ -380,4 +380,12 @@ Results: Part A completed cleanly (all tests pass, no regression). Part B: all 4
 
 ---
 
+### Prompt 58 (2026-03-14)
+
+> Implement the following plan: Refactor to Domain Adapter Architecture
+
+[User provided a detailed 9-step plan to refactor the codebase into a three-layer architecture: core/ (pure algorithm), common/ (benchmark infrastructure), and domains/*/adapter.py (DomainAdapter implementations). Key changes: moved runner.py to common/benchmark.py, added DomainAdapter ABC, created adapters for ARC/ListOps/Zork, added unified CLI entry point, simplified experiment scripts, preserved all backward-compatible import paths. Result: 553 tests pass (520 original + 33 new).]
+
+---
+
 *This document will be updated with each new session.*

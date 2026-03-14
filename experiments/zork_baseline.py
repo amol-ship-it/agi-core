@@ -11,19 +11,14 @@ Usage:
 
 from __future__ import annotations
 
-from core import (
-    ExperimentConfig,
-    run_experiment,
-    make_parser,
-    resolve_from_preset,
-    PRESETS,
+from common.benchmark import (
+    ExperimentConfig, run_experiment, make_parser,
+    resolve_from_preset, PRESETS,
 )
-from domains.zork import (
-    ZorkEnv,
-    ZorkGrammar,
-    ZorkDrive,
-    get_sample_tasks,
-)
+from domains.zork.adapter import ZorkAdapter
+
+
+_adapter = ZorkAdapter()
 
 
 def main():
@@ -36,35 +31,37 @@ def main():
     preset = PRESETS[args.mode]
     resolved = resolve_from_preset(args, preset)
 
-    tasks = get_sample_tasks()
+    tasks = _adapter.load_tasks("training")
     print(f"\n  Zork Baseline Experiment")
     print(f"  Tasks: {len(tasks)}")
+
+    defaults = _adapter.config_defaults()
+    env, grammar, drive = _adapter.create_interfaces(seed=args.seed)
 
     config = ExperimentConfig(
         title="Zork Baseline",
         domain_tag="zork",
         tasks=tasks,
-        environment=ZorkEnv(),
-        grammar=ZorkGrammar(seed=args.seed),
-        drive=ZorkDrive(),
+        environment=env, grammar=grammar, drive=drive,
         rounds=resolved["rounds"],
         beam_width=resolved["beam_width"],
         max_generations=resolved["max_generations"],
-        workers=1,
+        workers=defaults.get("workers", 1),
         seed=args.seed,
-        compute_cap=0,
+        compute_cap=defaults.get("compute_cap", 0),
         mutations_per_candidate=2,
         crossover_fraction=0.3,
         energy_alpha=1.0,
         energy_beta=0.001,
         solve_threshold=0.001,
-        exhaustive_depth=args.exhaustive_depth if hasattr(args, 'exhaustive_depth') and args.exhaustive_depth is not None else 2,
-        exhaustive_pair_top_k=30,
+        exhaustive_depth=args.exhaustive_depth if hasattr(args, 'exhaustive_depth') and args.exhaustive_depth is not None else defaults.get("exhaustive_depth", 2),
+        exhaustive_pair_top_k=defaults.get("exhaustive_pair_top_k", 30),
         exhaustive_triple_top_k=15,
         sequential_compounding=getattr(args, 'sequential_compounding', False),
         runs_dir=args.runs_dir,
         no_log=args.no_log,
         mode=args.mode,
+        default_cell_size=_adapter.default_cell_size(),
     )
 
     run_experiment(config)
