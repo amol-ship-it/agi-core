@@ -2260,4 +2260,31 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 **Tests:** 520 original tests pass unchanged + 33 new adapter compliance/backward-compat tests = 553 total.
 
 ---
+
+## Decision 100 — Atomic Primitive Decomposition (2026-03-14)
+
+**Problem:** 95% of ARC solves are depth-1 because the 180 "full" primitives each embed 2-5 conceptual steps. The sleep phase sees `Program(root="mirror_objects_h")` as a leaf with no sub-tree to extract. The compounding thesis is unvalidated.
+
+**Solution:** New `vocabulary="atomic"` mode with ~27 truly atomic operations (one visual concept each) + 3 compositional combinators that embed perception:
+- `for_each_object(inner_fn)` — find objects, apply inner per-object, reassemble
+- `apply_to_enclosed(inner_fn)` — find enclosed bg regions, transform each
+- `conditional_objects(pred, fn_true, fn_false)` — per-object if/else
+
+**Architecture:** No changes to `core/`. Atomic primitives live in `domains/arc/atomic_primitives.py`. Grammar selects vocabulary branch. Combinators wrap inner programs with perception from `objects.py`.
+
+**Validation (20 tasks, quick mode):**
+
+| Vocabulary | Solved | Depth distribution |
+|-----------|--------|--------------------|
+| full | 7/20 | All depth-0 |
+| minimal | 6/20 | 1x depth-1 |
+| atomic | 3/20 | 1x depth-3, near-miss depth-1 `dilate(dilate)` |
+
+- Atomic solves fewer (expected — 22 base prims vs 180). But the **depth-3 solve** `color_remap(swap(swap(swap)))` and depth-1 near-miss `dilate(dilate)` validate the composition thesis.
+- Cross-reference strategies (halves, cell propagation) still work — they bypass vocabulary.
+- Full and minimal vocabularies unaffected (622 tests all pass).
+
+**Files:** `domains/arc/atomic_primitives.py` (new, ~340 lines), `domains/arc/grammar.py` (+20 lines), `domains/arc/adapter.py` (+2 lines), `domains/arc/primitives.py` (+8 lines), `common/benchmark.py` (+1 line), `tests/test_atomic_primitives.py` (new, 65 tests).
+
+---
 *This document will be updated with each new session and major decision.*
