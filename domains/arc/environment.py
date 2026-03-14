@@ -817,6 +817,11 @@ class ARCEnv(Environment):
             if prim.arity == 0:
                 if isinstance(prim.fn, Program):
                     return self._eval_tree(prim.fn, grid)
+                elif callable(prim.fn):
+                    result = prim.fn(grid)
+                    if not isinstance(result, list) or not result:
+                        return grid
+                    return result
                 return grid
             elif prim.arity == 1:
                 child_grid = self._eval_tree(node.children[0], grid) if node.children else grid

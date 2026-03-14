@@ -2287,4 +2287,46 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 **Files:** `domains/arc/atomic_primitives.py` (new, ~340 lines), `domains/arc/grammar.py` (+20 lines), `domains/arc/adapter.py` (+2 lines), `domains/arc/primitives.py` (+8 lines), `common/benchmark.py` (+1 line), `tests/test_atomic_primitives.py` (new, 65 tests).
 
 ---
+
+### Decision 101: Compounding via Approximability — Four Experiments
+
+**Date:** 2026-03-14
+**Context:** After Decision 100 (atomic vocabulary), analysis showed the compounding loop was broken on ARC: 0 library entries extracted, 0 reuse, flat solve rate. Root causes identified and fixed.
+
+**Changes (4 experiments, single commit):**
+
+**Exp 1 — Fix arity-0 callable bug** (`domains/arc/environment.py:817-820`):
+- Parameterized prims (`param_role_recolor`, `param_rank_recolor`, `param_fill_enclosed`) have callable `fn` at arity 0, but `_eval_tree` only handled `isinstance(fn, Program)`. All callable arity-0 prims were silently no-ops.
+- Fix: add `elif callable(prim.fn)` branch to actually call the function.
+
+**Exp 2 — Near-miss sleep** (`core/memory.py`, `core/learner.py`, `core/config.py`):
+- Sleep only read `memory.get_solutions()` — perfectly-solved programs, 95% depth-1. No subtrees to extract.
+- Added `store_near_miss()` / `get_near_misses()` to `InMemoryStore` and `Memory` interface.
+- Near-misses stored from `_make_unsolved_result` and `_wake_parallel` merge when `prediction_error <= near_miss_threshold` (default 0.15).
+- Sleep now extracts subtrees from both solutions (weight 1.0) and near-misses (weight `(1-error) * near_miss_weight`).
+- Transition matrix also trained on near-miss programs (10-50x more training data).
+- Culture file serialization includes near-misses.
+- New config: `SleepConfig.near_miss_threshold=0.15`, `SleepConfig.near_miss_weight=0.5`.
+
+**Exp 3 — Atomic + compounding** (no code changes, experiment with existing `--vocabulary atomic --rounds 3`).
+
+**Exp 4 — Kill dead phases, reallocate compute**:
+- Removed `_phase_fixed_point` from `_wake_phases()` pipeline (0 solves ever).
+- Method still exists for re-enablement.
+- Widened `exhaustive_pair_top_k` from 40→50 to use freed compute.
+
+**Verification:** 631 tests pass. Quick 20-task run: 7/20 solved (matching baseline), 7 near-misses captured in culture file.
+
+**Files changed:**
+- `domains/arc/environment.py` — arity-0 callable fix
+- `core/memory.py` — near-miss storage + serialization
+- `core/interfaces.py` — Memory interface near-miss methods
+- `core/config.py` — SleepConfig near-miss params, exhaustive_pair_top_k 40→50
+- `core/learner.py` — near-miss storage in wake, near-miss extraction in sleep, remove fixed-point from pipeline
+- `tests/test_memory.py` — 7 new near-miss tests
+- `tests/test_arc.py` — 2 new arity-0 callable tests
+- `tests/test_compounding.py` — 1 new near-miss sleep test
+- `tests/test_exhaustive_enum.py` — updated pair_top_k default
+
+---
 *This document will be updated with each new session and major decision.*

@@ -274,7 +274,6 @@ class Learner:
             self._phase_grammar_decomposition,
             self._phase_conditional_search,
             self._phase_near_miss_refinement,
-            self._phase_fixed_point,
             self._phase_color_fix,
             self._phase_beam_search,
             self._phase_post_beam_color_fix,
@@ -568,6 +567,9 @@ class Learner:
                 self.memory.record_episode(
                     ctx.task.task_id, ctx.task.train_examples,
                     ctx.best_so_far.program, ctx.best_so_far.energy)
+                # Store near-miss for sleep: programs that almost solved
+                if ctx.best_so_far.prediction_error <= self.sleep_cfg.near_miss_threshold:
+                    self.memory.store_near_miss(ctx.task.task_id, ctx.best_so_far)
         front = self._extract_pareto_front(ctx.pareto)
         wall = time.time() - ctx.t0
         train_preds, test_preds = self._compute_predictions(ctx.best_so_far, ctx.task)
@@ -797,9 +799,9 @@ class Learner:
         """
         Consolidation phase — the "dream" step.
 
-        1. Collect all solved programs
-        2. Build transition matrix P(child_op | parent_op) from solutions
-        3. Extract sub-trees that recur across multiple solutions
+        1. Collect all solved programs AND near-misses
+        2. Build transition matrix P(child_op | parent_op) from both
+        3. Extract sub-trees from both, quality-weighting near-misses
         4. Score by compression value with diversity bonus
         5. Add the best as new named primitives to the library
         6. Decay old entries and prune dead ones
@@ -808,46 +810,61 @@ class Learner:
         cfg = self.sleep_cfg
 
         solutions = self.memory.get_solutions()
+        near_misses = self.memory.get_near_misses(max_error=cfg.near_miss_threshold)
         lib_before = len(self.memory.get_library())
 
-        # 1. Build transition matrix from ALL solved programs
-        #    This is the DreamCoder insight: learn which compositions work
+        # 1. Build transition matrix from ALL solved AND near-miss programs
+        #    Near-misses give 10-50x more training data for composition priors.
         for task_id, scored in solutions.items():
+            self._transition_matrix.observe_program(scored.program)
+        for task_id, scored in near_misses.items():
             self._transition_matrix.observe_program(scored.program)
 
         logger.info(
             f"  [sleep] Transition matrix: {self._transition_matrix.size} transitions "
-            f"from {len(solutions)} solved programs"
+            f"from {len(solutions)} solved + {len(near_misses)} near-miss programs"
         )
 
-        # 2. Extract all sub-trees from all solutions
-        subtree_counts: dict[str, list[tuple[Program, str]]] = {}
+        # 2. Extract all sub-trees from solutions (weight 1.0) and
+        #    near-misses (weight proportional to quality)
+        subtree_counts: dict[str, list[tuple[Program, str, float]]] = {}
+
         for task_id, scored in solutions.items():
             for subtree in self._enumerate_subtrees(scored.program):
                 key = repr(subtree)
                 if key not in subtree_counts:
                     subtree_counts[key] = []
-                subtree_counts[key].append((subtree, task_id))
+                subtree_counts[key].append((subtree, task_id, 1.0))
 
-        # Build a map of task_id → solution root op for diversity scoring
+        for task_id, scored in near_misses.items():
+            quality = (1.0 - scored.prediction_error) * cfg.near_miss_weight
+            for subtree in self._enumerate_subtrees(scored.program):
+                key = repr(subtree)
+                if key not in subtree_counts:
+                    subtree_counts[key] = []
+                subtree_counts[key].append((subtree, task_id, quality))
+
+        # Build a map of task_id → program root op for diversity scoring
         task_roots = {tid: scored.program.root for tid, scored in solutions.items()}
+        for tid, scored in near_misses.items():
+            if tid not in task_roots:
+                task_roots[tid] = scored.program.root
 
         # 3. Filter: must appear in >= min_occurrences different tasks,
         #    must be >= min_size nodes (no trivial single-node entries)
         candidates = []
         for key, occurrences in subtree_counts.items():
-            task_ids = sorted(set(tid for _, tid in occurrences))
+            task_ids = sorted(set(tid for _, tid, _ in occurrences))
             subtree = occurrences[0][0]
             if len(task_ids) >= cfg.min_occurrences and subtree.size >= cfg.min_size:
-                # Diversity bonus: reward subtrees that appear across solutions
+                # Diversity bonus: reward subtrees that appear across programs
                 # with different root operations (structurally diverse contexts).
-                # A subtree used in rotate(crop(x)) AND fill(crop(x)) is more
-                # general than one only in rotate(crop(x)) variants.
                 unique_roots = len(set(task_roots.get(tid, "") for tid in task_ids))
                 diversity_bonus = 1.0 + 0.5 * math.log(max(unique_roots, 1))
 
-                # Usefulness = tasks_used × log(size+1) × diversity_bonus
-                usefulness = len(task_ids) * math.log(subtree.size + 1) * diversity_bonus
+                # Quality-weighted usefulness: sum quality weights across tasks
+                total_quality = sum(w for _, _, w in occurrences)
+                usefulness = total_quality * math.log(subtree.size + 1) * diversity_bonus
                 candidates.append((subtree, task_ids, usefulness))
 
         # 4. Sort by usefulness, add top entries to library
@@ -894,7 +911,8 @@ class Learner:
         wall = time.time() - t0
 
         logger.info(
-            f"  [sleep] Extracted {len(new_entries)} new abstractions, "
+            f"  [sleep] Extracted {len(new_entries)} new abstractions "
+            f"(from {len(solutions)} solved + {len(near_misses)} near-misses), "
             f"pruned {pruned} dead entries. "
             f"Library: {lib_before} → {lib_after}. Time: {wall:.1f}s"
         )
@@ -1202,6 +1220,8 @@ class Learner:
                 if wr.train_solved:
                     self.memory.store_solution(wr.task_id, wr.best)
                     self._credit_library_usage(wr.best.program)
+                elif wr.best.prediction_error <= self.sleep_cfg.near_miss_threshold:
+                    self.memory.store_near_miss(wr.task_id, wr.best)
 
         return wake_results
 

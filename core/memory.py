@@ -51,6 +51,7 @@ class InMemoryStore(Memory):
         self._episodes: list[dict] = []
         self._library: list[LibraryEntry] = []
         self._solutions: dict[str, ScoredProgram] = {}
+        self._near_misses: dict[str, ScoredProgram] = {}
 
     # --- Episodic ---
 
@@ -101,6 +102,26 @@ class InMemoryStore(Memory):
     def get_solutions(self) -> dict[str, ScoredProgram]:
         return dict(self._solutions)
 
+    # --- Near-misses ---
+
+    def store_near_miss(self, task_id: str, scored: ScoredProgram) -> None:
+        """Store a near-miss program if it's better than any existing one for that task.
+
+        Near-misses are programs that almost solved a task (low prediction_error
+        but above solve_threshold). Sleep uses them to extract subtrees from
+        richer compositional programs that perfect solutions lack.
+        """
+        existing = self._near_misses.get(task_id)
+        if existing is None or scored.prediction_error < existing.prediction_error:
+            self._near_misses[task_id] = scored
+
+    def get_near_misses(self, max_error: float = 0.15) -> dict[str, ScoredProgram]:
+        """Return near-misses filtered by max prediction error."""
+        return {
+            tid: sp for tid, sp in self._near_misses.items()
+            if sp.prediction_error <= max_error
+        }
+
     # --- Persistence (culture file) ---
 
     def save_culture(self, path: str) -> None:
@@ -131,12 +152,23 @@ class InMemoryStore(Memory):
                 }
                 for task_id, sp in self._solutions.items()
             },
+            "near_misses": {
+                task_id: {
+                    "program": _program_to_dict(sp.program),
+                    "energy": sp.energy,
+                    "prediction_error": sp.prediction_error,
+                }
+                for task_id, sp in self._near_misses.items()
+            },
             "solutions_count": len(self._solutions),
+            "near_misses_count": len(self._near_misses),
             "library_count": len(self._library),
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
-        logger.info(f"Culture saved to {path} ({len(self._library)} library, {len(self._solutions)} solutions)")
+        logger.info(
+            f"Culture saved to {path} ({len(self._library)} library, "
+            f"{len(self._solutions)} solutions, {len(self._near_misses)} near-misses)")
 
     def load_culture(self, path: str) -> None:
         """
@@ -173,7 +205,20 @@ class InMemoryStore(Memory):
             )
             self._solutions[task_id] = sp
 
+        # Reconstruct near-misses
+        for task_id, nm_data in data.get("near_misses", {}).items():
+            program = _program_from_dict(nm_data["program"])
+            sp = ScoredProgram(
+                program=program,
+                energy=nm_data.get("energy", 0.0),
+                prediction_error=nm_data.get("prediction_error", 0.0),
+                complexity_cost=float(program.size),
+                task_id=task_id,
+            )
+            self._near_misses[task_id] = sp
+
         logger.info(
             f"Culture loaded from {path} "
-            f"({len(self._library)} library, {len(self._solutions)} solutions)")
+            f"({len(self._library)} library, {len(self._solutions)} solutions, "
+            f"{len(self._near_misses)} near-misses)")
 

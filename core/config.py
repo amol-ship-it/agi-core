@@ -34,7 +34,7 @@ class SearchConfig:
     # Pair exhaustion: top-K singles (by individual score) + essential structural
     # concepts form the pair pool. Both steps drawn from this pool → K² combos.
     # Wider K catches solutions where the first step scores low individually.
-    exhaustive_pair_top_k: int = 40
+    exhaustive_pair_top_k: int = 50
     # Triple exhaustion: top-K singles + essential concepts → K³ combos.
     # Smaller K (15) keeps cost manageable: ~15% of ARC needs exactly 3 steps.
     exhaustive_triple_top_k: int = 15
@@ -56,6 +56,10 @@ class SleepConfig:
     min_size: int = 2             # sub-tree must have >= N nodes
     max_library_size: int = 500   # cap on total library entries
     usefulness_decay: float = 0.95  # decay old entries each sleep cycle
+    # Near-miss programs: not perfectly solved but close. Used by sleep
+    # to extract subtrees from richer compositional programs.
+    near_miss_threshold: float = 0.15  # max prediction_error to store
+    near_miss_weight: float = 0.5      # quality weight for near-miss subtrees
 
 
 @dataclass

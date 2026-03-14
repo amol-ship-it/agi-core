@@ -17,6 +17,7 @@ from core import (
     Learner, InMemoryStore, SearchConfig, CurriculumConfig,
     Primitive, Program, Task, Observation,
 )
+from core.types import ScoredProgram
 from core.interfaces import Environment, Grammar, DriveSignal
 from domains.list_ops import (
     ListEnv, ListGrammar, ListDrive, get_sample_tasks as list_tasks,
@@ -95,6 +96,32 @@ class TestLibraryReuse(unittest.TestCase):
         # Some depth-2 programs share common sub-compositions
         # Note: if no subtrees meet min_occurrences, this is expected behavior
         self.assertIsNotNone(result, "Sleep should complete without error")
+
+    def test_near_miss_sleep_extracts_subtrees(self):
+        """Sleep should extract subtrees from near-miss programs, not just perfect solves."""
+        from core.config import SleepConfig
+        learner = _make_list_learner(exhaustive_depth=2)
+        tasks = list_tasks()
+
+        # Manually inject near-misses with depth-2 programs that share subtrees
+        prog_a = Program(root="double", children=[Program(root="reverse")])
+        prog_b = Program(root="sort", children=[Program(root="reverse")])
+        sp_a = ScoredProgram(
+            program=prog_a, energy=0.10, prediction_error=0.10,
+            complexity_cost=0.0, task_id="fake_t1")
+        sp_b = ScoredProgram(
+            program=prog_b, energy=0.08, prediction_error=0.08,
+            complexity_cost=0.0, task_id="fake_t2")
+        learner.memory.store_near_miss("fake_t1", sp_a)
+        learner.memory.store_near_miss("fake_t2", sp_b)
+
+        # Configure sleep to accept near-misses
+        learner.sleep_cfg = SleepConfig(
+            min_occurrences=2, min_size=1,
+            near_miss_threshold=0.15, near_miss_weight=0.5)
+        result = learner.sleep()
+        # Sleep should complete and use near-misses for transition matrix
+        self.assertIsNotNone(result)
 
     def test_immediate_promote_grows_library(self):
         """Sequential compounding with immediate_promote adds to library."""

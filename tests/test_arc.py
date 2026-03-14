@@ -291,6 +291,34 @@ class TestARCEnvironment(unittest.TestCase):
             result = env.execute(prog, grid)
             self.assertEqual(result, grid)
 
+    def test_execute_callable_arity0_primitive(self):
+        """Arity-0 primitives with callable fn (not Program) should execute the fn."""
+        from core.types import Primitive
+        env = ARCEnv()
+        # Create a callable arity-0 prim that rotates 90 degrees
+        def my_transform(grid):
+            return [list(row) for row in zip(*grid[::-1])]
+        prim = Primitive(name="test_callable_arity0", arity=0, fn=my_transform)
+        env.register_primitive(prim)
+        prog = Program(root="test_callable_arity0")
+        grid = [[1, 2], [3, 4]]
+        result = env.execute(prog, grid)
+        expected = [[3, 1], [4, 2]]
+        self.assertEqual(result, expected)
+
+    def test_execute_callable_arity0_bad_return(self):
+        """Callable arity-0 prim returning non-grid should fall back to input."""
+        from core.types import Primitive
+        env = ARCEnv()
+        def bad_fn(grid):
+            return None
+        prim = Primitive(name="test_bad_arity0", arity=0, fn=bad_fn)
+        env.register_primitive(prim)
+        prog = Program(root="test_bad_arity0")
+        grid = [[1, 2], [3, 4]]
+        result = env.execute(prog, grid)
+        self.assertEqual(result, grid)
+
     def test_execute_primitive_that_crashes(self):
         """Exception in primitive should return input grid."""
         env = ARCEnv()

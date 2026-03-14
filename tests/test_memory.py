@@ -117,5 +117,69 @@ class TestInMemoryStoreSolutions(unittest.TestCase):
         self.assertEqual(len(store.get_solutions()), 1)
 
 
+class TestInMemoryStoreNearMisses(unittest.TestCase):
+
+    def _sp(self, root="x", error=0.10):
+        return ScoredProgram(
+            program=Program(root=root),
+            energy=error, prediction_error=error, complexity_cost=0.0,
+        )
+
+    def test_store_and_get(self):
+        store = InMemoryStore()
+        store.store_near_miss("t1", self._sp(error=0.10))
+        nms = store.get_near_misses(max_error=0.15)
+        self.assertIn("t1", nms)
+        self.assertAlmostEqual(nms["t1"].prediction_error, 0.10)
+
+    def test_keeps_best_near_miss(self):
+        store = InMemoryStore()
+        store.store_near_miss("t1", self._sp(error=0.10))
+        store.store_near_miss("t1", self._sp(root="y", error=0.05))
+        nms = store.get_near_misses()
+        self.assertEqual(nms["t1"].program.root, "y")  # better one kept
+
+    def test_does_not_overwrite_with_worse(self):
+        store = InMemoryStore()
+        store.store_near_miss("t1", self._sp(error=0.05))
+        store.store_near_miss("t1", self._sp(root="y", error=0.10))
+        nms = store.get_near_misses()
+        self.assertEqual(nms["t1"].program.root, "x")  # original kept
+
+    def test_filters_by_max_error(self):
+        store = InMemoryStore()
+        store.store_near_miss("t1", self._sp(error=0.05))
+        store.store_near_miss("t2", self._sp(error=0.20))
+        nms = store.get_near_misses(max_error=0.15)
+        self.assertIn("t1", nms)
+        self.assertNotIn("t2", nms)
+
+    def test_empty_by_default(self):
+        store = InMemoryStore()
+        self.assertEqual(store.get_near_misses(), {})
+
+    def test_culture_round_trip(self):
+        """Near-misses survive save/load cycle."""
+        import json
+        import tempfile
+        import os
+
+        store = InMemoryStore()
+        store.store_near_miss("t1", self._sp(root="crop_to_nonzero", error=0.08))
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            store.save_culture(path)
+            store2 = InMemoryStore()
+            store2.load_culture(path)
+            nms = store2.get_near_misses()
+            self.assertIn("t1", nms)
+            self.assertEqual(nms["t1"].program.root, "crop_to_nonzero")
+            self.assertAlmostEqual(nms["t1"].prediction_error, 0.08)
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()

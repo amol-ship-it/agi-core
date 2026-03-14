@@ -416,6 +416,21 @@ class Memory(ABC):
         """Return all stored solutions, keyed by task_id."""
         ...
 
+    # --- Near-misses (almost-solved programs for sleep learning) ---
+
+    def store_near_miss(self, task_id: str, scored: ScoredProgram) -> None:
+        """Store a near-miss program (almost-solved, low but nonzero error).
+
+        Default: no-op. Override in implementations that support sleep learning.
+        """
+
+    def get_near_misses(self, max_error: float = 0.15) -> dict[str, ScoredProgram]:
+        """Return near-misses filtered by max prediction error.
+
+        Default: empty dict.
+        """
+        return {}
+
     # --- Persistence ---
 
     @abstractmethod
