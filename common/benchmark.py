@@ -292,9 +292,9 @@ Examples:
                         help="Re-run near-miss tasks with boosted compute budget "
                              "(3x budget, wider search breadth)")
     parser.add_argument("--vocabulary", type=str, default="full",
-                        choices=["full", "minimal"],
-                        help="Primitive vocabulary: 'full' (180 prims) or 'minimal' (~26 "
-                             "fundamentals, forces composition and compounding)")
+                        choices=["full", "minimal", "atomic"],
+                        help="Primitive vocabulary: 'full' (180 prims), 'minimal' (~26 "
+                             "fundamentals), or 'atomic' (~27 atomic ops + combinators)")
     return parser
 
 
