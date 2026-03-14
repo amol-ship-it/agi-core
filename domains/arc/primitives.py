@@ -6346,10 +6346,12 @@ def _build_minimal_primitives() -> list[Primitive]:
         ("mirror_horizontal",           mirror_horizontal),
         ("mirror_vertical",             mirror_vertical),
         ("transpose",                   transpose),
-        # --- Spatial (7): cropping/scaling ---
+        # --- Spatial (9): cropping/scaling ---
         ("crop_to_nonzero",             crop_to_nonzero),
         ("top_half",                    get_top_half),
+        ("bottom_half",                 get_bottom_half),
         ("left_half",                   get_left_half),
+        ("right_half",                  get_right_half),
         ("scale_2x",                    scale_2x),
         ("scale_3x",                    scale_3x),
         ("tile_2x2",                    tile_2x2),
@@ -6375,6 +6377,15 @@ def _build_minimal_primitives() -> list[Primitive]:
         ("remove_color_noise",          remove_color_noise),
         # --- Shift (1): cyclic row/column shift ---
         ("shift_down_1",                shift_down_1),
+        # --- Logical halves (3): split + combine with logic ---
+        ("or_halves_vertical",          or_halves_v),
+        ("or_halves_horizontal",        or_halves_h),
+        ("xor_halves_vertical",         xor_halves_v),
+        # --- Color extraction (2): keep pixels by frequency ---
+        ("extract_minority_color",      extract_minority_color),
+        ("extract_majority_color",      extract_majority_color),
+        # --- Spatial drawing (1) ---
+        ("surround_pixels_3x3",         surround_pixels_3x3),
 
         # =================================================================
         # PERCEPTION PRIMITIVES — detect structure in the grid
