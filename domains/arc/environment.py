@@ -110,138 +110,252 @@ class ARCEnv(Environment):
         return None
 
     def try_cross_reference(self, task, primitives):
-        """Try solving via cross-reference: use one grid part to transform another.
+        """Try solving via cross-reference: one grid part informs another.
 
-        Strategy 1: Grid has separator lines → cells. Try using each cell as a
-        mask/template applied to the others via overlay or boolean ops.
-
-        Strategy 2: Two objects of different sizes. The smaller one acts as a
-        pattern/template applied at the position of (or overlaid onto) the larger.
+        Strategy 1: Boolean ops on grid halves — split by separator,
+                    combine halves with AND/OR/XOR, optionally recolor.
+        Strategy 2: Cell propagation — colored markers in cells propagate
+                    across their row or column of cells.
+        Strategy 3: Small-on-large stamping — smallest object used as
+                    template stamped at positions of larger objects.
         """
         if not task.train_examples:
             return None
 
-        from .primitives import (
-            _detect_any_separator_lines, _split_grid_cells, Grid,
-        )
+        from .primitives import _detect_any_separator_lines, _split_grid_cells
         from .objects import (
-            find_foreground_shapes, find_multicolor_objects,
-            _get_background_color, _test_on_examples, place_subgrid,
+            find_foreground_shapes, _get_background_color,
+            _test_on_examples, place_subgrid,
         )
         import numpy as np
 
-        # --- Strategy 1: Grid cells cross-reference ---
-        # If the grid has separator lines, try: output = apply(template_cell, target_cell)
         first_inp = task.train_examples[0][0]
+        first_out = task.train_examples[0][1]
+
+        # --- Strategy 1: Boolean ops on halves ---
+        # Grid split by ONE separator into 2 equal halves → output is
+        # AND/OR/XOR of the halves, optionally recolored.
         try:
             h_lines, v_lines = _detect_any_separator_lines(first_inp)
         except Exception:
             h_lines, v_lines = [], []
 
-        if h_lines or v_lines:
-            cells_first = _split_grid_cells(first_inp)
-            if cells_first and len(cells_first) >= 2:
-                # Try using the smallest non-empty cell as template
-                # applied to other cells via overlay
-                n_cells = len(cells_first)
+        out_h, out_w = len(first_out), len(first_out[0]) if first_out else 0
 
-                for template_idx in range(min(n_cells, 4)):
-                    def _make_xref(tidx=template_idx):
-                        def xref_fn(grid):
+        # Vertical split: find the consistent separator across all examples
+        # (must be same position and same color in every training input)
+        if v_lines and not h_lines:
+            # Find separators consistent across all examples
+            consistent_v = set(v_lines)
+            for inp, _ in task.train_examples[1:]:
+                try:
+                    _, vl = _detect_any_separator_lines(inp)
+                    consistent_v &= set(vl)
+                except Exception:
+                    consistent_v = set()
+            v_lines = sorted(consistent_v)
+
+        if len(v_lines) == 1 and not h_lines:
+            vc = v_lines[0]
+            vc = v_lines[0]
+            for op_name, op_fn in [
+                ("and", lambda a, b: int(a != 0 and b != 0)),
+                ("or",  lambda a, b: int(a != 0 or b != 0)),
+                ("xor", lambda a, b: int((a != 0) != (b != 0))),
+            ]:
+                out_colors = {int(c) for row in first_out for c in row if c != 0}
+                for recolor in sorted(out_colors | {1}):
+                    def _make_bool_v(sep_col=vc, op=op_fn, rc=recolor):
+                        def fn(grid):
+                            arr = np.array(grid, dtype=np.int32)
+                            # Use the known separator column position
+                            sc = sep_col
+                            if sc >= arr.shape[1]:
+                                return grid
+                            left = arr[:, :sc]
+                            right = arr[:, sc+1:]
+                            mw = min(left.shape[1], right.shape[1])
+                            result = np.zeros((left.shape[0], mw), dtype=np.int32)
+                            for r in range(left.shape[0]):
+                                for c in range(mw):
+                                    if op(int(left[r, c]), int(right[r, c])):
+                                        result[r, c] = rc
+                            return result.tolist()
+                        return fn
+
+                    fn = _make_bool_v()
+                    if _test_on_examples(fn, task.train_examples):
+                        name = f"cross_ref_{op_name}_halves_v_color_{recolor}"
+                        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+                        _PRIM_MAP[name] = prim
+                        return (name, fn)
+
+        # Horizontal split — also find consistent separator
+        if h_lines and not v_lines:
+            consistent_h = set(h_lines)
+            for inp, _ in task.train_examples[1:]:
+                try:
+                    hl, _ = _detect_any_separator_lines(inp)
+                    consistent_h &= set(hl)
+                except Exception:
+                    consistent_h = set()
+            h_lines = sorted(consistent_h)
+
+        if len(h_lines) == 1 and not v_lines:
+            hr = h_lines[0]
+            for op_name, op_fn in [
+                ("and", lambda a, b: int(a != 0 and b != 0)),
+                ("or",  lambda a, b: int(a != 0 or b != 0)),
+                ("xor", lambda a, b: int((a != 0) != (b != 0))),
+            ]:
+                out_colors = {int(c) for row in first_out for c in row if c != 0}
+                for recolor in sorted(out_colors | {1}):
+                    def _make_bool_h(sep_row=hr, op=op_fn, rc=recolor):
+                        def fn(grid):
+                            arr = np.array(grid, dtype=np.int32)
+                            sr = sep_row
+                            if sr >= arr.shape[0]:
+                                return grid
+                            top = arr[:sr, :]
+                            bottom = arr[sr+1:, :]
+                            mh = min(top.shape[0], bottom.shape[0])
+                            mw = min(top.shape[1], bottom.shape[1])
+                            result = np.zeros((mh, mw), dtype=np.int32)
+                            for r in range(mh):
+                                for c in range(mw):
+                                    if op(int(top[r, c]), int(bottom[r, c])):
+                                        result[r, c] = rc
+                            return result.tolist()
+                        return fn
+
+                    fn = _make_bool_h()
+                    if _test_on_examples(fn, task.train_examples):
+                        name = f"cross_ref_{op_name}_halves_h_color_{recolor}"
+                        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+                        _PRIM_MAP[name] = prim
+                        return (name, fn)
+
+        # --- Strategy 2: Cell propagation ---
+        # Grid with separators → cells in rows/cols. Colored cells propagate
+        # their color to fill empty cells between them in the same row.
+        if (h_lines or v_lines):
+            cells = _split_grid_cells(first_inp)
+            if cells and len(cells) >= 4:
+                # Compute grid layout (n_rows × n_cols of cells)
+                n_col_cells = len(v_lines) + 1 if v_lines else 1
+                n_row_cells = len(h_lines) + 1 if h_lines else 1
+                if n_row_cells * n_col_cells == len(cells) and n_col_cells >= 2:
+
+                    def _make_cell_propagate():
+                        def fn(grid):
                             try:
-                                cells = _split_grid_cells(grid)
-                                if not cells or len(cells) <= tidx:
+                                hl, vl = _detect_any_separator_lines(grid)
+                                gc = _split_grid_cells(grid)
+                                if not gc:
                                     return grid
-                                template = cells[tidx]
-                                # Apply template as overlay to each other cell
-                                result_cells = []
-                                for i, cell in enumerate(cells):
-                                    if i == tidx:
-                                        result_cells.append(cell)
-                                        continue
-                                    # Overlay: template non-zero pixels onto cell
-                                    th, tw = len(template), len(template[0]) if template else 0
-                                    ch, cw = len(cell), len(cell[0]) if cell else 0
-                                    if th != ch or tw != cw:
-                                        result_cells.append(cell)
-                                        continue
-                                    merged = [row[:] for row in cell]
-                                    for r in range(th):
-                                        for c in range(tw):
-                                            if template[r][c] != 0:
-                                                merged[r][c] = template[r][c]
-                                    result_cells.append(merged)
-                                # Recompose — use grammar's recompose if available
+                                nc = len(vl) + 1 if vl else 1
+                                nr = len(hl) + 1 if hl else 1
+                                if nr * nc != len(gc):
+                                    return grid
+
+                                result_cells = [c for c in gc]  # copy list
+
+                                # For each row of cells, find colored cells and
+                                # fill empty cells between same-colored ones
+                                for row in range(nr):
+                                    row_cells = [(col, gc[row * nc + col])
+                                                 for col in range(nc)]
+                                    # Find cells with content
+                                    colored = {}
+                                    for col, cell in row_cells:
+                                        colors = {int(cell[r][c])
+                                                  for r in range(len(cell))
+                                                  for c in range(len(cell[0]))
+                                                  if cell[r][c] != 0}
+                                        if colors:
+                                            for clr in colors:
+                                                colored.setdefault(clr, []).append(col)
+
+                                    # Fill between endpoints of each color
+                                    for clr, cols in colored.items():
+                                        if len(cols) >= 2:
+                                            lo, hi = min(cols), max(cols)
+                                            template = gc[row * nc + cols[0]]
+                                            for col in range(lo, hi + 1):
+                                                idx = row * nc + col
+                                                cell = result_cells[idx]
+                                                # If cell is empty, fill with template
+                                                has_content = any(
+                                                    cell[r][c] != 0
+                                                    for r in range(len(cell))
+                                                    for c in range(len(cell[0])))
+                                                if not has_content:
+                                                    result_cells[idx] = [
+                                                        row[:] for row in template]
+
+                                # Recompose
                                 from .grammar import ARCGrammar
                                 from core.types import Decomposition
                                 g = ARCGrammar()
-                                h_l, v_l = _detect_any_separator_lines(grid)
                                 sep_color = 0
-                                h_grid, w_grid = len(grid), len(grid[0]) if grid else 0
-                                if h_l:
-                                    sep_color = grid[h_l[0]][0]
-                                elif v_l:
-                                    sep_color = grid[0][v_l[0]]
+                                gh, gw = len(grid), len(grid[0]) if grid else 0
+                                if hl:
+                                    sep_color = grid[hl[0]][0]
+                                elif vl:
+                                    sep_color = grid[0][vl[0]]
                                 decomp = Decomposition(
-                                    strategy="grid_partition",
-                                    parts=cells,
-                                    context={"h_lines": h_l, "v_lines": v_l,
+                                    strategy="grid_partition", parts=gc,
+                                    context={"h_lines": hl, "v_lines": vl,
                                              "sep_color": sep_color, "bg_color": 0,
-                                             "grid_h": h_grid, "grid_w": w_grid},
+                                             "grid_h": gh, "grid_w": gw},
                                 )
                                 return g.recompose(decomp, result_cells)
                             except Exception:
                                 return grid
-                        return xref_fn
+                        return fn
 
-                    fn = _make_xref()
+                    fn = _make_cell_propagate()
                     if _test_on_examples(fn, task.train_examples):
-                        name = f"cross_ref_cell_{template_idx}_overlay"
+                        name = "cross_ref_cell_propagate_row"
                         prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
                         _PRIM_MAP[name] = prim
                         return (name, fn)
 
-        # --- Strategy 2: Small object as template for large object ---
+        # --- Strategy 3: Small object stamped onto large objects ---
         bg = _get_background_color(first_inp)
         shapes = find_foreground_shapes(first_inp)
         if shapes and len(shapes) >= 2:
             sizes = sorted(set(s["size"] for s in shapes))
-            if len(sizes) >= 2:
-                small_size = sizes[0]
-                large_size = sizes[-1]
-                if large_size >= small_size * 2:
-                    # Small object might be a pattern to stamp onto large
-                    def _make_stamp_small_on_large(bg_c=bg):
-                        def stamp_fn(grid):
-                            objs = find_foreground_shapes(grid)
-                            if len(objs) < 2:
-                                return grid
-                            by_size = sorted(objs, key=lambda o: o["size"])
-                            small = by_size[0]
-                            template = small["subgrid"]
-                            result = [row[:] for row in grid]
-                            # Zero out the small object
-                            sr, sc = small["position"]
-                            for r in range(len(template)):
-                                for c in range(len(template[0])):
-                                    if template[r][c] != 0:
-                                        tr, tc = sr + r, sc + c
-                                        if 0 <= tr < len(grid) and 0 <= tc < len(grid[0]):
-                                            result[tr][tc] = bg_c
-                            # Overlay template onto each larger object
-                            for obj in by_size[1:]:
-                                pos = obj["position"]
-                                result = place_subgrid(result, template, pos,
-                                                       transparent_color=bg_c)
-                            return result
-                        return stamp_fn
+            if len(sizes) >= 2 and sizes[-1] >= sizes[0] * 2:
+                def _make_stamp(bg_c=bg):
+                    def fn(grid):
+                        objs = find_foreground_shapes(grid)
+                        if len(objs) < 2:
+                            return grid
+                        by_size = sorted(objs, key=lambda o: o["size"])
+                        small = by_size[0]
+                        template = small["subgrid"]
+                        result = [row[:] for row in grid]
+                        sr, sc = small["position"]
+                        for r in range(len(template)):
+                            for c in range(len(template[0])):
+                                if template[r][c] != 0:
+                                    tr, tc = sr + r, sc + c
+                                    if 0 <= tr < len(grid) and 0 <= tc < len(grid[0]):
+                                        result[tr][tc] = bg_c
+                        for obj in by_size[1:]:
+                            result = place_subgrid(result, template,
+                                                   obj["position"],
+                                                   transparent_color=bg_c)
+                        return result
+                    return fn
 
-                    fn = _make_stamp_small_on_large()
-                    if _test_on_examples(fn, task.train_examples):
-                        name = "cross_ref_stamp_small_on_large"
-                        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
-                        _PRIM_MAP[name] = prim
-                        return (name, fn)
+                fn = _make_stamp()
+                if _test_on_examples(fn, task.train_examples):
+                    name = "cross_ref_stamp_small_on_large"
+                    prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+                    _PRIM_MAP[name] = prim
+                    return (name, fn)
 
         return None
 

@@ -325,8 +325,9 @@ class Learner:
         # --- Phase 1.13: Cross-reference ---
         # Try using one part of the grid to inform transformation of another.
         # E.g., small object as template, grid cell as mask for other cells.
+        # Always runs (cheap: single evaluation) regardless of budget.
         t_phase = time.time()
-        if _budget_ok() and (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
+        if not best_so_far or best_so_far.prediction_error > cfg.solve_threshold:
             xref_result = self.env.try_cross_reference(task, all_prims)
             if xref_result is not None:
                 name, fn = xref_result
