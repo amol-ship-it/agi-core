@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from io import TextIOBase
 
+from dataclasses import asdict as _asdict, fields as _dc_fields
+
 from core.types import Task
 from core.interfaces import Environment, Grammar, DriveSignal
 from core.config import SearchConfig, SleepConfig, CurriculumConfig
@@ -35,6 +37,26 @@ from core.results import WakeResult
 from core.learner import Learner
 from core.memory import InMemoryStore
 from core.metrics import extract_metrics, print_compounding_table, save_metrics_json, save_metrics_csv
+
+
+class _SafeEncoder(json.JSONEncoder):
+    """JSON encoder that handles non-serializable objects gracefully.
+
+    Converts dataclass instances to dicts and falls back to str() for
+    anything else (e.g. domain-specific types like GameState).
+    """
+    def default(self, o):
+        if hasattr(o, '__dataclass_fields__'):
+            return _asdict(o)
+        try:
+            return super().default(o)
+        except TypeError:
+            return str(o)
+
+
+def _safe_dumps(obj, **kwargs):
+    """json.dumps with safe fallback for non-serializable objects."""
+    return json.dumps(obj, cls=_SafeEncoder, **kwargs)
 
 
 # =============================================================================
@@ -974,7 +996,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         # Exclude all_records from JSON (it's only for pipeline JSONL assembly)
         json_data = {k: v for k, v in results_data.items() if k != "all_records"}
         with open(results_path, "w") as f:
-            json.dump(json_data, f, indent=2)
+            f.write(_safe_dumps(json_data, indent=2))
 
         save_metrics_json(metrics, metrics_json_path)
         save_metrics_csv(metrics, metrics_csv_path)
@@ -1041,9 +1063,9 @@ def save_pipeline_results(
     # Combined JSONL: full per-task records from ProgressTracker with phase tags
     with open(jsonl_path, "w") as f:
         for record in train_result.results_data.get("all_records", []):
-            f.write(json.dumps({"phase": "train", **record}) + "\n")
+            f.write(_safe_dumps({"phase": "train", **record}) + "\n")
         for record in eval_result.results_data.get("all_records", []):
-            f.write(json.dumps({"phase": "eval", **record}) + "\n")
+            f.write(_safe_dumps({"phase": "eval", **record}) + "\n")
 
     # Combined JSON
     train_data = train_result.results_data
@@ -1098,7 +1120,7 @@ def save_pipeline_results(
     }
 
     with open(json_path, "w") as f:
-        json.dump(pipeline_data, f, indent=2)
+        f.write(_safe_dumps(pipeline_data, indent=2))
 
     return json_path, jsonl_path
 

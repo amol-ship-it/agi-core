@@ -43,6 +43,52 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Wake context — shared mutable state for the wake phase pipeline
+# =============================================================================
+
+class _WakeContext:
+    """Holds all mutable state shared across wake phases.
+
+    Extracted from _wake_core so each phase can be a standalone method
+    that reads/writes a context object, making phases independently testable
+    and the pipeline visible as a data structure.
+    """
+    __slots__ = (
+        "task", "all_prims", "cfg", "eval_budget", "record", "t0",
+        "best_so_far", "n_evals", "total_deduped", "gens_used",
+        "pareto", "enum_candidates", "beam_scored",
+    )
+
+    def __init__(self, task, all_prims, cfg, eval_budget, record):
+        self.task: Task = task
+        self.all_prims: list[Primitive] = all_prims
+        self.cfg: SearchConfig = cfg
+        self.eval_budget: int = eval_budget
+        self.record: bool = record
+        self.t0: float = time.time()
+
+        self.best_so_far: Optional[ScoredProgram] = None
+        self.n_evals: int = 0
+        self.total_deduped: int = 0
+        self.gens_used: int = 0
+        self.pareto: dict[int, ParetoEntry] = {}
+        self.enum_candidates: list[ScoredProgram] = []
+        self.beam_scored: list[ScoredProgram] = []
+
+    def budget_ok(self) -> bool:
+        return self.eval_budget <= 0 or self.n_evals < self.eval_budget
+
+    @property
+    def solved(self) -> bool:
+        return (self.best_so_far is not None
+                and self.best_so_far.prediction_error <= self.cfg.solve_threshold)
+
+    def update_best(self, sp: ScoredProgram) -> None:
+        if self.best_so_far is None or sp.energy < self.best_so_far.energy:
+            self.best_so_far = sp
+
+
+# =============================================================================
 # Module-level worker for multiprocessing (must be picklable)
 # =============================================================================
 
@@ -75,25 +121,11 @@ def _wake_worker(args: tuple) -> WakeResult:
     for entry in library:
         memory.add_to_library(entry)
 
-    # Override seed with per-task seed for deterministic parallel execution
-    worker_cfg = SearchConfig(
-        beam_width=search_cfg.beam_width,
-        mutations_per_candidate=search_cfg.mutations_per_candidate,
-        crossover_fraction=search_cfg.crossover_fraction,
-        max_generations=search_cfg.max_generations,
-        energy_alpha=search_cfg.energy_alpha,
-        energy_beta=search_cfg.energy_beta,
-        early_stop_energy=search_cfg.early_stop_energy,
-        solve_threshold=search_cfg.solve_threshold,
-        seed=task_seed,
-        semantic_dedup=search_cfg.semantic_dedup,
-        dedup_precision=search_cfg.dedup_precision,
-        exhaustive_depth=search_cfg.exhaustive_depth,
-        exhaustive_pair_top_k=search_cfg.exhaustive_pair_top_k,
-        exhaustive_triple_top_k=search_cfg.exhaustive_triple_top_k,
-        near_miss_threshold=search_cfg.near_miss_threshold,
-        eval_budget=search_cfg.eval_budget,
-    )
+    # Override seed with per-task seed for deterministic parallel execution.
+    # Use dataclasses.replace() to copy all fields — manually listing fields
+    # is fragile and silently drops any newly added fields.
+    from dataclasses import replace as _dc_replace
+    worker_cfg = _dc_replace(search_cfg, seed=task_seed)
 
     learner = Learner(
         environment=env,
@@ -183,8 +215,12 @@ class Learner:
         return self._wake_core(task, record=False)
 
     def _wake_core(self, task: Task, record: bool) -> WakeResult:
-        """Shared wake logic. When record=True, writes solutions to memory."""
-        t0 = time.time()
+        """Shared wake logic. When record=True, writes solutions to memory.
+
+        Runs a pipeline of search phases. Each phase returns a phase name
+        string if it solved the task, or None to continue. The pipeline is
+        defined by _wake_phases(), making it visible and extensible.
+        """
         cfg = self.search_cfg
 
         # Let the grammar cache task-specific data (e.g. training pairs)
@@ -196,421 +232,366 @@ class Learner:
         all_prims = base_prims + library_prims
 
         # Register library primitives with the environment so it can execute them.
-        # Library entries have fn=Program; the environment needs to know how to
-        # resolve these during execution.
         for lp in library_prims:
             self.env.register_primitive(lp)
 
-        best_so_far: Optional[ScoredProgram] = None
-        n_evals = 0
-        total_deduped = 0
-        pareto: dict[int, ParetoEntry] = {}
-        enum_candidates: list[ScoredProgram] = []
-
         # Cell-normalized compute budget (deterministic, reproducible).
-        # Budget is in "ops" = depth-weighted evaluations × cell factor.
-        # A depth-2 eval costs 2 ops (applies 2 primitives), depth-3 costs 3.
-        # This makes the budget a true proxy for compute, not just eval count.
         base_cells = cfg.eval_budget_base_cells
         cells = self._avg_cells(task)
         if cfg.eval_budget > 0:
-            # Scale inversely with grid size: larger grids get fewer evals.
             eval_budget = max(cfg.eval_budget * base_cells // max(cells, 1), 500)
-            eval_budget = min(eval_budget, cfg.eval_budget * 4)  # cap at 4x base
+            eval_budget = min(eval_budget, cfg.eval_budget * 4)
         else:
-            eval_budget = 0  # unlimited
+            eval_budget = 0
 
-        def _budget_ok() -> bool:
-            """Check whether we've exceeded the per-task eval budget."""
-            return eval_budget <= 0 or n_evals < eval_budget
+        ctx = _WakeContext(task, all_prims, cfg, eval_budget, record)
 
-        def _record_solve(sp: Optional[ScoredProgram] = None):
-            """Record solution in memory if record=True."""
-            prog = sp or best_so_far
-            if record and prog:
-                self.memory.record_episode(
-                    task.task_id, task.train_examples,
-                    prog.program, prog.energy)
-                self.memory.store_solution(task.task_id, prog)
-                self._credit_library_usage(prog.program)
+        # Run each phase in order; stop on first solve.
+        for phase_fn in self._wake_phases():
+            solved_by = phase_fn(ctx)
+            if solved_by is not None:
+                return self._make_solved_result(ctx, solved_by)
 
-        def _make_solved_result(phase_name: str, gens: int = 0, deduped: int = 0) -> WakeResult:
-            """Build WakeResult for a training-solved task using top-k test evaluation."""
-            nonlocal best_so_far
-            top_sp, te, ts, n_perf, s_rank = self._evaluate_top_k_on_test(
-                enum_candidates, task, top_k=10)
-            # Use the test-best candidate as the reported best
-            if top_sp is not None and top_sp is not best_so_far:
-                best_so_far = top_sp
-            # If enum_candidates didn't yield a test result (e.g. solve came
-            # from correction/identity fix), evaluate best_so_far directly.
-            if ts is None and best_so_far is not None:
-                te, ts = self._evaluate_on_test(best_so_far, task)
-            best_so_far.task_id = task.task_id
-            _record_solve(best_so_far)
-            front = self._extract_pareto_front(pareto)
-            wall = time.time() - t0
-            logger.info(
-                f"  [wake] Task {task.task_id}: SOLVED by {phase_name}, "
-                f"energy={best_so_far.energy:.6f}, evals={n_evals}, "
-                f"candidates={n_perf}, time={wall:.1f}s")
-            train_preds, test_preds = self._compute_predictions(best_so_far, task)
-            return WakeResult(
-                task_id=task.task_id, train_solved=True, best=best_so_far,
-                generations_used=gens, evaluations=n_evals, wall_time=wall,
-                pareto_front=front, dedup_count=deduped,
-                test_error=te, test_solved=ts,
-                n_train_perfect=n_perf, solving_rank=s_rank,
-                train_predictions=train_preds, test_predictions=test_preds)
+        # Not solved — return best effort
+        return self._make_unsolved_result(ctx)
 
-        # --- Phase 1: Exhaustive enumeration ---
-        t_phase = time.time()
-        if cfg.exhaustive_depth >= 1:
-            enum_candidates, n_enum_evals = self._exhaustive_enumerate(
-                all_prims, task, cfg.exhaustive_depth,
-                eval_budget=eval_budget)
-            n_evals += n_enum_evals
-            for sp in enum_candidates:
-                self._update_pareto_front(pareto, sp)
-                if best_so_far is None or sp.energy < best_so_far.energy:
-                    best_so_far = sp
+    # -------------------------------------------------------------------------
+    # Wake phase pipeline — each method returns phase name if solved, else None
+    # -------------------------------------------------------------------------
 
-            # Early exit if enumeration found a perfect solve
-            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                return _make_solved_result("enumeration")
+    def _wake_phases(self):
+        """Return the ordered list of wake phase methods.
 
-        logger.debug(f"  [wake] Phase 1 enumeration: {time.time()-t_phase:.2f}s, {n_evals} evals")
+        Each phase takes a _WakeContext and returns a phase name string
+        if the task was solved, or None to continue to the next phase.
+        """
+        return [
+            self._phase_exhaustive,
+            self._phase_object_decomposition,
+            self._phase_for_each_object,
+            self._phase_conditional_per_object,
+            self._phase_cross_reference,
+            self._phase_grammar_decomposition,
+            self._phase_conditional_search,
+            self._phase_near_miss_refinement,
+            self._phase_fixed_point,
+            self._phase_color_fix,
+            self._phase_beam_search,
+            self._phase_post_beam_color_fix,
+        ]
 
-        # --- Phase 1.1: Object decomposition ---
-        # Try applying the same transform to each object independently.
-        # High-ROI for tasks where objects are transformed in-place.
-        t_phase = time.time()
-        decomp_result = self.env.try_object_decomposition(task, all_prims) if _budget_ok() else None
-        if decomp_result is not None:
-            name, fn = decomp_result
-            prog = Program(root=name)
-            sp = self._evaluate_program(prog, task)
-            n_evals += 1
-            self._update_pareto_front(pareto, sp)
-            if best_so_far is None or sp.energy < best_so_far.energy:
-                best_so_far = sp
-            enum_candidates.append(sp)
+    def _phase_exhaustive(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1: Exhaustive enumeration of all programs up to depth 3."""
+        if ctx.cfg.exhaustive_depth < 1:
+            return None
+        t = time.time()
+        candidates, n_evals = self._exhaustive_enumerate(
+            ctx.all_prims, ctx.task, ctx.cfg.exhaustive_depth,
+            eval_budget=ctx.eval_budget)
+        ctx.n_evals += n_evals
+        for sp in candidates:
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+        ctx.enum_candidates.extend(candidates)
+        logger.debug(f"  [wake] Phase 1 enumeration: {time.time()-t:.2f}s, {ctx.n_evals} evals")
+        return "enumeration" if ctx.solved else None
 
-            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                return _make_solved_result("object decomposition")
+    def _phase_object_decomposition(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1.1: Try per-object transforms via connected components."""
+        if ctx.solved:
+            return None
+        t = time.time()
+        result = self.env.try_object_decomposition(ctx.task, ctx.all_prims) if ctx.budget_ok() else None
+        if result is not None:
+            name, fn = result
+            sp = self._evaluate_program(Program(root=name), ctx.task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+        logger.debug(f"  [wake] Phase 1.1 object decomp: {time.time()-t:.2f}s")
+        return "object decomposition" if ctx.solved else None
 
-        logger.debug(f"  [wake] Phase 1.1 object decomp: {time.time()-t_phase:.2f}s")
+    def _phase_for_each_object(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1.12: Apply top-K enumeration candidates per-object."""
+        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
+            return None
+        t = time.time()
+        result = self.env.try_for_each_object(ctx.task, ctx.enum_candidates, top_k=10)
+        if result is not None:
+            name, fn = result
+            sp = self._evaluate_program(Program(root=name), ctx.task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+        logger.debug(f"  [wake] Phase 1.12 for-each-object: {time.time()-t:.2f}s")
+        return "for-each-object" if ctx.solved else None
 
-        # --- Phase 1.12: For-each-object with top enumeration candidates ---
-        # Try applying the top-K enumeration results per-object. This enables
-        # depth-2+ compositions per-object, e.g. for_each_object(mirror_h(crop)).
-        t_phase = time.time()
-        if enum_candidates and _budget_ok() and (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
-            fe_result = self.env.try_for_each_object(task, enum_candidates, top_k=10)
-            if fe_result is not None:
-                name, fn = fe_result
-                prog = Program(root=name)
-                sp = self._evaluate_program(prog, task)
-                n_evals += 1
-                self._update_pareto_front(pareto, sp)
-                if best_so_far is None or sp.energy < best_so_far.energy:
-                    best_so_far = sp
-                enum_candidates.append(sp)
-
-                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                    return _make_solved_result("for-each-object")
-
-        logger.debug(f"  [wake] Phase 1.12 for-each-object: {time.time()-t_phase:.2f}s")
-
-        # --- Phase 1.125: Conditional per-object transforms ---
-        # Try if(predicate, A, B) applied per-object: objects matching predicate
-        # get transform A, others get B. E.g. "rotate small objects, fill large."
-        t_phase = time.time()
+    def _phase_conditional_per_object(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1.125: Try if(pred, A, B) per-object."""
+        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
+            return None
         predicates = self.grammar.get_predicates()
-        if predicates and enum_candidates and _budget_ok() and \
-                (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
-            cpo_result = self.env.try_conditional_per_object(
-                task, enum_candidates, predicates, top_k=8)
-            if cpo_result is not None:
-                name, fn = cpo_result
-                prog = Program(root=name)
-                sp = self._evaluate_program(prog, task)
-                n_evals += 1
-                self._update_pareto_front(pareto, sp)
-                if best_so_far is None or sp.energy < best_so_far.energy:
-                    best_so_far = sp
-                enum_candidates.append(sp)
+        if not predicates:
+            return None
+        t = time.time()
+        result = self.env.try_conditional_per_object(
+            ctx.task, ctx.enum_candidates, predicates, top_k=8)
+        if result is not None:
+            name, fn = result
+            sp = self._evaluate_program(Program(root=name), ctx.task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+        logger.debug(f"  [wake] Phase 1.125 cond-per-object: {time.time()-t:.2f}s")
+        return "conditional per-object" if ctx.solved else None
 
-                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                    return _make_solved_result("conditional per-object")
+    def _phase_cross_reference(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1.13: Cross-reference (one grid part informs another)."""
+        if ctx.solved:
+            return None
+        t = time.time()
+        result = self.env.try_cross_reference(ctx.task, ctx.all_prims)
+        if result is not None:
+            name, fn = result
+            sp = self._evaluate_program(Program(root=name), ctx.task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+        logger.debug(f"  [wake] Phase 1.13 cross-reference: {time.time()-t:.2f}s")
+        return "cross-reference" if ctx.solved else None
 
-        logger.debug(f"  [wake] Phase 1.125 cond-per-object: {time.time()-t_phase:.2f}s")
+    def _phase_grammar_decomposition(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1.15: Generic decompose/recompose via Grammar."""
+        if ctx.solved or not ctx.budget_ok():
+            return None
+        t = time.time()
+        result = self._try_grammar_decomposition(ctx.all_prims, ctx.task)
+        if result is not None:
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, result)
+            ctx.update_best(result)
+            ctx.enum_candidates.append(result)
+        logger.debug(f"  [wake] Phase 1.15 grammar decomp: {time.time()-t:.2f}s")
+        return "grammar decomposition" if ctx.solved else None
 
-        # --- Phase 1.13: Cross-reference ---
-        # Try using one part of the grid to inform transformation of another.
-        # E.g., small object as template, grid cell as mask for other cells.
-        # Always runs (cheap: single evaluation) regardless of budget.
-        t_phase = time.time()
-        if not best_so_far or best_so_far.prediction_error > cfg.solve_threshold:
-            xref_result = self.env.try_cross_reference(task, all_prims)
-            if xref_result is not None:
-                name, fn = xref_result
-                prog = Program(root=name)
-                sp = self._evaluate_program(prog, task)
-                n_evals += 1
-                self._update_pareto_front(pareto, sp)
-                if best_so_far is None or sp.energy < best_so_far.energy:
-                    best_so_far = sp
-                enum_candidates.append(sp)
-
-                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                    return _make_solved_result("cross-reference")
-
-        logger.debug(f"  [wake] Phase 1.13 cross-reference: {time.time()-t_phase:.2f}s")
-
-        # --- Phase 1.15: Grammar-based decomposition ---
-        # The grammar's decompose() breaks inputs into parts; we try applying
-        # each primitive to all parts and recompose. This is the generic
-        # version of object decomposition — works for any domain that
-        # implements decompose/recompose on its Grammar.
-        t_phase = time.time()
-        if _budget_ok() and (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
-            decomp_result = self._try_grammar_decomposition(all_prims, task)
-            if decomp_result is not None:
-                n_evals += 1
-                self._update_pareto_front(pareto, decomp_result)
-                if best_so_far is None or decomp_result.energy < best_so_far.energy:
-                    best_so_far = decomp_result
-                enum_candidates.append(decomp_result)
-
-                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                    return _make_solved_result("grammar decomposition")
-
-        logger.debug(f"  [wake] Phase 1.15 grammar decomp: {time.time()-t_phase:.2f}s")
-
-        # --- Phase 1.25: Conditional search ---
-        # Try if(predicate, A, B) programs. For each predicate, partition
-        # training inputs into true/false groups and find best primitives
-        # per group. Cost: O(P × top_k²) where P = #predicates (~17).
-        t_phase = time.time()
+    def _phase_conditional_search(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1.25: Try if(predicate, A, B) programs."""
         predicates = self.grammar.get_predicates()
-        if predicates and enum_candidates and _budget_ok():
-            cond_result, n_cond_evals = self._try_conditional_search(
-                predicates, enum_candidates, all_prims, task)
-            n_evals += n_cond_evals
-            if cond_result is not None:
-                self._update_pareto_front(pareto, cond_result)
-                if best_so_far is None or cond_result.energy < best_so_far.energy:
-                    best_so_far = cond_result
-                enum_candidates.append(cond_result)
+        if not predicates or not ctx.enum_candidates or not ctx.budget_ok():
+            return None
+        if ctx.solved:
+            return None
+        t = time.time()
+        result, n_evals = self._try_conditional_search(
+            predicates, ctx.enum_candidates, ctx.all_prims, ctx.task)
+        ctx.n_evals += n_evals
+        if result is not None:
+            self._update_pareto_front(ctx.pareto, result)
+            ctx.update_best(result)
+            ctx.enum_candidates.append(result)
+        logger.debug(f"  [wake] Phase 1.25 conditional: {time.time()-t:.2f}s")
+        return "conditional" if ctx.solved else None
 
-                if best_so_far.prediction_error <= cfg.solve_threshold:
-                    return _make_solved_result("conditional")
+    def _phase_near_miss_refinement(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1.5: Append/prepend primitives to near-miss programs."""
+        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
+            return None
+        if ctx.cfg.near_miss_threshold <= 0:
+            return None
+        t = time.time()
+        refined, n_evals = self._near_miss_refine(
+            ctx.enum_candidates, ctx.all_prims, ctx.task, ctx.cfg.near_miss_threshold)
+        ctx.n_evals += n_evals
+        for sp in refined:
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+        ctx.enum_candidates.extend(refined)
+        logger.debug(f"  [wake] Phase 1.5 near-miss refine: {time.time()-t:.2f}s")
+        return "near-miss refinement" if ctx.solved else None
 
-        logger.debug(f"  [wake] Phase 1.25 conditional: {time.time()-t_phase:.2f}s")
+    def _phase_fixed_point(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1.6: Apply near-miss programs repeatedly until stable."""
+        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
+            return None
+        t = time.time()
+        result = self._try_fixed_point(ctx.enum_candidates, ctx.task)
+        if result is not None:
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, result)
+            ctx.update_best(result)
+            ctx.enum_candidates.append(result)
+        logger.debug(f"  [wake] Phase 1.6 fixed-point: {time.time()-t:.2f}s")
+        return "fixed-point iteration" if ctx.solved else None
 
-        # --- Phase 1.5: Near-miss refinement ---
-        # Try appending/prepending primitives to near-miss programs.
-        # High-ROI: catches "almost right" programs that need one more step.
-        t_phase = time.time()
-        if cfg.near_miss_threshold > 0 and enum_candidates and _budget_ok():
-            refine_candidates, n_refine_evals = self._near_miss_refine(
-                enum_candidates, all_prims, task, cfg.near_miss_threshold)
-            n_evals += n_refine_evals
-            for sp in refine_candidates:
-                self._update_pareto_front(pareto, sp)
-                if best_so_far is None or sp.energy < best_so_far.energy:
-                    best_so_far = sp
-            enum_candidates.extend(refine_candidates)
+    def _phase_color_fix(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 1.75: Learn color remapping from near-miss programs."""
+        if ctx.solved or not ctx.enum_candidates:
+            return None
+        t = time.time()
+        result = self._try_color_fix(ctx.enum_candidates, ctx.task)
+        if result is not None:
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, result)
+            ctx.update_best(result)
+        logger.debug(f"  [wake] Phase 1.75 color fix: {time.time()-t:.2f}s")
+        return "color fix" if ctx.solved else None
 
-            # Check if refinement found a perfect solve
-            if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                return _make_solved_result("near-miss refinement")
+    def _phase_beam_search(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 2: Beam search with mutation/crossover."""
+        if ctx.solved:
+            return None
+        t = time.time()
+        cfg = ctx.cfg
+        best_enum_error = ctx.best_so_far.prediction_error if ctx.best_so_far else 1.0
+        if not ctx.budget_ok():
+            logger.debug(f"  [wake] Phase 2 beam search: SKIPPED (budget exceeded, {ctx.n_evals} evals)")
+            return None
 
-        logger.debug(f"  [wake] Phase 1.5 near-miss refine: {time.time()-t_phase:.2f}s")
-
-        # --- Phase 1.6: Fixed-point iteration ---
-        # For near-miss depth-1 programs, try applying them repeatedly until
-        # stable. Many ARC tasks need iterated application (fill propagation,
-        # pattern growth, etc). Cost: O(near_misses × max_iters).
-        t_phase = time.time()
-        if enum_candidates and _budget_ok() and (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
-            fp_result = self._try_fixed_point(enum_candidates, task)
-            if fp_result is not None:
-                n_evals += 1
-                self._update_pareto_front(pareto, fp_result)
-                if best_so_far is None or fp_result.energy < best_so_far.energy:
-                    best_so_far = fp_result
-                enum_candidates.append(fp_result)
-
-                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
-                    return _make_solved_result("fixed-point iteration")
-
-        logger.debug(f"  [wake] Phase 1.6 fixed-point: {time.time()-t_phase:.2f}s")
-
-        # --- Phase 1.75: Color fix ---
-        # For near-miss programs, try learning a color remapping from
-        # pixel-level mismatches. Many ARC tasks differ from target by a
-        # consistent color substitution. Cost: O(near_misses × examples).
-        t_phase = time.time()
-        if enum_candidates:
-            color_fix_result = self._try_color_fix(enum_candidates, task)
-            if color_fix_result is not None:
-                n_evals += 1
-                self._update_pareto_front(pareto, color_fix_result)
-                if best_so_far is None or color_fix_result.energy < best_so_far.energy:
-                    best_so_far = color_fix_result
-
-                if best_so_far.prediction_error <= cfg.solve_threshold:
-                    return _make_solved_result("color fix")
-
-        logger.debug(f"  [wake] Phase 1.75 color fix: {time.time()-t_phase:.2f}s")
-
-        # --- Phase 2: Beam search (seeded with top enumeration results) ---
-        # Adaptive: reduce beam effort when enumeration found nothing promising.
-        # If best error > 0.3, beam search rarely recovers — cap at 25% gens.
-        # If best error > 0.15, moderate reduction — cap at 50% gens.
-        # Skipped entirely if eval budget is exceeded.
-        t_phase = time.time()
-        gens_used = 0
-        scored = []  # beam search results (may be empty if skipped)
-        best_enum_error = best_so_far.prediction_error if best_so_far else 1.0
-        if not _budget_ok():
-            logger.debug(f"  [wake] Phase 2 beam search: SKIPPED (budget exceeded, {n_evals} evals)")
+        if cfg.max_generations <= 1:
+            effective_gens = cfg.max_generations
+        elif best_enum_error > 0.3:
+            effective_gens = max(5, cfg.max_generations // 4)
+        elif best_enum_error > 0.15:
+            effective_gens = max(10, cfg.max_generations // 2)
         else:
-            if cfg.max_generations <= 1:
-                effective_gens = cfg.max_generations
-            elif best_enum_error > 0.3:
-                effective_gens = max(5, cfg.max_generations // 4)
-            elif best_enum_error > 0.15:
-                effective_gens = max(10, cfg.max_generations // 2)
-            else:
-                effective_gens = cfg.max_generations
+            effective_gens = cfg.max_generations
 
-            seed_progs = [sp.program for sp in sorted(
-                enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
-            n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
-            beam = seed_progs + self._init_beam(all_prims, n_random)
+        seed_progs = [sp.program for sp in sorted(
+            ctx.enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
+        n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
+        beam = seed_progs + self._init_beam(ctx.all_prims, n_random)
 
-            for gen in range(effective_gens):
-                gens_used = gen + 1
+        for gen in range(effective_gens):
+            ctx.gens_used = gen + 1
+            if not ctx.budget_ok():
+                logger.debug(f"  [wake] Beam budget exceeded at gen {gen}, {ctx.n_evals} evals")
+                break
 
-                # Budget check: stop beam search if eval budget exceeded
-                if not _budget_ok():
-                    logger.debug(f"  [wake] Beam budget exceeded at gen {gen}, {n_evals} evals")
-                    break
+            scored = []
+            for prog in beam:
+                sp = self._evaluate_program(prog, ctx.task)
+                ctx.n_evals += 1
+                scored.append(sp)
+                self._update_pareto_front(ctx.pareto, sp)
+                ctx.update_best(sp)
 
-                # Evaluate every candidate on all training examples
-                scored = []
-                for prog in beam:
-                    sp = self._evaluate_program(prog, task)
-                    n_evals += 1
-                    scored.append(sp)
-                    self._update_pareto_front(pareto, sp)
+            if ctx.best_so_far and ctx.best_so_far.energy <= cfg.early_stop_energy:
+                logger.info(f"  [wake] Task {ctx.task.task_id}: perfect solve at gen {gen}")
+                break
 
-                    # Track global best
-                    if best_so_far is None or sp.energy < best_so_far.energy:
-                        best_so_far = sp
+            if cfg.semantic_dedup:
+                scored, n_removed = self._semantic_dedup(scored, ctx.task)
+                ctx.total_deduped += n_removed
 
-                # Early stopping on perfect solve
-                if best_so_far and best_so_far.energy <= cfg.early_stop_energy:
-                    logger.info(f"  [wake] Task {task.task_id}: perfect solve at gen {gen}")
-                    break
+            scored.sort(key=lambda s: s.energy)
+            survivors = [s.program for s in scored[:cfg.beam_width]]
+            next_gen = list(survivors)
 
-                # Semantic dedup: remove programs with identical output vectors
-                if cfg.semantic_dedup:
-                    scored, n_removed = self._semantic_dedup(scored, task)
-                    total_deduped += n_removed
+            tm = self._transition_matrix if self._transition_matrix.size > 0 else None
+            for prog in survivors:
+                for _ in range(cfg.mutations_per_candidate):
+                    next_gen.append(self.grammar.mutate(prog, ctx.all_prims, transition_matrix=tm))
 
-                # Keep the best
-                scored.sort(key=lambda s: s.energy)
-                survivors = [s.program for s in scored[: cfg.beam_width]]
+            n_cross = int(len(survivors) * cfg.crossover_fraction)
+            for _ in range(n_cross):
+                a = self._rng.choice(survivors)
+                b = self._rng.choice(survivors)
+                next_gen.append(self.grammar.crossover(a, b))
 
-                # Produce next generation
-                next_gen = list(survivors)  # elitism: survivors carry over
+            beam = next_gen
+            ctx.beam_scored = scored
 
-                # Mutations (biased by transition matrix when available)
-                tm = self._transition_matrix if self._transition_matrix.size > 0 else None
-                for prog in survivors:
-                    for _ in range(cfg.mutations_per_candidate):
-                        mutant = self.grammar.mutate(prog, all_prims, transition_matrix=tm)
-                        next_gen.append(mutant)
+        logger.debug(f"  [wake] Phase 2 beam search: {time.time()-t:.2f}s, gens={ctx.gens_used}")
+        return "beam search" if ctx.solved else None
 
-                # Crossovers
-                n_cross = int(len(survivors) * cfg.crossover_fraction)
-                for _ in range(n_cross):
-                    a = self._rng.choice(survivors)
-                    b = self._rng.choice(survivors)
-                    child = self.grammar.crossover(a, b)
-                    next_gen.append(child)
+    def _phase_post_beam_color_fix(self, ctx: _WakeContext) -> Optional[str]:
+        """Phase 3: Color remapping on beam + enumeration results."""
+        if ctx.solved:
+            return None
+        if not ctx.best_so_far or ctx.best_so_far.prediction_error <= ctx.cfg.solve_threshold:
+            return None
+        t = time.time()
+        all_candidates = list(ctx.enum_candidates)
+        if ctx.beam_scored:
+            all_candidates.extend(ctx.beam_scored)
+        result = self._try_color_fix(all_candidates, ctx.task)
+        if result is not None:
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, result)
+            ctx.update_best(result)
+        logger.debug(f"  [wake] Phase 3 post-beam: {time.time()-t:.2f}s")
 
-                beam = next_gen
+        # Include beam results in candidate pool for unsolved result
+        if ctx.beam_scored:
+            ctx.enum_candidates.extend(ctx.beam_scored)
 
-        logger.debug(f"  [wake] Phase 2 beam search: {time.time()-t_phase:.2f}s, gens={gens_used}")
+        return "post-beam color fix" if ctx.solved else None
 
-        # --- Phase 3: Post-beam color fix ---
-        t_phase = time.time()
-        # Try color remapping on beam results. Skip Phase 3a near-miss
-        # refinement — it's expensive and Phase 1.5 already covered enum
-        # near-misses. Only run color fix on beam candidates.
-        if best_so_far and best_so_far.prediction_error > cfg.solve_threshold:
-            # Build pool from beam + enumeration for color fix only
-            all_candidates = list(enum_candidates)
-            if scored:
-                all_candidates.extend(scored)
+    # -------------------------------------------------------------------------
+    # Wake result builders
+    # -------------------------------------------------------------------------
 
-            # Phase 3: Color fix on all candidates
-            color_fixed = self._try_color_fix(all_candidates, task)
-            if color_fixed is not None:
-                n_evals += 1
-                self._update_pareto_front(pareto, color_fixed)
-                if color_fixed.energy < best_so_far.energy:
-                    best_so_far = color_fixed
-
-        logger.debug(f"  [wake] Phase 3 post-beam: {time.time()-t_phase:.2f}s")
-
-        # Record the episode and store solution if solved
-        solved = best_so_far is not None and best_so_far.prediction_error <= self.search_cfg.solve_threshold
-
-        # Include beam search results in the candidate pool for top-k
-        if scored:
-            enum_candidates.extend(scored)
-
-        if solved:
-            return _make_solved_result("beam search", gens=gens_used, deduped=total_deduped)
-
-        # Not solved — record best effort
-        if best_so_far:
-            best_so_far.task_id = task.task_id
-            if record:
-                self.memory.record_episode(
-                    task.task_id,
-                    task.train_examples,
-                    best_so_far.program,
-                    best_so_far.energy,
-                )
-
-        front = self._extract_pareto_front(pareto)
-        wall = time.time() - t0
-        train_preds, test_preds = self._compute_predictions(best_so_far, task)
+    def _make_solved_result(self, ctx: _WakeContext, phase_name: str) -> WakeResult:
+        """Build WakeResult for a training-solved task using top-k test evaluation."""
+        top_sp, te, ts, n_perf, s_rank = self._evaluate_top_k_on_test(
+            ctx.enum_candidates, ctx.task, top_k=10)
+        if top_sp is not None and top_sp is not ctx.best_so_far:
+            ctx.best_so_far = top_sp
+        if ts is None and ctx.best_so_far is not None:
+            te, ts = self._evaluate_on_test(ctx.best_so_far, ctx.task)
+        ctx.best_so_far.task_id = ctx.task.task_id
+        self._record_solve(ctx)
+        front = self._extract_pareto_front(ctx.pareto)
+        wall = time.time() - ctx.t0
         logger.info(
-            f"  [wake] Task {task.task_id}: train_solved={solved}, "
-            f"energy={best_so_far.energy:.6f}, gens={gens_used}, "
-            f"evals={n_evals}, deduped={total_deduped}, "
-            f"pareto={len(front)}, time={wall:.1f}s"
-        )
+            f"  [wake] Task {ctx.task.task_id}: SOLVED by {phase_name}, "
+            f"energy={ctx.best_so_far.energy:.6f}, evals={ctx.n_evals}, "
+            f"candidates={n_perf}, time={wall:.1f}s")
+        train_preds, test_preds = self._compute_predictions(ctx.best_so_far, ctx.task)
         return WakeResult(
-            task_id=task.task_id,
-            train_solved=solved,
-            best=best_so_far,
-            generations_used=gens_used,
-            evaluations=n_evals,
-            wall_time=wall,
-            pareto_front=front,
-            dedup_count=total_deduped,
-            train_predictions=train_preds,
-            test_predictions=test_preds,
-        )
+            task_id=ctx.task.task_id, train_solved=True, best=ctx.best_so_far,
+            generations_used=ctx.gens_used, evaluations=ctx.n_evals, wall_time=wall,
+            pareto_front=front, dedup_count=ctx.total_deduped,
+            test_error=te, test_solved=ts,
+            n_train_perfect=n_perf, solving_rank=s_rank,
+            train_predictions=train_preds, test_predictions=test_preds)
+
+    def _make_unsolved_result(self, ctx: _WakeContext) -> WakeResult:
+        """Build WakeResult for an unsolved task."""
+        if ctx.best_so_far:
+            ctx.best_so_far.task_id = ctx.task.task_id
+            if ctx.record:
+                self.memory.record_episode(
+                    ctx.task.task_id, ctx.task.train_examples,
+                    ctx.best_so_far.program, ctx.best_so_far.energy)
+        front = self._extract_pareto_front(ctx.pareto)
+        wall = time.time() - ctx.t0
+        train_preds, test_preds = self._compute_predictions(ctx.best_so_far, ctx.task)
+        logger.info(
+            f"  [wake] Task {ctx.task.task_id}: train_solved=False, "
+            f"energy={ctx.best_so_far.energy:.6f}, gens={ctx.gens_used}, "
+            f"evals={ctx.n_evals}, deduped={ctx.total_deduped}, "
+            f"pareto={len(front)}, time={wall:.1f}s")
+        return WakeResult(
+            task_id=ctx.task.task_id, train_solved=False,
+            best=ctx.best_so_far,
+            generations_used=ctx.gens_used, evaluations=ctx.n_evals,
+            wall_time=wall, pareto_front=front,
+            dedup_count=ctx.total_deduped,
+            train_predictions=train_preds, test_predictions=test_preds)
+
+    def _record_solve(self, ctx: _WakeContext) -> None:
+        """Record solution in memory if record=True."""
+        if ctx.record and ctx.best_so_far:
+            self.memory.record_episode(
+                ctx.task.task_id, ctx.task.train_examples,
+                ctx.best_so_far.program, ctx.best_so_far.energy)
+            self.memory.store_solution(ctx.task.task_id, ctx.best_so_far)
+            self._credit_library_usage(ctx.best_so_far.program)
 
     def _compute_predictions(
         self, best: Optional[ScoredProgram], task: Task
@@ -1160,15 +1141,20 @@ class Learner:
         # calls shutdown(wait=True), which blocks on Ctrl-C even when workers
         # ignore SIGINT. Instead, manage manually and call shutdown(wait=False)
         # on interrupt for immediate cleanup.
-        # Use "fork" context so workers inherit parent memory instead of
-        # re-importing from disk. This makes the pipeline robust to file
-        # edits during execution (workers use the code snapshot from when
-        # the parent process started, not the current on-disk version).
-        _fork_ctx = _mp.get_context("fork")
+        #
+        # Prefer "forkserver" over "fork": fork + threads causes deadlocks
+        # (Python 3.12+ deprecates fork on macOS). forkserver starts a clean
+        # server process at import time; workers are forked from it, avoiding
+        # the fork-after-thread race. Falls back to "fork" if forkserver is
+        # unavailable (e.g. some Linux configs), and finally to default.
+        try:
+            _mp_ctx = _mp.get_context("forkserver")
+        except ValueError:
+            _mp_ctx = _mp.get_context("fork")
         pool = ProcessPoolExecutor(
             max_workers=workers,
             initializer=_worker_init,
-            mp_context=_fork_ctx,
+            mp_context=_mp_ctx,
         )
         try:
             futures = {

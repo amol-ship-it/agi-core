@@ -321,6 +321,13 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **Where the ARC solve rate comes from:** 180 base primitives plus task-specific additions (~9,000 lines of domain code) encode human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition, correction), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
 
+### Current limitations
+
+- **ARC results are dominated by single-primitive matches.** ~95% of ARC solves are depth-1 (one primitive). The beam search, sleep phase, transition matrix, and library compounding contribute minimally to ARC results. The system is effectively a systematic primitive enumerator on this domain.
+- **The "domain-agnostic core" contains ARC-shaped hooks.** `try_object_decomposition`, `try_for_each_object`, `try_conditional_per_object`, and `try_cross_reference` are baked into the Environment interface but only meaningful for grid domains. Zork/ListOps return `None` for all of them, skipping ~60% of the wake pipeline.
+- **Zork and SymbolicMath are toy-scale.** They validate the adapter architecture but have too few tasks (4-20) to constitute evidence of domain generality.
+- **Beam search ROI is poor.** Exhaustive enumeration (phases 1-1.75) catches nearly all solves. Beam search (phase 2) adds ~1/400 tasks despite being the most expensive phase.
+
 ## Structure
 
 ```
@@ -366,7 +373,7 @@ agi-core/
 │       ├── __init__.py      # Game engine + all 4 interfaces
 │       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (549 tests)
+├── tests/                   # Test suite (557 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -385,7 +392,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (549 tests):** 73% overall. Core modules: learner 68%, all other core modules 95-100%. Benchmark runner in `common/benchmark.py`. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
+**Current coverage (557 tests):** 79% overall. Core modules: learner 80%, all other core modules 95-100%. Benchmark runner: `common/benchmark.py` 58% (covered by integration smoke tests). Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 78%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
