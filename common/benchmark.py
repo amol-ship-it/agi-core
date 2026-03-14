@@ -277,10 +277,6 @@ Examples:
                         help="Top-K singles for triple exhaustion (default 15)")
     parser.add_argument("--sequential-compounding", action="store_true",
                         help="Process tasks sequentially with immediate concept promotion")
-    parser.add_argument("--compounding", action="store_true",
-                        help="Enable compounding mode: depth-2 exhaustive + 3 rounds + "
-                             "sequential compounding + relaxed library promotion. "
-                             "Forces the system to rely on library for depth-3+ solutions.")
     parser.add_argument("--culture", type=str, default="",
                         help="Path to culture file to load (cross-run knowledge transfer)")
     parser.add_argument("--save-culture", type=str, default="",

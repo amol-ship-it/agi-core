@@ -27,13 +27,13 @@ git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI
 git clone https://github.com/arcprizeorg/ARC-AGI-2.git data/ARC-AGI-2
 
 # Reproduce our results — one command does train + eval with culture transfer
-python -m experiments.phase1_arc
+python -m common --domain arc-agi-1 --run-mode pipeline
 
 # Run the test suite (~1 second)
 python -m pytest tests/ -v
 ```
 
-The default command runs all 400 training tasks, saves the learned culture, then runs all 400 evaluation tasks using that culture. Results, logs, visualizations, and culture snapshots are auto-saved with timestamps. Output file paths are printed at the start so you can `tail -f` them in another terminal.
+The pipeline command runs all 400 training tasks, saves the learned culture, then runs all 400 evaluation tasks using that culture. Results, logs, visualizations, and culture snapshots are auto-saved with timestamps. Output file paths are printed at the start so you can `tail -f` them in another terminal.
 
 **Requirements:** Python 3.10+, NumPy, SciPy, Numba. See `requirements.txt`.
 
@@ -48,22 +48,24 @@ git -C data/ARC-AGI-2 pull
 
 ## Usage
 
+All domains run through a single CLI entry point:
+
 ```bash
 # Full pipeline: train → save culture → eval (default, recommended)
-python -m experiments.phase1_arc
+python -m common --domain arc-agi-1 --run-mode pipeline
 
-# Quick subset for development (50 tasks, 500K compute cap, ~5s)
-python -m experiments.phase1_arc --mode quick
+# Quick subset for development (50 tasks, 500K compute cap, ~4s)
+python -m common --domain arc-agi-1 --mode quick
 
 # Train only, save culture for later
-python -m experiments.phase1_arc --train-only
-python -m experiments.phase1_arc --train-only --save-culture my_culture.json
+python -m common --domain arc-agi-1 --run-mode single --split training
+python -m common --domain arc-agi-1 --run-mode single --split training --save-culture my_culture.json
 
 # Eval only with a pre-trained culture file
-python -m experiments.phase1_arc --eval-only --culture runs/20260311_120000_phase1_train_culture.json
+python -m common --domain arc-agi-1 --run-mode single --split evaluation --culture runs/TIMESTAMP_culture.json
 
 # Single-process for debugging
-python -m experiments.phase1_arc --workers 1
+python -m common --domain arc-agi-1 --workers 1
 ```
 
 ### Running a subset of tasks
@@ -72,49 +74,33 @@ Tasks are **shuffled by default** using a deterministic seed (`--seed 42`), so a
 
 ```bash
 # Quick mode already uses 50 tasks — fastest way to iterate
-python -m experiments.phase1_arc --mode quick
+python -m common --domain arc-agi-1 --mode quick
 
 # Custom subset: 100 tasks with default search depth
-python -m experiments.phase1_arc --max-tasks 100
+python -m common --domain arc-agi-1 --max-tasks 100
 
 # Tiny smoke test: 10 tasks
-python -m experiments.phase1_arc --mode quick --max-tasks 10
+python -m common --domain arc-agi-1 --mode quick --max-tasks 10
 
 # Full 400-task benchmark with quick search settings
-python -m experiments.phase1_arc --mode quick --max-tasks 0
+python -m common --domain arc-agi-1 --mode quick --max-tasks 0
 ```
 
-### Other experiments
+### Other domains
 
 ```bash
 # ARC-AGI-2 (1000 training + 120 eval tasks, harder than AGI-1)
-python -m experiments.phase2_arc --mode quick
+python -m common --domain arc-agi-2 --mode quick
 
 # Zork text adventure — navigate rooms, collect items, unlock doors
-python -m experiments.zork_baseline --mode quick
+python -m common --domain zork --mode quick
+
+# List operations — compounding demonstration
+python -m common --domain list-ops --mode quick
 
 # Symbolic regression — discover mathematical formulas (y=2x+1, y=x², y=sin(x)+x, ...)
 python -m domains.symbolic_math
 ```
-
-### Unified CLI
-
-All domains can be run through a single entry point:
-
-```bash
-# Equivalent to: python -m experiments.phase1_arc --mode quick --max-tasks 10
-python -m common --domain arc-agi-1 --mode quick --max-tasks 10
-
-# Full pipeline (train -> eval)
-python -m common --domain arc-agi-1 --run-mode pipeline
-
-# Other domains
-python -m common --domain zork --mode quick
-python -m common --domain list-ops --mode quick
-python -m common --domain arc-agi-2 --mode quick
-```
-
-The experiment scripts (`python -m experiments.phase1_arc` etc.) support domain-specific CLI args (e.g. `--data-dir`, `--train-only`).
 
 The Zork domain is fully self-contained (custom game engine, no external dependencies). ARC-AGI-2 requires the dataset clone above.
 
@@ -123,29 +109,18 @@ The Zork domain is fully self-contained (custom game engine, no external depende
 Every run automatically saves timestamped files. Paths are printed at the start so you can monitor progress live:
 
 ```
-runs/phase1_arc_pipeline_TIMESTAMP.json          — combined: parameters + train/eval summaries + all tasks
-runs/phase1_arc_pipeline_TIMESTAMP.jsonl         — all task records (train + eval) with phase tags
-runs/phase1_arc_train_TIMESTAMP_culture.json     — learned culture snapshot (for eval / cross-run transfer)
-runs/phase1_arc_pipeline_TIMESTAMP_train_viz.html — train results visualization (index)
-runs/phase1_arc_pipeline_TIMESTAMP_eval_viz.html  — eval results visualization (index)
-runs/phase1_arc_pipeline_TIMESTAMP_train_viz/     — per-task detail pages (train)
-runs/phase1_arc_pipeline_TIMESTAMP_eval_viz/      — per-task detail pages (eval)
-```
-
-In standalone mode (`--train-only` or `--eval-only`), each phase writes its own files:
-
-```
-runs/phase1_arc_train_TIMESTAMP.log      — full console output (tee'd)
-runs/phase1_arc_train_TIMESTAMP.jsonl    — live per-task results (tail -f friendly)
-runs/phase1_arc_train_TIMESTAMP.json     — final results: meta + summary + per-task + library
-runs/phase1_arc_train_TIMESTAMP_viz.html — results visualization (index)
-runs/phase1_arc_train_TIMESTAMP_viz/     — per-task detail pages
+runs/arc_agi_1_training_TIMESTAMP.jsonl        — live per-task results (tail -f friendly)
+runs/arc_agi_1_training_TIMESTAMP.json         — final results: meta + summary + per-task + library
+runs/arc_agi_1_training_TIMESTAMP_culture.json — learned culture snapshot (for eval / cross-run transfer)
+runs/arc_agi_1_training_TIMESTAMP_viz.html     — results visualization (index)
+runs/arc_agi_1_training_TIMESTAMP_viz/         — per-task detail pages
+runs/arc_agi_1_training_TIMESTAMP.log          — full console output
 ```
 
 Monitor a running benchmark in another terminal:
 ```bash
-tail -f runs/phase1_arc_*.jsonl    # watch task results as they complete
-tail -f runs/phase1_arc_*.log      # watch full console output
+tail -f runs/arc_agi_1_*.jsonl    # watch task results as they complete
+tail -f runs/arc_agi_1_*.log      # watch full console output
 ```
 
 ### Visualization
@@ -154,10 +129,10 @@ HTML visualizations are auto-generated after every run. The index page shows all
 
 ```bash
 # Regenerate visualization from a previous run
-python -m experiments.visualize_results runs/phase1_arc_pipeline_TIMESTAMP.json
+python -m experiments.visualize_results runs/arc_agi_1_training_TIMESTAMP.json
 
 # Filter to only show overfit tasks
-python -m experiments.visualize_results runs/phase1_arc_pipeline_TIMESTAMP.json --filter overfit
+python -m experiments.visualize_results runs/arc_agi_1_training_TIMESTAMP.json --filter overfit
 ```
 
 ### Verifying individual solves
@@ -184,10 +159,10 @@ To verify a specific solve:
 cat data/ARC-AGI/data/training/007bbfb7.json | python -m json.tool
 
 # Search for a task in the JSONL results
-grep "007bbfb7" runs/*_phase1_train.jsonl | python -m json.tool
+grep "007bbfb7" runs/arc_agi_1_*.jsonl | python -m json.tool
 
 # Search in the final JSON
-python -c "import json; d=json.load(open('runs/TIMESTAMP_phase1_train.json')); print(json.dumps(d['tasks']['007bbfb7'], indent=2))"
+python -c "import json; d=json.load(open('runs/arc_agi_1_training_TIMESTAMP.json')); print(json.dumps(d['tasks']['007bbfb7'], indent=2))"
 ```
 
 Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, `test_solved`, `test_error`, `energy`, `prediction_error`, `program`, `evaluations`, `wall_time`, `train_predictions`, `test_predictions`.
@@ -212,7 +187,7 @@ All presets run **1 round** with **seed 42** by default. Results are fully deter
 **Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
 ```bash
-python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
+python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 ```
 
 ### Expected performance
@@ -253,14 +228,16 @@ Atomic vocabulary solves fewer tasks per round (fewer primitives) but forces dee
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--domain` | (required) | Domain: `arc-agi-1`, `arc-agi-2`, `zork`, or `list-ops` |
 | `--mode` | `default` | Preset: `quick`, `default`, or `contest` |
-| `--data-dir` | auto-detect | Path to ARC-AGI data directory |
-| `--train-only` | off | Train only, no eval phase |
-| `--eval-only` | off | Eval only (requires `--culture`) |
+| `--run-mode` | `single` | `single` (train or eval) or `pipeline` (train → eval) |
+| `--split` | `training` | Data split for single mode: `training` or `evaluation` |
+| `--vocabulary` | `full` | Primitive vocabulary: `full`, `minimal`, or `atomic` |
 | `--culture` | none | Culture file to load (cross-run knowledge transfer) |
 | `--save-culture` | auto | Override auto culture save path |
 | `--max-tasks` | from preset | Limit tasks (0 = all). Quick: `50`, default/contest: all |
 | `--rounds` | `1` | Wake-sleep rounds |
+| `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
 | `--beam-width` | from preset | Beam search width. Quick/default: `1` (off), contest: `30` |
 | `--max-generations` | from preset | Beam generations. Quick/default: `1` (off), contest: `15` |
 | `--workers` | `0` (perf cores) | Parallel workers. `0` = auto-detect performance cores |
@@ -269,8 +246,7 @@ Atomic vocabulary solves fewer tasks per round (fewer primitives) but forces dee
 | `--exhaustive-depth` | `3` | Exhaustive enumeration depth (`0`=off, `2`=pairs, `3`=triples) |
 | `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
 | `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |
-| `--vocabulary` | `full` | Primitive vocabulary: `full`, `minimal`, or `atomic` |
-| `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
+| `--data-dir` | auto-detect | Path to data directory |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
 | `--no-log` | off | Disable log file (console only) |
 
@@ -362,12 +338,8 @@ agi-core/
 │   ├── benchmark.py         # ExperimentConfig, run_experiment, run_pipeline, presets, progress
 │   └── __main__.py          # Unified CLI: python -m common --domain arc-agi-1 --mode quick
 │
-├── experiments/             # Thin domain-specific wrappers
-│   ├── phase1_arc.py        # ARC-AGI-1 training & evaluation pipeline
-│   ├── phase2_arc.py        # ARC-AGI-2 baseline experiment
-│   ├── visualize_results.py # HTML visualization generator
-│   ├── zork_baseline.py     # Zork text adventure baseline
-│   └── list_compounding.py  # List ops compounding demonstration
+├── experiments/             # Diagnostic tools and visualization
+│   └── visualize_results.py # HTML visualization generator
 │
 ├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
 │   ├── arc/                 # ARC-AGI grid transformations (60 minimal / 180 full / 27 atomic)
