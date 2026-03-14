@@ -75,6 +75,7 @@ class ARCGrammar(Grammar):
     Vocabulary modes:
     - "full": 180 hand-crafted primitives (maximum coverage, minimal composition)
     - "minimal": ~26 fundamental primitives (forces composition, enables compounding)
+    - "atomic": ~27 truly atomic operations + combinators (enables deep composition)
     """
 
     def __init__(self, seed: int = 42, vocabulary: str = "full"):
@@ -89,6 +90,9 @@ class ARCGrammar(Grammar):
         if self._vocabulary == "minimal":
             # With minimal vocab, all primitives are essential for composition
             return frozenset()
+        if self._vocabulary == "atomic":
+            from .atomic_primitives import ATOMIC_ESSENTIAL_PAIR_CONCEPTS
+            return ATOMIC_ESSENTIAL_PAIR_CONCEPTS
         return _ARC_ESSENTIAL_PAIR_CONCEPTS
 
     def task_priority_primitives(self, task: Task) -> list[str]:
@@ -159,6 +163,11 @@ class ARCGrammar(Grammar):
         return hints
 
     def base_primitives(self) -> list[Primitive]:
+        if self._vocabulary == "atomic":
+            from .atomic_primitives import build_atomic_primitives
+            from .primitives import register_atomic_primitives
+            register_atomic_primitives()
+            return build_atomic_primitives() + self._task_prims
         if self._vocabulary == "minimal":
             return list(ARC_MINIMAL_PRIMITIVES) + self._task_prims
         return list(ARC_PRIMITIVES) + self._task_prims
@@ -177,16 +186,21 @@ class ARCGrammar(Grammar):
 
         # 1. Task-specific color primitives
         task_colors = _extract_task_colors(task)
-        color_prims = build_task_color_primitives(task_colors)
+        if self._vocabulary == "atomic":
+            from .atomic_primitives import build_atomic_task_color_primitives
+            color_prims = build_atomic_task_color_primitives(task_colors)
+        else:
+            color_prims = build_task_color_primitives(task_colors)
         for p in color_prims:
             self._task_prims.append(p)
             register_prim(p)
 
-        # 2. Learned structural primitives
-        prims = _learn_parameterized_prims(task)
-        for p in prims:
-            self._task_prims.append(p)
-            register_prim(p)
+        # 2. Learned structural primitives (skip for atomic — keep it pure)
+        if self._vocabulary != "atomic":
+            prims = _learn_parameterized_prims(task)
+            for p in prims:
+                self._task_prims.append(p)
+                register_prim(p)
 
     def compose(self, outer: Primitive, inner_programs: list[Program]) -> Program:
         return Program(root=outer.name, children=inner_programs)

@@ -5370,6 +5370,14 @@ def register_prim(p: Primitive) -> None:
     _PRIM_MAP[p.name] = p
 
 
+def register_atomic_primitives() -> None:
+    """Register atomic primitives in _PRIM_MAP (called lazily on first use)."""
+    from .atomic_primitives import build_atomic_primitives
+    for p in build_atomic_primitives():
+        if p.name not in _PRIM_MAP:
+            _PRIM_MAP[p.name] = p
+
+
 def lookup_prim(name: str) -> Optional[Primitive]:
     """Look up a primitive by name."""
     return _PRIM_MAP.get(name)
