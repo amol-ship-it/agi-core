@@ -374,7 +374,9 @@ Also provided latest ARC-AGI-2 numbers: 312/1000 (31.2%) train, 9/120 (7.5%) eva
 
 > Implement the following plan: Repository Audit, Cleanup, and Strategic Next Steps
 
-[User provided a detailed plan with two parts: (A) Code cleanup — add .DS_Store to .gitignore, remove dead --verbose parameter, remove ~70 dead functions from primitives.py (~1,425 lines), update README test counts; (B) Strategic experiments — per-object conditional transforms, more cross-reference strategies, fixed-point with depth-2 compositions, predicate-guided enumeration pruning. The plan followed the established scientific method: hypothesis → small test → measure → commit if positive.]
+[User provided a detailed plan with two parts: (A) Code cleanup — add .DS_Store to .gitignore, remove dead --verbose parameter, remove ~70 dead functions from primitives.py (6,974→5,549 lines, -1,425), update README test counts; (B) Strategic experiments — per-object conditional transforms, more cross-reference strategies, fixed-point with depth-2 compositions, predicate-guided enumeration pruning.
+
+Results: Part A completed cleanly (all tests pass, no regression). Part B: all 4 experiments implemented and tested. Quick benchmark (50 tasks): +1 train solve from predicate-guided pruning, others neutral. Full scale (400 tasks): neutral — both vocabularies converge at ~35/400 eval (8.8%). The experiments add composition infrastructure for future gains.]
 
 ---
 

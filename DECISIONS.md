@@ -2214,5 +2214,23 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 
 **Result:** 12 fewer lines of dead plumbing. Zero behavioral change.
 
+### Decision 108: Four strategic experiments — infrastructure for future gains
+
+**Context:** After cleanup, implemented 4 experiments following rapid iteration (hypothesis → 50-task test → measure → commit):
+
+1. **Per-object conditional transforms** (Phase 1.125): `if(predicate, A, B)` applied per-object. Infrastructure for tasks requiring different transforms on different objects.
+2. **Cross-reference strategies 4-5**: Cell overlay (OR/AND/XOR of all grid cells) and key-cell masking (first/last cell as binary mask).
+3. **Fixed-point with depth-2**: Extended `_try_fixed_point()` from depth-1 only to depth≤2 near-miss programs.
+4. **Predicate-guided pool boosting**: `task_priority_primitives()` detects input structure (separators, objects, symmetry, mostly-empty) and boosts relevant primitives in pair pool.
+
+**Quick (50 tasks):** Experiment 4 yielded +1 train solve (task `0b148d64`), others neutral.
+
+**Full scale (400 tasks):**
+- Full vocab: train 112/400 (28.0%), eval 35/400 (8.8%)
+- Minimal vocab: train 95/400 (23.8%), eval 35/400 (8.8%)
+- Both vocabularies converge at ~35/400 eval (8.8%) at default cap
+
+**Assessment:** Neutral at 400-task scale. The experiments add composition strategies that don't yet trigger on enough tasks to move aggregate numbers. They provide infrastructure for future gains when combined with additional primitives or when specific tasks are targeted.
+
 ---
 *This document will be updated with each new session and major decision.*

@@ -201,10 +201,10 @@ python -m experiments.phase1_arc --compute-cap 100M    # override preset cap
 
 | Vocabulary | All 400 (quick cap) | All 400 (default cap) |
 |-----------|--------------------|-----------------------|
-| `full` (180 prims) | 25/400 (6.2%) | **36/400 (9.0%)** |
-| `minimal` (60 prims) | 26/400 (6.5%) | — |
+| `full` (180 prims) | 25/400 (6.2%) | **35/400 (8.8%)** |
+| `minimal` (60 prims) | 26/400 (6.5%) | **35/400 (8.8%)** |
 
-Note: training accuracy is higher (default: 110/400 = 27.5%) with overfit rate reduced to 24% (was 61% before cleanup). Cross-reference composition rule added +5 eval solves with zero overfit.
+Note: training accuracy is higher (full: 112/400 = 28.0%, minimal: 95/400 = 23.8%) with overfit rate ~24%. Cross-reference composition rule added +5 eval solves with zero overfit. Both vocabularies converge at ~35/400 eval (8.8%) at default compute cap.
 
 **Other domains:**
 
@@ -340,7 +340,7 @@ agi-core/
 │   └── zork/                # Text adventure (30 action primitives, 16 predicates)
 │       └── __init__.py      # Game engine + all 4 interfaces
 │
-├── tests/                   # Test suite (516 tests)
+├── tests/                   # Test suite (520 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -359,7 +359,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (516 tests):** 73% overall. Core modules: learner 68%, runner 25% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
+**Current coverage (520 tests):** 73% overall. Core modules: learner 68%, runner 25% (mostly CLI/pipeline code), all other core modules 95-100%. Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 94%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
