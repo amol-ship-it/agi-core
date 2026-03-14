@@ -109,6 +109,78 @@ class ARCEnv(Environment):
 
         return None
 
+    def try_conditional_per_object(self, task, candidate_programs, predicates, top_k=8):
+        """Try per-object conditional transforms: if(pred, A, B) per object.
+
+        For each predicate, assigns transform A to objects matching the predicate
+        and transform B to non-matching objects. Catches tasks like "rotate small
+        objects, fill large ones."
+
+        Also tries identity for one branch: if(pred, A, identity) and
+        if(pred, identity, B) — handles "transform only matching objects."
+        """
+        if not task.train_examples or not predicates:
+            return None
+        # Only same-dims tasks
+        for inp, out in task.train_examples:
+            if len(inp) != len(out) or (inp and out and len(inp[0]) != len(out[0])):
+                return None
+
+        from .objects import (find_foreground_shapes, place_subgrid,
+                              _get_background_color, _test_on_examples)
+        bg = _get_background_color(task.train_examples[0][0])
+
+        sorted_cands = sorted(candidate_programs, key=lambda s: s.prediction_error)[:top_k]
+        if not sorted_cands:
+            return None
+
+        # Build (prog_a, prog_b) pairs: all pairs + identity-one-branch
+        identity_prog = Program(root="identity")
+        pairs = []
+        for i, sp_a in enumerate(sorted_cands):
+            # identity + A, A + identity
+            pairs.append((sp_a.program, identity_prog))
+            pairs.append((identity_prog, sp_a.program))
+            for j, sp_b in enumerate(sorted_cands):
+                if i < j:
+                    pairs.append((sp_a.program, sp_b.program))
+                    pairs.append((sp_b.program, sp_a.program))
+
+        for pred_name, pred_fn in predicates:
+            for prog_a, prog_b in pairs:
+
+                def _make_cond_obj_fn(pa=prog_a, pb=prog_b, pf=pred_fn,
+                                      env=self, bg_color=bg):
+                    def fn(grid):
+                        shapes = find_foreground_shapes(grid)
+                        if not shapes:
+                            return grid
+                        h, w = len(grid), len(grid[0]) if grid else 0
+                        canvas = [[bg_color] * w for _ in range(h)]
+                        for shape in shapes:
+                            sub = shape["subgrid"]
+                            try:
+                                prog = pa if pf(sub) else pb
+                                transformed = env.execute(prog, sub)
+                                if not isinstance(transformed, list) or not transformed:
+                                    transformed = sub
+                            except Exception:
+                                transformed = sub
+                            canvas = place_subgrid(canvas, transformed,
+                                                   shape["position"],
+                                                   transparent_color=bg_color)
+                        return canvas
+                    return fn
+
+                cond_fn = _make_cond_obj_fn()
+                if _test_on_examples(cond_fn, task.train_examples):
+                    name = f"cond_obj_{pred_name}({repr(prog_a)},{repr(prog_b)})"
+                    prim = Primitive(name=name, arity=1, fn=cond_fn, domain="arc")
+                    _PRIM_MAP[name] = prim
+                    return (name, cond_fn)
+
+        return None
+
     def try_cross_reference(self, task, primitives):
         """Try solving via cross-reference: one grid part informs another.
 
@@ -359,6 +431,100 @@ class ARCEnv(Environment):
                     prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
                     _PRIM_MAP[name] = prim
                     return (name, fn)
+
+        # --- Strategy 4: Overlay/difference of all grid cells ---
+        # For grids with separators forming a cell grid, try overlaying all cells
+        # with OR (union), AND (intersection), or XOR (difference).
+        if (h_lines or v_lines):
+            cells = _split_grid_cells(first_inp)
+            n_col_cells = len(v_lines) + 1 if v_lines else 1
+            n_row_cells = len(h_lines) + 1 if h_lines else 1
+            if cells and len(cells) >= 2 and n_row_cells * n_col_cells == len(cells):
+                cell_h = len(cells[0])
+                cell_w = len(cells[0][0]) if cells[0] else 0
+                # Check output matches cell size
+                if cell_h == out_h and cell_w == out_w:
+                    out_colors = {int(c) for row in first_out for c in row if c != 0}
+                    for op_name, op_fn in [
+                        ("or",  lambda a, b: int(a != 0 or b != 0)),
+                        ("and", lambda a, b: int(a != 0 and b != 0)),
+                        ("xor", lambda a, b: int((a != 0) != (b != 0))),
+                    ]:
+                        for recolor in sorted(out_colors | {1}):
+                            def _make_cell_overlay(op=op_fn, rc=recolor):
+                                def fn(grid):
+                                    try:
+                                        gc = _split_grid_cells(grid)
+                                        if not gc or len(gc) < 2:
+                                            return grid
+                                        ch = len(gc[0])
+                                        cw = len(gc[0][0]) if gc[0] else 0
+                                        result = [[0] * cw for _ in range(ch)]
+                                        for cell in gc:
+                                            for r in range(min(ch, len(cell))):
+                                                for c in range(min(cw, len(cell[0]))):
+                                                    if op(int(result[r][c]),
+                                                          int(cell[r][c])):
+                                                        result[r][c] = rc
+                                                    elif result[r][c] != 0:
+                                                        pass  # keep existing
+                                        return result
+                                    except Exception:
+                                        return grid
+                                return fn
+
+                            fn = _make_cell_overlay()
+                            if _test_on_examples(fn, task.train_examples):
+                                name = f"cross_ref_cells_{op_name}_color_{recolor}"
+                                prim = Primitive(name=name, arity=1, fn=fn,
+                                                 domain="arc")
+                                _PRIM_MAP[name] = prim
+                                return (name, fn)
+
+        # --- Strategy 5: Key cell as mask for others ---
+        # The first/last cell acts as a binary mask determining which cells
+        # of other cells survive to the output.
+        if (h_lines or v_lines):
+            cells = _split_grid_cells(first_inp)
+            n_col_cells = len(v_lines) + 1 if v_lines else 1
+            n_row_cells = len(h_lines) + 1 if h_lines else 1
+            if cells and len(cells) >= 3 and n_row_cells * n_col_cells == len(cells):
+                cell_h = len(cells[0])
+                cell_w = len(cells[0][0]) if cells[0] else 0
+
+                for key_pos_name, key_idx_fn in [
+                    ("first", lambda gc: 0),
+                    ("last", lambda gc: len(gc) - 1),
+                ]:
+                    def _make_key_mask(ki_fn=key_idx_fn):
+                        def fn(grid):
+                            try:
+                                gc = _split_grid_cells(grid)
+                                if not gc or len(gc) < 3:
+                                    return grid
+                                ki = ki_fn(gc)
+                                key = gc[ki]
+                                ch = len(key)
+                                cw = len(key[0]) if key else 0
+                                result = [[0] * cw for _ in range(ch)]
+                                for idx, cell in enumerate(gc):
+                                    if idx == ki:
+                                        continue
+                                    for r in range(min(ch, len(cell))):
+                                        for c in range(min(cw, len(cell[0]))):
+                                            if key[r][c] != 0 and cell[r][c] != 0:
+                                                result[r][c] = int(cell[r][c])
+                                return result
+                            except Exception:
+                                return grid
+                        return fn
+
+                    fn = _make_key_mask()
+                    if _test_on_examples(fn, task.train_examples):
+                        name = f"cross_ref_{key_pos_name}_cell_mask"
+                        prim = Primitive(name=name, arity=1, fn=fn, domain="arc")
+                        _PRIM_MAP[name] = prim
+                        return (name, fn)
 
         return None
 

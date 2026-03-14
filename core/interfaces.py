@@ -105,6 +105,19 @@ class Environment(ABC):
         """
         return None
 
+    def try_conditional_per_object(
+        self,
+        task: "Task",
+        candidate_programs: list["ScoredProgram"],
+        predicates: list,
+        top_k: int = 8,
+    ) -> Optional[tuple[str, Any]]:
+        """Try per-object conditional transforms: if(pred, A, B) per object.
+
+        Default: not supported (returns None).
+        """
+        return None
+
     def try_cross_reference(
         self,
         task: "Task",

@@ -322,6 +322,30 @@ class Learner:
 
         logger.debug(f"  [wake] Phase 1.12 for-each-object: {time.time()-t_phase:.2f}s")
 
+        # --- Phase 1.125: Conditional per-object transforms ---
+        # Try if(predicate, A, B) applied per-object: objects matching predicate
+        # get transform A, others get B. E.g. "rotate small objects, fill large."
+        t_phase = time.time()
+        predicates = self.grammar.get_predicates()
+        if predicates and enum_candidates and _budget_ok() and \
+                (not best_so_far or best_so_far.prediction_error > cfg.solve_threshold):
+            cpo_result = self.env.try_conditional_per_object(
+                task, enum_candidates, predicates, top_k=8)
+            if cpo_result is not None:
+                name, fn = cpo_result
+                prog = Program(root=name)
+                sp = self._evaluate_program(prog, task)
+                n_evals += 1
+                self._update_pareto_front(pareto, sp)
+                if best_so_far is None or sp.energy < best_so_far.energy:
+                    best_so_far = sp
+                enum_candidates.append(sp)
+
+                if best_so_far and best_so_far.prediction_error <= cfg.solve_threshold:
+                    return _make_solved_result("conditional per-object")
+
+        logger.debug(f"  [wake] Phase 1.125 cond-per-object: {time.time()-t_phase:.2f}s")
+
         # --- Phase 1.13: Cross-reference ---
         # Try using one part of the grid to inform transformation of another.
         # E.g., small object as template, grid cell as mask for other cells.
@@ -1653,7 +1677,7 @@ class Learner:
         near_misses = [
             sp for sp in candidates
             if solve_thresh < sp.prediction_error <= threshold
-            and sp.program.depth == 1  # only single primitives for now
+            and sp.program.depth <= 2  # depth-1 and depth-2 programs
         ]
         if not near_misses:
             return None
@@ -1664,16 +1688,16 @@ class Learner:
         best_result: Optional[ScoredProgram] = None
 
         for nm in near_misses:
-            prim_name = nm.program.root
+            nm_prog = nm.program
 
             # Build a fixed-point version
-            fp_name = f"iterate_{prim_name}"
+            fp_name = f"iterate_{repr(nm_prog)}"
 
-            def _make_fp(name=prim_name, iters=max_iters):
+            def _make_fp(prog=nm_prog, iters=max_iters, env=self.env):
                 def fp_fn(grid):
                     current = grid
                     for _ in range(iters):
-                        result = self.env.execute(Program(root=name), current)
+                        result = env.execute(prog, current)
                         if not isinstance(result, list) or not result:
                             return current
                         if result == current:
