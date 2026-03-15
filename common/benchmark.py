@@ -1199,24 +1199,24 @@ def print_pipeline_summary(
     if round_summaries and len(round_summaries) >= 1:
         print()
         print("  COMPOUNDING CURVE (train / eval per round):")
-        print(f"  {'Round':>5}  {'Train':>12}  {'Overfit':>7}  {'Library':>7}  "
-              f"{'Eval':>12}  {'Overfit':>7}  {'Train time':>10}  {'Eval time':>10}")
-        print(f"  {'─'*5}  {'─'*12}  {'─'*7}  {'─'*7}  "
-              f"{'─'*12}  {'─'*7}  {'─'*10}  {'─'*10}")
+        # Fixed-width columns: Round(5) Train(15) Overfit(7) Library(7) Eval(15) Overfit(7) TrainT(10) EvalT(10)
+        hdr = (f"  {'Round':>5}  {'Train':>15}  {'Overfit':>7}  {'Library':>7}"
+               f"  {'Eval':>15}  {'Overfit':>7}  {'Train t':>10}  {'Eval t':>10}")
+        sep = (f"  {'─'*5}  {'─'*15}  {'─'*7}  {'─'*7}"
+               f"  {'─'*15}  {'─'*7}  {'─'*10}  {'─'*10}")
+        print(hdr)
+        print(sep)
         for rs in round_summaries:
             t_total = rs["train_total"]
             e_total = rs["eval_total"]
             t_rate = rs["train_solved"] / max(t_total, 1)
             e_rate = rs["eval_solved"] / max(e_total, 1)
+            t_cell = f"{rs['train_solved']}/{t_total} ({t_rate:.1%})"
+            e_cell = f"{rs['eval_solved']}/{e_total} ({e_rate:.1%})"
             t_wall = fmt_duration(rs.get("train_wall", 0))
             e_wall = fmt_duration(rs.get("eval_wall", 0))
-            print(f"  {rs['round']:>5}  "
-                  f"{rs['train_solved']:>4}/{t_total} ({t_rate:>5.1%})  "
-                  f"{rs['train_overfit']:>7}  "
-                  f"{rs['train_library']:>7}  "
-                  f"{rs['eval_solved']:>4}/{e_total} ({e_rate:>5.1%})  "
-                  f"{rs['eval_overfit']:>7}  "
-                  f"{t_wall:>10}  {e_wall:>10}")
+            print(f"  {rs['round']:>5}  {t_cell:>15}  {rs['train_overfit']:>7}  {rs['train_library']:>7}"
+                  f"  {e_cell:>15}  {rs['eval_overfit']:>7}  {t_wall:>10}  {e_wall:>10}")
         if len(round_summaries) > 1:
             if round_summaries[-1]["eval_solved"] > round_summaries[0]["eval_solved"]:
                 r1 = round_summaries[0]["eval_solved"]
