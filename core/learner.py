@@ -1966,8 +1966,10 @@ class Learner:
             and depth1_scores.get(name, 1.0) <= INNER_STEP_THRESHOLD
         ]
         # Fallback: if too few pass threshold, use top half by score
+        # but still exclude no-ops
         if len(inner_pool) < pair_top_k // 3:
-            inner_pool = pair_pool[:pair_top_k // 2]
+            inner_pool = [n for n in pair_pool[:pair_top_k // 2]
+                          if n not in noop_prims]
 
         # --- Depth 2: smart K × K' pairs (cost: 2 ops each) ---
         for outer_name in pair_pool:
@@ -1994,7 +1996,8 @@ class Learner:
         binary_prims = [p for p in primitives if p.arity == 2]
         if binary_prims and _budget_ok():
             OVERLAY_TOP_K = 15
-            overlay_pool = pair_pool[:OVERLAY_TOP_K]
+            overlay_pool = [n for n in pair_pool[:OVERLAY_TOP_K]
+                           if n not in noop_prims]
             for bp in binary_prims:
                 if not _budget_ok():
                     break
