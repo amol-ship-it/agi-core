@@ -1,4 +1,5 @@
-"""Tests for experiments/visualize_results.py learned-abstraction expansion."""
+"""Tests for experiments/visualize_results.py — learned-abstraction expansion,
+grid rendering robustness (inhomogeneous grids, malformed predictions)."""
 
 import os
 import sys
@@ -12,7 +13,10 @@ from experiments.visualize_results import (
     _expand_learned,
     _format_expanded_program,
     _graft_children,
+    _safe_grid_array,
     parse_program_tree,
+    render_grid,
+    _pred_border,
 )
 
 
@@ -232,6 +236,96 @@ class TestFormatExpandedProgram(unittest.TestCase):
         library_map = {"learned_0": Program(root="x")}
         result = _format_expanded_program("mirror_h(rotate_90)", library_map)
         self.assertEqual(result, "mirror_h(rotate_90)")
+
+
+class TestSafeGridArray(unittest.TestCase):
+    """Test _safe_grid_array handles malformed grids gracefully."""
+
+    def test_normal_grid(self):
+        """Normal 2D grid converts correctly."""
+        import numpy as np
+        arr = _safe_grid_array([[1, 2], [3, 4]])
+        self.assertEqual(arr.shape, (2, 2))
+        self.assertEqual(arr[0, 0], 1)
+
+    def test_inhomogeneous_rows_padded(self):
+        """Rows of different lengths are padded with 0."""
+        import numpy as np
+        arr = _safe_grid_array([[1, 2, 3], [4, 5]])
+        self.assertEqual(arr.shape, (2, 3))
+        self.assertEqual(arr[1, 2], 0)  # padded
+
+    def test_nested_cells_flattened(self):
+        """Cells containing lists are flattened (take first element)."""
+        import numpy as np
+        arr = _safe_grid_array([[1, [2, 3]], [4, 5]])
+        self.assertIsNotNone(arr)
+        self.assertEqual(arr.shape, (2, 2))
+        self.assertEqual(arr[0, 1], 2)  # first element of [2, 3]
+
+    def test_none_returns_none(self):
+        self.assertIsNone(_safe_grid_array(None))
+
+    def test_empty_returns_none(self):
+        self.assertIsNone(_safe_grid_array([]))
+
+    def test_non_list_returns_none(self):
+        self.assertIsNone(_safe_grid_array("not a grid"))
+
+
+class TestRenderGridRobust(unittest.TestCase):
+    """Test render_grid handles edge cases without crashing."""
+
+    def test_normal_grid(self):
+        result = render_grid([[1, 2], [3, 4]])
+        self.assertIn('grid-wrapper', result)
+        self.assertNotIn('malformed', result)
+
+    def test_inhomogeneous_grid_renders(self):
+        """Inhomogeneous grid renders instead of crashing."""
+        result = render_grid([[1, 2, 3], [4, 5]])
+        self.assertIn('grid-wrapper', result)
+        self.assertNotIn('malformed', result)  # padded, not malformed
+
+    def test_empty_grid(self):
+        result = render_grid([])
+        self.assertIn('empty', result)
+
+    def test_none_grid(self):
+        result = render_grid(None)
+        self.assertIn('empty', result)
+
+    def test_deeply_nested_grid(self):
+        """Grid with nested cells doesn't crash."""
+        result = render_grid([[1, [2, 3]], [4, 5]])
+        self.assertIn('grid-wrapper', result)
+
+
+class TestPredBorderRobust(unittest.TestCase):
+    """Test _pred_border handles malformed grids."""
+
+    def test_matching_grids(self):
+        border, diff = _pred_border([[1, 2], [3, 4]], [[1, 2], [3, 4]])
+        self.assertEqual(border, "match-border")
+        self.assertIsNone(diff)
+
+    def test_different_grids(self):
+        border, diff = _pred_border([[1, 2], [3, 4]], [[1, 2], [3, 5]])
+        self.assertEqual(border, "diff-border")
+
+    def test_different_shapes(self):
+        border, diff = _pred_border([[1, 2]], [[1, 2], [3, 4]])
+        self.assertEqual(border, "diff-border")
+        self.assertIsNone(diff)
+
+    def test_inhomogeneous_prediction(self):
+        """Inhomogeneous prediction doesn't crash."""
+        border, diff = _pred_border([[1, 2, 3], [4, 5]], [[1, 2, 3], [4, 5, 6]])
+        self.assertEqual(border, "diff-border")
+
+    def test_none_prediction(self):
+        border, diff = _pred_border(None, [[1, 2]])
+        self.assertEqual(border, "")
 
 
 class TestExecuteStepsWithLibrary(unittest.TestCase):

@@ -142,5 +142,7 @@ class ARCAdapter(DomainAdapter):
             output_base = os.path.splitext(results_path)[0]
             return generate_html(results_path, output_base)
         except Exception as e:
-            print(f"  (visualization skipped: {e})")
+            import traceback
+            print(f"  (visualization failed for {results_path}: {e})")
+            traceback.print_exc()
             return []

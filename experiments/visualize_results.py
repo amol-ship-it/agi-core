@@ -114,10 +114,48 @@ def _html_page(title: str, body: str, extra_css: str = "") -> str:
 # Grid rendering
 # --------------------------------------------------------------------------
 
+def _safe_grid_array(grid) -> Optional[np.ndarray]:
+    """Convert a grid to a 2D numpy array, normalizing inhomogeneous rows.
+
+    ARC grids should be list[list[int]] but malformed predictions may have
+    inconsistent row lengths or nested structures. This normalizes them by
+    padding short rows with 0 and truncating any deeper nesting.
+    """
+    if not grid or not isinstance(grid, list):
+        return None
+    # Flatten any deeper nesting: ensure each row is a flat list of ints
+    rows = []
+    for row in grid:
+        if not isinstance(row, list):
+            return None
+        flat = []
+        for cell in row:
+            if isinstance(cell, (int, float, np.integer, np.floating)):
+                flat.append(int(cell))
+            elif isinstance(cell, (list, tuple)):
+                # Nested structure — take first element or 0
+                flat.append(int(cell[0]) if cell else 0)
+            else:
+                flat.append(0)
+        rows.append(flat)
+    if not rows:
+        return None
+    # Pad to uniform width
+    max_w = max(len(r) for r in rows)
+    if max_w == 0:
+        return None
+    for r in rows:
+        while len(r) < max_w:
+            r.append(0)
+    return np.array(rows, dtype=np.int32)
+
+
 def render_grid(grid, diff_grid=None, border_class="", cell_size=0) -> str:
     if not grid or not grid[0]:
         return '<div class="grid-wrapper"><em>empty</em></div>'
-    arr = np.array(grid, dtype=np.int32)
+    arr = _safe_grid_array(grid)
+    if arr is None:
+        return '<div class="grid-wrapper"><em>malformed grid</em></div>'
     h, w = arr.shape
     if cell_size <= 0:
         cell_size = 20
@@ -126,12 +164,13 @@ def render_grid(grid, diff_grid=None, border_class="", cell_size=0) -> str:
     bcls = f" {border_class}" if border_class else ""
     parts = [f'<div class="grid-wrapper"><div class="grid{bcls}" '
              f'style="grid-template-columns:repeat({w},{cell_size}px);">']
+    diff_arr = _safe_grid_array(diff_grid) if diff_grid is not None else None
     for r in range(h):
         for c in range(w):
             color = ARC_COLORS.get(int(arr[r, c]), "#333")
-            is_diff = (diff_grid is not None
-                       and r < len(diff_grid) and c < len(diff_grid[0])
-                       and int(arr[r, c]) != int(np.array(diff_grid)[r, c]))
+            is_diff = (diff_arr is not None
+                       and r < diff_arr.shape[0] and c < diff_arr.shape[1]
+                       and int(arr[r, c]) != int(diff_arr[r, c]))
             dc = ' diff' if is_diff else ''
             parts.append(f'<div class="cell{dc}" '
                          f'style="width:{cell_size}px;height:{cell_size}px;background:{color}"></div>')
@@ -148,8 +187,10 @@ def _pred_border(prediction, expected) -> tuple[str, Optional[list]]:
     """Returns (border_class, diff_grid) for a prediction vs expected."""
     if prediction is None or expected is None:
         return "", None
-    pa = np.array(prediction, dtype=np.int32)
-    ea = np.array(expected, dtype=np.int32)
+    pa = _safe_grid_array(prediction)
+    ea = _safe_grid_array(expected)
+    if pa is None or ea is None:
+        return "diff-border", None
     if pa.shape != ea.shape:
         return "diff-border", None
     if np.array_equal(pa, ea):
@@ -621,23 +662,36 @@ def _generate_split(title, source_name, tasks_data, task_map, env,
 
     os.makedirs(tasks_dir, exist_ok=True)
 
-    # Per-task detail pages
+    # Per-task detail pages — isolate failures so one bad task doesn't
+    # kill the entire visualization
     back_link = f"../{back_link_prefix}" if back_link_prefix else "../index.html"
+    failed_tasks = []
     for key, tid, tdata, status, err in task_items:
         task = task_map.get(tid)
         if task is None:
             continue
-        page = _generate_task_page(tid, tdata, task, env, back_link=back_link,
-                                   library_map=library_map)
-        with open(os.path.join(tasks_dir, f"{tid}.html"), "w") as f:
-            f.write(page)
+        try:
+            page = _generate_task_page(tid, tdata, task, env, back_link=back_link,
+                                       library_map=library_map)
+            with open(os.path.join(tasks_dir, f"{tid}.html"), "w") as f:
+                f.write(page)
+        except Exception as e:
+            failed_tasks.append((tid, e))
+            print(f"  (viz warning: {title} task {tid}: {e})")
 
     # Index page
-    index_html = _generate_index(title, source_name, task_items,
-                                 task_map, tasks_dir_name, env,
-                                 library_map=library_map)
-    with open(index_path, "w") as f:
-        f.write(index_html)
+    try:
+        index_html = _generate_index(title, source_name, task_items,
+                                     task_map, tasks_dir_name, env,
+                                     library_map=library_map)
+        with open(index_path, "w") as f:
+            f.write(index_html)
+    except Exception as e:
+        # Index failed — still return what we generated
+        print(f"  (viz warning: {title} index page: {e})")
+
+    if failed_tasks:
+        print(f"  (viz: {len(failed_tasks)} task pages skipped in {title})")
 
     return index_path, len(task_items)
 
