@@ -641,7 +641,11 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
 
     culture_path = (cfg.save_culture if cfg.save_culture
                      else os.path.join(runs_dir, f"{prefix}_culture.json"))
-    culture_jsonl_path = culture_path.replace(".json", ".jsonl")
+    # Culture JSONL defaults to alongside culture JSON, but can be
+    # overridden by pipeline runner to share a single file across rounds
+    culture_jsonl_path = getattr(cfg, '_culture_jsonl_path', None)
+    if culture_jsonl_path is None:
+        culture_jsonl_path = culture_path.replace(".json", ".jsonl")
 
     tee = None
     if not cfg.no_log and not cfg.suppress_files:
@@ -810,7 +814,11 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print()
 
     # Culture JSONL: log learning events after each round (tail -f friendly)
-    _culture_jsonl_file = open(culture_jsonl_path, "w") if culture_jsonl_path else None
+    # Use append mode so pipeline rounds accumulate in one file
+    _culture_jsonl_file = (open(culture_jsonl_path, "a")
+                           if culture_jsonl_path else None)
+
+    _round_offset = getattr(cfg, '_pipeline_round_offset', 0)
 
     def _on_round_done(round_num, round_result, memory):
         """Write culture snapshot after each round for live observation."""
@@ -818,6 +826,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             return
         from datetime import datetime
         ts = datetime.now().isoformat()
+        round_num = round_num + _round_offset  # pipeline round number
         for entry in memory.get_library():
             _culture_jsonl_file.write(_safe_dumps({
                 "event": "library", "round": round_num, "timestamp": ts,
@@ -1214,6 +1223,7 @@ def print_pipeline_summary(
     log_path: str = "",
     eval_label: str = "Evaluation Results (with culture transfer)",
     viz_paths: list[str] | None = None,
+    culture_jsonl_path: str = "",
 ):
     """Print a formatted pipeline summary to stdout."""
     train_data = train_result.results_data
@@ -1276,6 +1286,8 @@ def print_pipeline_summary(
     print(f"    Pipeline JSON:     {json_path}")
     print(f"    Pipeline JSONL:    {jsonl_path}")
     print(f"    Culture file:      {train_result.culture_path}")
+    if culture_jsonl_path:
+        print(f"    Culture (live):    {culture_jsonl_path}")
     if log_path:
         print(f"    Console log:       {log_path}")
     if viz_paths:
@@ -1345,6 +1357,10 @@ def run_pipeline(
         round_resolved = dict(resolved)
         round_resolved["rounds"] = 1
 
+        # Single culture JSONL for the whole pipeline (grows across rounds)
+        pipeline_culture_jsonl = os.path.join(
+            args.runs_dir, f"{prefix}_culture.jsonl")
+
         culture_path = ""
         train_result = None
         eval_result = None
@@ -1358,6 +1374,9 @@ def run_pipeline(
             # Load culture from previous round for compounding
             if culture_path:
                 train_cfg.culture_path = culture_path
+            # Share a single culture JSONL across all training rounds
+            train_cfg._culture_jsonl_path = pipeline_culture_jsonl
+            train_cfg._pipeline_round_offset = round_num - 1
             train_result = run_experiment(train_cfg)
             culture_path = train_result.culture_path
             print(f"\n  Culture saved: {culture_path}")
@@ -1369,6 +1388,8 @@ def run_pipeline(
             eval_cfg = make_eval_config(
                 args, round_resolved, max_tasks, eval_tasks,
                 culture_path, shared_ts)
+            # Eval doesn't learn — no culture JSONL needed
+            eval_cfg._culture_jsonl_path = ""
             eval_result = run_experiment(eval_cfg)
             print()
 
@@ -1393,4 +1414,5 @@ def run_pipeline(
             log_path=log_path,
             eval_label=eval_label,
             viz_paths=viz_paths,
+            culture_jsonl_path=pipeline_culture_jsonl,
         )
