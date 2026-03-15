@@ -5371,11 +5371,16 @@ def register_prim(p: Primitive) -> None:
 
 
 def register_atomic_primitives() -> None:
-    """Register atomic primitives in _PRIM_MAP (called lazily on first use)."""
-    from .atomic_primitives import build_atomic_primitives
+    """Register atomic, perception, and parameterized primitives in _PRIM_MAP."""
+    from .atomic_primitives import build_atomic_primitives, build_parameterized_primitives
+    from .perception import build_perception_primitives
     for p in build_atomic_primitives():
         if p.name not in _PRIM_MAP:
             _PRIM_MAP[p.name] = p
+    for p in build_perception_primitives():
+        _PRIM_MAP[p.name] = p
+    for p in build_parameterized_primitives():
+        _PRIM_MAP[p.name] = p
 
 
 def lookup_prim(name: str) -> Optional[Primitive]:

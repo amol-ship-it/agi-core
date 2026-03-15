@@ -1827,12 +1827,11 @@ class Learner:
         def _budget_ok() -> bool:
             return eval_budget <= 0 or n_evals < eval_budget
 
-        # --- Depth 1: all single primitives (cost: 1 op each) ---
-        # Always try ALL depth-1 prims (349 evals, essentially free) to collect
-        # multiple training-perfect candidates. This combats overfitting:
-        # if both erase_4 and erase_rare match training, top-k test evaluation
-        # can select the one that generalizes to test.
-        unary_prims = [p for p in primitives if p.arity <= 1]
+        # --- Depth 1: all single transform primitives (cost: 1 op each) ---
+        # Skip perception (returns values, not grids) and parameterized
+        # (needs perception children, handled separately below).
+        unary_prims = [p for p in primitives
+                       if p.arity <= 1 and p.kind == "transform"]
         prim_by_name: dict[str, Primitive] = {p.name: p for p in unary_prims}
         depth1_solved = False
         for prim in unary_prims:
@@ -1842,6 +1841,35 @@ class Learner:
             n_evals += 1  # depth 1 = 1 op
             if sp.prediction_error <= solve_thresh:
                 depth1_solved = True
+
+        # --- Parameterized prims with perception children ---
+        # Try all combinations: parameterized(perception1, perception2, ...)
+        # This replaces task-specific color prims with transferable compositions.
+        param_prims = [p for p in primitives if p.kind == "parameterized"]
+        percep_prims = [p for p in primitives if p.kind == "perception"]
+        if param_prims and percep_prims:
+            for pprim in param_prims:
+                if pprim.arity == 1:
+                    for perc in percep_prims:
+                        prog = Program(root=pprim.name,
+                                       children=[Program(root=perc.name)])
+                        sp = self._evaluate_program(prog, task)
+                        scored.append(sp)
+                        n_evals += 1
+                        if sp.prediction_error <= solve_thresh:
+                            depth1_solved = True
+                elif pprim.arity == 2:
+                    for p1 in percep_prims:
+                        for p2 in percep_prims:
+                            prog = Program(root=pprim.name,
+                                           children=[Program(root=p1.name),
+                                                     Program(root=p2.name)])
+                            sp = self._evaluate_program(prog, task)
+                            scored.append(sp)
+                            n_evals += 1
+                            if sp.prediction_error <= solve_thresh:
+                                depth1_solved = True
+
         # If depth-1 found matches, return all candidates for top-k test
         # evaluation. Skip depth-2+ since depth-1 solutions are simpler
         # (Occam's razor) and we now have multiple candidates to choose from.

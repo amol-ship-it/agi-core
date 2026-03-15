@@ -807,13 +807,40 @@ class ARCEnv(Environment):
     # from composed grid-expanding primitives (tile_3x3=9x, scale_5x=25x).
     MAX_GRID_PIXELS = 10_000  # ~100x100 — generous for ARC (max 30x30)
 
-    def _eval_tree(self, node: Program, grid: Grid) -> Grid:
-        """Recursively evaluate a program tree on a grid."""
+    def _eval_tree(self, node: Program, grid: Grid):
+        """Recursively evaluate a program tree on a grid.
+
+        Returns a Grid for transform/parameterized nodes, or a scalar
+        value (int) for perception nodes.
+        """
         prim = _PRIM_MAP.get(node.root)
         if prim is None:
             return grid
 
         try:
+            # --- Perception: Grid → Value ---
+            if prim.kind == "perception":
+                return prim.fn(grid)
+
+            # --- Parameterized: evaluate perception children, build transform ---
+            if prim.kind == "parameterized":
+                params = []
+                for child in node.children:
+                    child_prim = _PRIM_MAP.get(child.root)
+                    if child_prim and child_prim.kind == "perception":
+                        params.append(child_prim.fn(grid))
+                    else:
+                        # Non-perception child — evaluate and use as value
+                        val = self._eval_tree(child, grid)
+                        params.append(val)
+                transform_fn = prim.fn(*params)
+                if callable(transform_fn):
+                    result = transform_fn(grid)
+                    if isinstance(result, list) and result:
+                        return result
+                return grid
+
+            # --- Transform: Grid → Grid (original behavior) ---
             if prim.arity == 0:
                 if isinstance(prim.fn, Program):
                     return self._eval_tree(prim.fn, grid)
@@ -825,6 +852,8 @@ class ARCEnv(Environment):
                 return grid
             elif prim.arity == 1:
                 child_grid = self._eval_tree(node.children[0], grid) if node.children else grid
+                if not isinstance(child_grid, list):
+                    return grid  # child was perception, not a grid
                 h = len(child_grid)
                 w = len(child_grid[0]) if child_grid else 0
                 if h * w > self.MAX_GRID_PIXELS:

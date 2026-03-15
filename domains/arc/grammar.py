@@ -167,10 +167,14 @@ class ARCGrammar(Grammar):
 
     def base_primitives(self) -> list[Primitive]:
         if self._vocabulary == "atomic":
-            from .atomic_primitives import build_atomic_primitives
+            from .atomic_primitives import build_atomic_primitives, build_parameterized_primitives
+            from .perception import build_perception_primitives
             from .primitives import register_atomic_primitives
             register_atomic_primitives()
-            return build_atomic_primitives() + self._task_prims
+            return (build_atomic_primitives()
+                    + build_perception_primitives()
+                    + build_parameterized_primitives()
+                    + self._task_prims)
         if self._vocabulary == "minimal":
             return list(ARC_MINIMAL_PRIMITIVES) + self._task_prims
         return list(ARC_PRIMITIVES) + self._task_prims
@@ -188,10 +192,11 @@ class ARCGrammar(Grammar):
         self._task_prims = []
 
         # 1. Task-specific color primitives
+        #    For atomic: parameterized prims + perception handle colors,
+        #    no task-specific color generation needed.
         task_colors = _extract_task_colors(task)
         if self._vocabulary == "atomic":
-            from .atomic_primitives import build_atomic_task_color_primitives
-            color_prims = build_atomic_task_color_primitives(task_colors)
+            color_prims = []
         else:
             color_prims = build_task_color_primitives(task_colors)
         for p in color_prims:

@@ -13,16 +13,25 @@ from typing import Any, Optional
 
 @dataclass(frozen=True)
 class Primitive:
-    """An atomic operation in a grammar. The smallest unit of composition."""
+    """An atomic operation in a grammar. The smallest unit of composition.
+
+    Three kinds:
+    - "transform": Grid → Grid (the default, most primitives)
+    - "perception": Grid → Value (extracts a property like background_color)
+    - "parameterized": (Value, ...) → (Grid → Grid) factory. Children are
+      perception primitives; the factory builds a transform from their values.
+    """
     name: str
     arity: int  # how many arguments it takes
     fn: Any     # the callable that implements it
     domain: str = ""  # which domain contributed this primitive
     learned: bool = False  # True if discovered by sleep phase, False if hand-coded
+    kind: str = "transform"  # "transform", "perception", or "parameterized"
 
     def __repr__(self):
         tag = " [learned]" if self.learned else ""
-        return f"Primitive({self.name}/{self.arity}{tag})"
+        kind_tag = f" [{self.kind}]" if self.kind != "transform" else ""
+        return f"Primitive({self.name}/{self.arity}{kind_tag}{tag})"
 
 
 @dataclass

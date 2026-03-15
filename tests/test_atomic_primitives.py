@@ -483,10 +483,15 @@ class TestGrammarIntegration:
         g.prepare_for_task(task)
         prims = g.base_primitives()
         names = {p.name for p in prims}
-        # Should have atomic color prims but not composite ones
-        assert "keep_only_color_1" in names
-        assert "erase_color_2" in names
-        # Should NOT have composite color ops
+        kinds = {p.name: p.kind for p in prims}
+        # Should have parameterized color prims instead of task-specific ones
+        assert "swap_colors" in names
+        assert kinds["swap_colors"] == "parameterized"
+        # Should have perception prims
+        assert "background_color" in names
+        assert kinds["background_color"] == "perception"
+        # Should NOT have task-specific color ops
+        assert "keep_only_color_1" not in names
         assert not any("fill_rectangle" in n for n in names)
 
     def test_grammar_full_unchanged(self):

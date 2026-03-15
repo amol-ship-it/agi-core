@@ -342,6 +342,71 @@ def build_atomic_primitives() -> list[Primitive]:
     return prims
 
 
+# =============================================================================
+# Parameterized action primitives: (Value, ...) → (Grid → Grid) factories
+# =============================================================================
+
+def _swap_colors_factory(c1: int, c2: int):
+    """Factory: swap two colors in a grid."""
+    def swap(grid: Grid) -> Grid:
+        return [[c2 if cell == c1 else c1 if cell == c2 else cell
+                 for cell in row] for row in grid]
+    return swap
+
+
+def _replace_color_factory(src: int, dst: int):
+    """Factory: replace one color with another."""
+    def replace(grid: Grid) -> Grid:
+        return [[dst if cell == src else cell for cell in row] for row in grid]
+    return replace
+
+
+def _keep_color_factory(color: int):
+    """Factory: keep only pixels of one color, zero the rest."""
+    def keep(grid: Grid) -> Grid:
+        return [[cell if cell == color else 0 for cell in row] for row in grid]
+    return keep
+
+
+def _erase_color_factory(color: int):
+    """Factory: erase pixels of one color (set to 0)."""
+    def erase(grid: Grid) -> Grid:
+        return [[0 if cell == color else cell for cell in row] for row in grid]
+    return erase
+
+
+def _fill_bg_with_color_factory(color: int):
+    """Factory: fill background (most common color) pixels with given color."""
+    from collections import Counter
+    def fill(grid: Grid) -> Grid:
+        if not grid or not grid[0]:
+            return grid
+        flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+        bg = Counter(flat).most_common(1)[0][0]
+        return [[color if cell == bg else cell for cell in row] for row in grid]
+    return fill
+
+
+def build_parameterized_primitives() -> list[Primitive]:
+    """Build parameterized action primitives (factory functions).
+
+    Each takes perception values as arguments and returns a Grid→Grid transform.
+    Children in the program tree are perception primitives.
+    """
+    return [
+        Primitive(name="swap_colors", arity=2,
+                  fn=_swap_colors_factory, domain="arc", kind="parameterized"),
+        Primitive(name="replace_color", arity=2,
+                  fn=_replace_color_factory, domain="arc", kind="parameterized"),
+        Primitive(name="keep_color", arity=1,
+                  fn=_keep_color_factory, domain="arc", kind="parameterized"),
+        Primitive(name="erase_color", arity=1,
+                  fn=_erase_color_factory, domain="arc", kind="parameterized"),
+        Primitive(name="fill_bg_with", arity=1,
+                  fn=_fill_bg_with_color_factory, domain="arc", kind="parameterized"),
+    ]
+
+
 def build_atomic_task_color_primitives(task_colors: set[int]) -> list[Primitive]:
     """Generate only the atomic color subset for a task's palette.
 

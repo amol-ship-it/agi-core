@@ -1,0 +1,119 @@
+"""
+Atomic perception primitives: Grid → Value.
+
+Each extracts exactly ONE property from a grid. These are the "eyes"
+that feed into parameterized action primitives. They detect color roles,
+object counts, and structural properties without transforming the grid.
+
+Perception primitives compose with parameterized actions:
+    swap_colors(background_color(grid), accent_color(grid))(grid)
+    keep_color(dominant_color(grid))(grid)
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+
+from core import Primitive
+
+
+Grid = list[list[int]]
+
+
+# =============================================================================
+# Color perception: detect color roles
+# =============================================================================
+
+def background_color(grid: Grid) -> int:
+    """Return the most common color (typically the background)."""
+    if not grid or not grid[0]:
+        return 0
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    if not flat:
+        return 0
+    return Counter(flat).most_common(1)[0][0]
+
+
+def dominant_color(grid: Grid) -> int:
+    """Return the most common non-background color."""
+    if not grid or not grid[0]:
+        return 0
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    bg = Counter(flat).most_common(1)[0][0]
+    non_bg = [c for c in flat if c != bg]
+    if not non_bg:
+        return bg
+    return Counter(non_bg).most_common(1)[0][0]
+
+
+def rarest_color(grid: Grid) -> int:
+    """Return the least common non-background color."""
+    if not grid or not grid[0]:
+        return 0
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    bg = Counter(flat).most_common(1)[0][0]
+    non_bg = [c for c in flat if c != bg]
+    if not non_bg:
+        return bg
+    return Counter(non_bg).most_common()[-1][0]
+
+
+def accent_color(grid: Grid) -> int:
+    """Return the second most common non-background color.
+
+    If only one non-bg color exists, returns it. Useful for tasks
+    where the "accent" or "marker" color differs from the dominant.
+    """
+    if not grid or not grid[0]:
+        return 0
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    bg = Counter(flat).most_common(1)[0][0]
+    non_bg = Counter(c for c in flat if c != bg)
+    if not non_bg:
+        return bg
+    ranked = non_bg.most_common()
+    return ranked[1][0] if len(ranked) > 1 else ranked[0][0]
+
+
+# =============================================================================
+# Counting perception: detect quantities
+# =============================================================================
+
+def n_colors(grid: Grid) -> int:
+    """Return the number of distinct colors in the grid."""
+    if not grid or not grid[0]:
+        return 0
+    return len(set(grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))))
+
+
+def n_foreground_colors(grid: Grid) -> int:
+    """Return the number of distinct non-background colors."""
+    if not grid or not grid[0]:
+        return 0
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    bg = Counter(flat).most_common(1)[0][0]
+    return len(set(c for c in flat if c != bg))
+
+
+# =============================================================================
+# Build functions
+# =============================================================================
+
+def build_perception_primitives() -> list[Primitive]:
+    """Build the perception primitives (Grid → Value).
+
+    Each is arity-0 in the composition sense — they have no program
+    children. They receive the input grid through the execution context.
+    """
+    perceptions = [
+        ("background_color",     background_color),
+        ("dominant_color",       dominant_color),
+        ("rarest_color",         rarest_color),
+        ("accent_color",         accent_color),
+        ("n_colors",             n_colors),
+        ("n_foreground_colors",  n_foreground_colors),
+    ]
+    return [
+        Primitive(name=name, arity=0, fn=fn, domain="arc", kind="perception")
+        for name, fn in perceptions
+    ]
