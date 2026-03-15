@@ -2344,4 +2344,35 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 **README updated**: All examples use unified CLI (`python -m common`). Options table updated with `--domain`, `--run-mode`, `--split`. Structure tree updated.
 
 ---
+
+### Decision 103: Add perception atomics, fix compounding loop, iterate
+
+**Date:** 2026-03-14
+
+**Problem:** Atomic vocabulary had only action primitives (21 ops, 0 perception). 19/21 full-vocab solves need perception capabilities (object detection, line extension, symmetry completion). Atomic solved only 2/50.
+
+**Changes:**
+
+1. Added 10 perception atomics: `gravity_down`, `fill_enclosed`, `keep_largest/smallest_component`, `extract_largest/smallest_object`, `extend_lines_to_contact`, `complete_symmetry_90/h/v`. Total: 31 atomic primitives.
+
+2. Added `Grammar.allow_structural_phases()` — returns False for atomic. Skips object decomposition, cross-reference, conditional per-object, grammar decomposition. Keeps exhaustive, conditional search, near-miss refinement, color fix.
+
+3. Lowered `SleepConfig.min_occurrences` from 2 to 1 — allows unique subtrees from near-misses to be promoted.
+
+4. Fixed name collision: `extend_lines_to_contact` was registered as `extend_lines` (different function in `_PRIM_MAP`). Using full name fixed 3 solves.
+
+5. Removed `identity` from atomic set (wastes search budget at depth-1, no-op in compositions).
+
+**Results (measured, 50 training tasks):**
+
+| Change | Atomic solves |
+|--------|--------------|
+| Before (action-only, 21 prims) | 2/50 (4%) |
+| + perception atomics (31 prims) | 6/50 (12%) |
+| + extend_lines name fix | **9/50 (18%)** |
+| Full vocabulary baseline | 21/50 (42%) |
+
+Gap narrowed from 19 to 12 tasks. Remaining gap is mostly tasks needing structural analysis (grid detection, tiling, cross-reference) or learned corrections.
+
+---
 *This document will be updated with each new session and major decision.*

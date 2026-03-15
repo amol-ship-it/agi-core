@@ -198,7 +198,7 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 |-----------|---------------------|-----------------|------|
 | `full` (180 prims) | 112/400 (28.0%) | **35/400 (8.8%)** | ~1.5 min |
 | `minimal` (60 prims) | 95/400 (23.8%) | **35/400 (8.8%)** | ~1.5 min |
-| `atomic` (27 ops) | — | — | ~1.5 min |
+| `atomic` (31 ops) | — | — | ~1.5 min |
 
 Quick mode (50 training tasks, 500K compute cap, ~4s):
 
@@ -206,9 +206,9 @@ Quick mode (50 training tasks, 500K compute cap, ~4s):
 |-----------|----------------|
 | `full` | 21/50 (42%) |
 | `minimal` | 16/50 (32%) |
-| `atomic` | 4/50 (8%) |
+| `atomic` | 9/50 (18%) |
 
-Atomic vocabulary solves fewer tasks per round (fewer primitives) but forces deeper compositions (depth-2+), which is the input for compounding via library learning.
+Atomic vocabulary (31 action + perception primitives) solves fewer tasks per round but forces deeper compositions. The gap with full vocabulary (21→9 on 50 tasks) represents tasks needing structural analysis that must be discovered through compounding.
 
 **Other domains:**
 
