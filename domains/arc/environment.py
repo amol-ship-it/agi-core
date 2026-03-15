@@ -11,7 +11,7 @@ from collections import Counter
 import numpy as np
 
 from core import Environment, Primitive, Program, Task, Observation
-from .primitives import Grid, _PRIM_MAP, _make_color_remap
+from .primitives import Grid, _PRIM_MAP
 from .objects import try_object_decomposition
 
 

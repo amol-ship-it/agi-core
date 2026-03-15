@@ -385,21 +385,7 @@ class TestGrammarIntegration(unittest.TestCase):
         # No task-specific color prims
         assert "keep_only_color_1" not in names
 
-    def test_grammar_full_unchanged(self):
-        g = ARCGrammar(seed=42, vocabulary="full")
-        prims = g.base_primitives()
-        assert len(prims) > 100
-
-    def test_grammar_minimal_unchanged(self):
-        g = ARCGrammar(seed=42, vocabulary="minimal")
-        prims = g.base_primitives()
-        assert len(prims) > 40
-
-    def test_grammar_allows_structural_for_full(self):
-        g = ARCGrammar(seed=42, vocabulary="full")
-        assert g.allow_structural_phases() is True
-
-    def test_grammar_blocks_structural_for_atomic(self):
+    def test_grammar_blocks_structural(self):
         g = ARCGrammar(seed=42, vocabulary="atomic")
         assert g.allow_structural_phases() is False
 

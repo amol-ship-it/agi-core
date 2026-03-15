@@ -323,7 +323,7 @@ agi-core/
 │   ├── arc/                 # ARC-AGI grid transformations (41 atomic primitives)
 │   │   ├── transformation_primitives.py # Atomic transforms + parameterized factories (self-contained)
 │   │   ├── perception_primitives.py     # Atomic perception Grid→Value (self-contained)
-│   │   ├── primitives.py    # Legacy full/minimal vocabulary (used by other domains)
+│   │   ├── primitives.py    # Registry (_PRIM_MAP) + utilities (to_np, from_np)
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv (handles transform, perception, parameterized execution)
 │   │   ├── grammar.py       # ARCGrammar (atomic vocabulary, structural phase gating)
@@ -339,7 +339,7 @@ agi-core/
 │       ├── __init__.py      # Game engine + all 4 interfaces
 │       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (654 tests)
+├── tests/                   # Test suite (393 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -358,7 +358,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (654 tests):** 79% overall. Core modules: learner 80%, all other core modules 95-100%. Domain modules: ARC environment 78%, ARC grammar 78%, Zork 95%, list_ops 94%.
+**393 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization.
 
 ## Documentation
 

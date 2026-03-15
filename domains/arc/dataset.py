@@ -9,9 +9,9 @@ import os
 import sys
 
 from core import Task
-from .primitives import (
+from .transformation_primitives import (
     rotate_90_cw, mirror_horizontal, mirror_vertical,
-    crop_to_nonzero, invert_colors, gravity_down,
+    crop_to_content as crop_to_nonzero, invert_colors, gravity_down,
 )
 
 

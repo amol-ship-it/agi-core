@@ -2462,4 +2462,18 @@ Round 2 gives +28-33% solves. Round 3 adds <5% for 2× more time. Changed both p
 - Wall time breakdown (train/eval/total) in pipeline summary
 
 ---
+
+### Decision 109: Gut primitives.py, remove all full/minimal vocabulary code
+
+**Date:** 2026-03-14
+
+**primitives.py**: 5562 → 68 lines (-99%). Kept only: `Grid` type alias, `_PRIM_MAP` registry, `register_prim`, `register_atomic_primitives`, `to_np`/`from_np`. Deleted all 180+ primitive function definitions, `ARC_PRIMITIVES`, `ARC_MINIMAL_PRIMITIVES`, `ARC_PREDICATES`, `build_task_color_primitives`, all JIT kernels, all helper functions.
+
+**grammar.py**: 672 → 336 lines (-50%). Removed full/minimal vocabulary paths, `_ARC_ESSENTIAL_PAIR_CONCEPTS`, `_extract_task_colors`, `_learn_parameterized_prims`, `_learn_structural_recolor`, `_learn_fill_enclosed_role`, `ARC_PREDICATES` usage, dead `task_priority_primitives` logic.
+
+**Deleted test files**: test_arc.py (1900 lines → 120 lines, kept drive + task loading), test_conditional_search.py, test_exhaustive_enum.py, test_color_fix.py, test_object_decomposition.py. All tested features disabled for atomic mode.
+
+**Test count**: 654 → 393 (261 tests removed, all testing deleted full/minimal features).
+
+---
 *This document will be updated with each new session and major decision.*
