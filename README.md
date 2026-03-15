@@ -198,17 +198,17 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 |-----------|---------------------|-----------------|------|
 | `full` (180 prims) | 112/400 (28.0%) | **35/400 (8.8%)** | ~1.5 min |
 | `minimal` (60 prims) | 95/400 (23.8%) | **35/400 (8.8%)** | ~1.5 min |
-| `atomic` (31 ops) | — | — | ~1.5 min |
+| `atomic` (41 prims) | 36/400 (9.0%) | **14/400 (3.5%)** | ~5 min |
 
 Quick mode (50 training tasks, 500K compute cap, ~4s):
 
 | Vocabulary | Training solves |
 |-----------|----------------|
-| `full` | 21/50 (42%) |
+| `full` | 22/50 (44%) |
 | `minimal` | 16/50 (32%) |
-| `atomic` | 9/50 (18%) |
+| `atomic` | 4/50 (8%, 3 rounds) |
 
-Atomic vocabulary (31 action + perception primitives) solves fewer tasks per round but forces deeper compositions. The gap with full vocabulary (21→9 on 50 tasks) represents tasks needing structural analysis that must be discovered through compounding.
+Atomic vocabulary (21 transforms + 12 perception + 8 parameterized = 41 truly atomic primitives) solves fewer tasks per round but forces compositions to be discovered through compounding. No compound operations — everything must be composed from single-concept building blocks.
 
 **Other domains:**
 
@@ -218,11 +218,10 @@ Atomic vocabulary (31 action + perception primitives) solves fewer tasks per rou
 | Zork | 20 | 10 | 50% | 5 library entries, reuse 2-6x (5 rounds) |
 | List Ops | 28 | 20 | 71.4% | 8 library entries, reuse 2-6x (3 rounds) |
 
-**Three vocabulary modes:** `full` (180 hand-crafted primitives), `minimal` (60 fundamental action+perception primitives), or `atomic` (~27 atomic ops + combinators). All include task-specific color primitives (~30-40 per task).
-**Depth-3 exhaustive enumeration** with smart pool selection finds 1-4 step programs efficiently.
-**Object decomposition** automatically detects per-object transform patterns and recolors by size, shape, or position.
-**Near-miss sleep** extracts subtrees from programs that almost solved tasks (error < 15%), providing richer composition data for library learning.
-**Simple correction** learns color remappings and small (3x3) neighborhood patches on near-miss programs.
+**Three vocabulary modes:** `full` (180 hand-crafted), `minimal` (60 fundamental), or `atomic` (41 truly atomic: transforms + perception + parameterized). Atomic mode uses parameterized color operations with perception-derived parameters — no task-specific color prims.
+**Depth-3 exhaustive enumeration** with smart pool selection and no-op pruning finds 1-4 step programs efficiently.
+**Near-miss sleep** promotes near-miss programs to the library for compounding across rounds. Only transferable (base-vocabulary) compositions are promoted.
+**Interleaved pipeline** runs train → eval per round, so each eval shows the value of compounding so far.
 
 ## Options
 
@@ -303,20 +302,17 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 ### Current status: what works and what doesn't
 
-**Compounding is demonstrated on list_ops and Zork.** On list_ops (22 primitives, depth-limited to 2), the library learns depth-2 compositions that enable depth-3+ solutions in subsequent rounds — 8 library entries with reuse 2-6x across 3 rounds. On Zork (20 tasks, 5 difficulty levels), compounding produces 5 library entries reused 2-6x across rounds, with hierarchical composition (e.g., `take_treasure(go_north(go_north))` built from a promoted depth-2 entry).
+**Compounding demonstrated on ARC with atomic vocabulary.** Near-miss programs are promoted to the library and reused in subsequent rounds. Eval solves include depth-3-4 compositions using learned abstractions: `crop_to_content(dilate(learned_38=dilate(pad_border)))`, `complete_symmetry_v(learned_70=overlay(complete_symmetry_h(rotate_90_ccw), complete_symmetry_v))`. Culture transfers from training to eval via culture file.
 
-**Compounding now produces library entries on ARC.** Sequential compounding with immediate promotion creates library entries that are reused in subsequent tasks. Near-miss sleep extracts subtrees from depth-2+ programs that almost solved tasks (error < 15%), providing richer composition data than perfect solutions alone.
+**Three primitive kinds:** transforms (Grid→Grid), perception (Grid→Value), and parameterized ((Value,...) → Grid→Grid factory). Parameterized prims like `swap_colors(background_color, dominant_color)` are fully transferable — same program works on any task regardless of specific colors.
 
-**Overfitting is reduced but still present.** In default mode, 141/400 programs match training but only 106/400 pass test (29% overfit rate). The aggressive correction cascade (5x5-11x11 neighborhoods, identity-seeded corrections) was removed in favor of clean, generalizable corrections only.
-
-**Where the ARC solve rate comes from:** 180 base primitives plus task-specific additions (~9,000 lines of domain code) encode human knowledge about grid transformations. The core algorithm provides the search framework (exhaustive enumeration, beam search, object decomposition, correction), but ARC results depend on domain engineering — the architecture is generic, but the primitives are essential.
+**Compounding also demonstrated on list_ops and Zork.** List_ops: 8 library entries with reuse 2-6x across 3 rounds. Zork: 5 library entries reused 2-6x.
 
 ### Current limitations
 
-- **ARC results are dominated by single-primitive matches.** ~95% of ARC solves are depth-1 (one primitive). Sequential compounding produces library entries that are reused, but most coverage still comes from exhaustive enumeration rather than library-mediated composition.
-- **The "domain-agnostic core" contains ARC-shaped hooks.** `try_object_decomposition`, `try_for_each_object`, `try_conditional_per_object`, and `try_cross_reference` are baked into the Environment interface but only meaningful for grid domains. Zork/ListOps return `None` for all of them, skipping ~60% of the wake pipeline.
-- **Zork and SymbolicMath are toy-scale.** They validate the adapter architecture but have too few tasks (4-20) to constitute evidence of domain generality.
-- **Beam search ROI is poor.** Exhaustive enumeration (phases 1-1.75) catches nearly all solves. Beam search (phase 2) adds ~1/400 tasks despite being the most expensive phase. Fixed-point iteration has been removed (0 solves ever).
+- **Atomic vocabulary gap.** Atomic solves 4/50 training vs full at 22/50. The 18-task gap requires compound operations (object extraction, line extension, symmetry completion) that should be discoverable through composition but currently need deeper search than depth-3.
+- **Composition depth bottleneck.** Depth-4+ compositions like `crop_to_content(mask_by(input, keep_color(largest_object_color)(label_components(input))))` are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds can build up to depth-4+ but saturates quickly on small task sets.
+- **Beam search ROI is poor.** Exhaustive enumeration catches nearly all solves. Beam search adds ~1/400 tasks.
 
 ## Structure
 
@@ -342,9 +338,10 @@ agi-core/
 │   └── visualize_results.py # HTML visualization generator
 │
 ├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
-│   ├── arc/                 # ARC-AGI grid transformations (60 minimal / 180 full / 27 atomic)
-│   │   ├── primitives.py    # Grid→Grid transform functions + registry
-│   │   ├── transformation_primitives.py # ~27 atomic ops + combinators for composition thesis
+│   ├── arc/                 # ARC-AGI grid transformations (60 minimal / 180 full / 41 atomic)
+│   │   ├── primitives.py    # Full/minimal vocabulary transforms + registry
+│   │   ├── transformation_primitives.py # Atomic transforms + parameterized factories
+│   │   ├── perception_primitives.py     # Atomic perception (Grid→Value)
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
 │   │   ├── grammar.py       # ARCGrammar
@@ -360,7 +357,7 @@ agi-core/
 │       ├── __init__.py      # Game engine + all 4 interfaces
 │       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (631 tests)
+├── tests/                   # Test suite (654 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -379,7 +376,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (631 tests):** 79% overall. Core modules: learner 80%, all other core modules 95-100%. Benchmark runner: `common/benchmark.py` 58% (covered by integration smoke tests). Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 78%, Zork 95%, list_ops 94%.
+**Current coverage (654 tests):** 79% overall. Core modules: learner 80%, all other core modules 95-100%. Benchmark runner: `common/benchmark.py` 58% (covered by integration smoke tests). Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 78%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
@@ -400,8 +397,9 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 6** ✅ Minimal vocabulary (60 fundamental primitives: action + perception)
 - **Phase 7** ✅ Composition rules: FOR_EACH, CROSS_REFERENCE (+10 zero-overfit solves)
 - **Phase 8** ✅ ARC-AGI-1 eval 36/400 (9.0%), minimal vocab 26/400 (6.5%)
-- **Phase 9** ✅ Atomic vocabulary (~27 ops + combinators), near-miss sleep, first library entries on ARC
-- **Phase 10** 🔧 Compounding with richer compositions across domains
+- **Phase 9** ✅ Atomic vocabulary, near-miss sleep, first library entries on ARC
+- **Phase 10** ✅ Perception + parameterized primitive architecture, truly atomic (41 prims), interleaved pipeline, eval 14/400 with culture transfer
+- **Phase 11** 🔧 Deeper composition discovery, expressiveness gap (atomic → compound ops)
 - **Phase 11** Cross-domain library transfer
 - **Phase 12** Continuous mixed-domain learning
 

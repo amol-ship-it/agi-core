@@ -406,4 +406,12 @@ Results: All 4 experiments implemented. 631 tests pass (9 new). 50-task sequenti
 
 ---
 
+### Prompt 61 (2026-03-14)
+
+> Continued atomic vocabulary work: perception+parameterized architecture, strip compound prims, interleaved pipeline, culture JSONL, viz expansion, no-op pruning, sweet-spot analysis
+
+[User drove the session toward truly atomic primitives. Key decisions: (1) Add perception (Grid→Value) and parameterized ((Value,...)→Grid→Grid factory) primitive kinds — removes task-specific color prims, makes compositions transferable. (2) Strip all compound prims (extract_largest_object, etc.) to get honest baseline: 2/50 with 41 truly atomic prims. (3) Added label_components and mask_by — verified extract_largest_object expressible as depth-4 composition. (4) Interleaved pipeline: train→eval per round. (5) Culture JSONL for live observation. (6) Viz expands learned abstractions inline. (7) No-op pruning. (8) Sweet-spot analysis: energy_beta flat, 3 rounds sufficient. Final: atomic 4/50 train (3 rounds), 14/400 eval with culture transfer. 654 tests.]
+
+---
+
 *This document will be updated with each new session.*

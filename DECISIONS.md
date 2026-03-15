@@ -2375,4 +2375,47 @@ Round 3: 84/400 (21.0%) solved, 18 overfit
 Gap narrowed from 19 to 12 tasks. Remaining gap is mostly tasks needing structural analysis (grid detection, tiling, cross-reference) or learned corrections.
 
 ---
+
+### Decision 104: Perception + Parameterized Primitive Architecture
+
+**Date:** 2026-03-14
+
+Added three primitive kinds to `Primitive.kind`: `"transform"` (Grid→Grid, default), `"perception"` (Grid→Value), `"parameterized"` ((Value,...)→Grid→Grid factory).
+
+**Perception primitives** (12 total in `perception_primitives.py`): background_color, dominant_color, rarest_color, accent_color, n_colors, n_foreground_colors, grid_height, grid_width, grid_min_dim, n_objects, largest_object_color, smallest_object_color.
+
+**Parameterized primitives** (8 total): swap_colors, replace_color, keep_color, erase_color, fill_bg_with, scale, tile, downscale. These are factory functions that take perception values and return Grid→Grid transforms.
+
+Replaces task-specific color generation for atomic mode. Programs like `swap_colors(background_color, dominant_color)` are fully transferable across tasks.
+
+---
+
+### Decision 105: Strip compound prims to truly atomic
+
+**Date:** 2026-03-14
+
+Removed 13 compound operations that embedded multi-step logic: extract_largest/smallest_object, keep_largest/smallest_component, recolor_by_size_rank, extend_lines_to_contact, complete_symmetry_*, upscale_pattern, fill_tile_pattern, fill_between_diagonal, mark_intersections. These are now noted as "discovery goals" in comments.
+
+21 truly atomic transforms + 12 perception + 8 parameterized = 41 total. Solve rate dropped from 12/50 to 2/50 — the honest baseline.
+
+Added `label_components` (single BFS, truly atomic) and `mask_by` (binary grid masking). Verified that `crop_to_content(mask_by(input, keep_color(largest_object_color)(label_components(input))))` achieves extract_largest_object through depth-4 composition.
+
+---
+
+### Decision 106: Interleaved pipeline, culture JSONL, infrastructure
+
+**Date:** 2026-03-14
+
+**Interleaved pipeline**: train round 1 → eval → train round 2 (with culture) → eval → ... Each eval shows the value of compounding so far. Previously all training then all eval.
+
+**Culture JSONL**: Single growing file for the whole pipeline, logging library/solution/near_miss events per round. Enables `tail -f` observation of learning progress. Eval rounds suppressed (no learning).
+
+**No-op pruning**: Detect primitives that don't change the grid during depth-1 evaluation. Skip them as inner/outer steps at depth-2+. Prevents wasted compositions like `f(binarize(x))` where binarize is identity on the current task.
+
+**Sweet-spot analysis** (measured 2026-03-14):
+- energy_beta: 0.001-0.02 all give identical results on atomic — no effect at current scale
+- Rounds: 3 is sufficient (4/50), rounds 5-10 add nothing on 50 tasks (saturates)
+- Default rounds remains 1 (compounding opt-in via --rounds flag)
+
+---
 *This document will be updated with each new session and major decision.*
