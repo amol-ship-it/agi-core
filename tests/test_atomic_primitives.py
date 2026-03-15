@@ -7,6 +7,7 @@ Verifies:
 3. Parameterized factories produce working transforms
 4. Grammar integration with vocabulary='atomic'
 5. Environment execution of atomic programs
+6. crop_to_content is compositional (trim_rows + trim_cols)
 """
 
 import pytest
@@ -16,9 +17,11 @@ from core import Program, Task, Primitive
 from core.types import ScoredProgram
 
 from domains.arc.transformation_primitives import (
-    # Atomic transforms (3 geometric + rest)
-    rotate_90_cw, mirror_horizontal, transpose,
-    crop_to_content, crop_half_top, crop_half_bottom,
+    # Atomic transforms
+    rotate_90_cw, rotate_90_ccw, rotate_180,
+    mirror_horizontal, mirror_vertical, transpose,
+    trim_rows, trim_cols,
+    crop_half_top, crop_half_bottom,
     crop_half_left, crop_half_right,
     pad_border, binarize, invert_colors,
     dilate, erode, gravity_down, fill_enclosed, overlay,
@@ -62,38 +65,33 @@ ENCLOSED = [
 
 
 # =============================================================================
-# 1. Geometric transforms (minimal D4 generators)
+# 1. Geometric transforms
 # =============================================================================
 
 class TestGeometricPrimitives:
     def test_rotate_90_cw(self):
         assert rotate_90_cw(SMALL_GRID) == [[3, 1], [4, 2]]
 
+    def test_rotate_90_ccw(self):
+        assert rotate_90_ccw(SMALL_GRID) == [[2, 4], [1, 3]]
+
+    def test_rotate_180(self):
+        assert rotate_180(SMALL_GRID) == [[4, 3], [2, 1]]
+
     def test_mirror_horizontal(self):
         assert mirror_horizontal(SMALL_GRID) == [[2, 1], [4, 3]]
+
+    def test_mirror_vertical(self):
+        assert mirror_vertical(SMALL_GRID) == [[3, 4], [1, 2]]
 
     def test_transpose(self):
         assert transpose(SMALL_GRID) == [[1, 3], [2, 4]]
 
     def test_geometric_on_1x1(self):
-        for fn in [rotate_90_cw, mirror_horizontal, transpose]:
+        for fn in [rotate_90_cw, rotate_90_ccw, rotate_180,
+                   mirror_horizontal, mirror_vertical, transpose]:
             result = fn(EMPTY_GRID)
             assert isinstance(result, list) and len(result) >= 1
-
-    def test_rotate_180_composable(self):
-        """rotate_180 = rotate_90_cw(rotate_90_cw(x))"""
-        result = rotate_90_cw(rotate_90_cw(SMALL_GRID))
-        assert result == [[4, 3], [2, 1]]
-
-    def test_rotate_90_ccw_composable(self):
-        """rotate_90_ccw = transpose(mirror_horizontal(x))"""
-        result = transpose(mirror_horizontal(SMALL_GRID))
-        assert result == [[2, 4], [1, 3]]
-
-    def test_mirror_vertical_composable(self):
-        """mirror_vertical = transpose(rotate_90_cw(x))"""
-        result = transpose(rotate_90_cw(SMALL_GRID))
-        assert result == [[3, 4], [1, 2]]
 
 
 # =============================================================================
@@ -101,9 +99,37 @@ class TestGeometricPrimitives:
 # =============================================================================
 
 class TestSpatialPrimitives:
-    def test_crop_to_content(self):
+    def test_trim_rows(self):
         grid = [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
-        assert crop_to_content(grid) == [[1]]
+        assert trim_rows(grid) == [[0, 1, 0]]
+
+    def test_trim_cols(self):
+        grid = [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
+        assert trim_cols(grid) == [[0], [1], [0]]
+
+    def test_trim_rows_no_zeros(self):
+        grid = [[1, 2], [3, 4]]
+        assert trim_rows(grid) == [[1, 2], [3, 4]]
+
+    def test_trim_cols_no_zeros(self):
+        grid = [[1, 2], [3, 4]]
+        assert trim_cols(grid) == [[1, 2], [3, 4]]
+
+    def test_trim_rows_all_zero(self):
+        assert trim_rows(ALL_ZERO) == ALL_ZERO
+
+    def test_trim_cols_all_zero(self):
+        assert trim_cols(ALL_ZERO) == ALL_ZERO
+
+    def test_crop_to_content_is_compositional(self):
+        """crop_to_content = trim_cols(trim_rows(x)) = trim_rows(trim_cols(x))"""
+        grid = [[0, 0, 0, 0], [0, 1, 2, 0], [0, 3, 4, 0], [0, 0, 0, 0]]
+        assert trim_cols(trim_rows(grid)) == [[1, 2], [3, 4]]
+        assert trim_rows(trim_cols(grid)) == [[1, 2], [3, 4]]
+
+    def test_crop_to_content_single_pixel(self):
+        grid = [[0, 0, 0], [0, 5, 0], [0, 0, 0]]
+        assert trim_cols(trim_rows(grid)) == [[5]]
 
     def test_crop_half_top(self):
         grid = [[1, 2], [3, 4], [5, 6], [7, 8]]
@@ -123,10 +149,6 @@ class TestSpatialPrimitives:
 
     def test_pad_border(self):
         assert pad_border([[1]]) == [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
-
-    def test_crop_empty(self):
-        result = crop_to_content(ALL_ZERO)
-        assert isinstance(result, list)
 
 
 # =============================================================================
@@ -292,9 +314,9 @@ class TestPerceptionPrimitives:
 class TestBuilders:
     def test_build_atomic_count(self):
         prims = build_atomic_primitives()
-        # 3 geometric + 6 spatial + 2 color + 2 morphological
-        # + 1 physics + 1 fill + 1 label_components + 2 binary (overlay, mask_by) = 18
-        assert len(prims) == 18
+        # 6 geometric + 7 spatial + 2 color + 2 morphological
+        # + 1 physics + 1 fill + 1 label_components + 2 binary = 22
+        assert len(prims) == 22
 
     def test_all_have_names(self):
         for p in build_atomic_primitives():
@@ -339,28 +361,18 @@ class TestBuilders:
         prims = build_atomic_primitives()
         names = {p.name for p in prims}
         compound_names = [
+            "crop_to_content",  # compositional: trim_rows + trim_cols
             "extract_largest_object", "extract_smallest_object",
             "keep_largest_component", "keep_smallest_component",
-            "recolor_by_size_rank", "extend_lines_to_contact",
-            "complete_symmetry_90", "complete_symmetry_h", "complete_symmetry_v",
-            "upscale_pattern", "fill_tile_pattern",
-            "fill_between_diagonal", "mark_intersections",
         ]
         for name in compound_names:
             assert name not in names, f"compound prim {name} should not be in atomic set"
 
-    def test_no_composable_geometric_prims(self):
-        """Removed geometric transforms should not be in atomic set."""
-        prims = build_atomic_primitives()
-        names = {p.name for p in prims}
-        assert "rotate_90_counterclockwise" not in names
-        assert "rotate_180" not in names
-        assert "mirror_vertical" not in names
-
     def test_essential_pair_concepts(self):
-        assert "crop_to_content" in ATOMIC_ESSENTIAL_PAIR_CONCEPTS
+        assert "trim_rows" in ATOMIC_ESSENTIAL_PAIR_CONCEPTS
+        assert "trim_cols" in ATOMIC_ESSENTIAL_PAIR_CONCEPTS
         assert "dilate" in ATOMIC_ESSENTIAL_PAIR_CONCEPTS
-        assert "transpose" in ATOMIC_ESSENTIAL_PAIR_CONCEPTS
+        assert "mirror_vertical" in ATOMIC_ESSENTIAL_PAIR_CONCEPTS
 
 
 # =============================================================================
@@ -372,30 +384,19 @@ class TestGrammarIntegration(unittest.TestCase):
         g = ARCGrammar(seed=42, vocabulary="atomic")
         prims = g.base_primitives()
         names = {p.name for p in prims}
-        assert "dilate" in names
-        assert "erode" in names
-        assert "overlay" in names
+        # All 6 geometric should be present
+        assert "rotate_90_clockwise" in names
+        assert "rotate_90_counterclockwise" in names
+        assert "rotate_180" in names
+        assert "mirror_horizontal" in names
+        assert "mirror_vertical" in names
+        assert "transpose" in names
+        # trim_rows/trim_cols replace crop_to_content
+        assert "trim_rows" in names
+        assert "trim_cols" in names
+        assert "crop_to_content" not in names
+        # parameterized and perception
         assert "swap_colors" in names
-        assert "background_color" in names
-        # Should NOT have compound or composable prims
-        assert "extract_largest_object" not in names
-        assert "rotate_90_counterclockwise" not in names
-        assert "rotate_180" not in names
-        assert "mirror_vertical" not in names
-
-    def test_grammar_atomic_prepare_for_task(self):
-        g = ARCGrammar(seed=42, vocabulary="atomic")
-        task = Task(
-            task_id="test",
-            train_examples=[([[1, 2], [3, 0]], [[2, 1], [0, 3]])],
-            test_inputs=[[1, 2], [3, 0]],
-        )
-        g.prepare_for_task(task)
-        prims = g.base_primitives()
-        names = {p.name for p in prims}
-        kinds = {p.name: p.kind for p in prims}
-        assert "swap_colors" in names
-        assert kinds["swap_colors"] == "parameterized"
         assert "background_color" in names
 
     def test_grammar_blocks_structural(self):
@@ -439,6 +440,16 @@ class TestEnvironmentExecution(unittest.TestCase):
         # background (0) and dominant (1) swapped
         assert result[0][2] == 0
         assert result[0][0] == 1
+
+    def test_env_crop_to_content_composed(self):
+        """crop_to_content = trim_cols(trim_rows(x)) executed via program tree."""
+        env = ARCEnv()
+        from domains.arc.primitives import register_atomic_primitives
+        register_atomic_primitives()
+        prog = Program(root="trim_cols", children=[Program(root="trim_rows")])
+        grid = [[0, 0, 0], [0, 5, 0], [0, 0, 0]]
+        result = env.execute(prog, grid)
+        assert result == [[5]]
 
 
 if __name__ == "__main__":

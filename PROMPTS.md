@@ -434,6 +434,12 @@ Results: All 4 experiments implemented. 631 tests pass (9 new). 50-task sequenti
 
 [Audited all 41 ARC primitives for atomicity. Removed 3 composable geometric transforms (rotate_90_ccw, rotate_180, mirror_vertical) — all reachable at depth ≤ 2 from {rotate_90_cw, mirror_horizontal, transpose}. Kept crop_to_content and fill_enclosed as pragmatic atomics — decomposing requires narrow-purpose bbox perception + arity-4 parameterized crop with no expressivity gain. Removed dead code: grammar.py decompose/recompose (never called, broken imports of non-existent _detect_any_separator_lines/_split_grid_cells). Removed environment.py structural phase overrides (try_object_decomposition, try_cross_reference, etc — all gated by allow_structural_phases()=False, try_cross_reference had broken imports). Composition rules already minimal: grammar.py compose() creates trees, environment.py _eval_tree() evaluates recursively. Perception+transformation composition works naturally via parameterized primitives. Final: 38 primitives (was 41). 403 tests pass.]
 
+### Prompt 65 (2026-03-14)
+
+> You removed some primitives unnecessarily (mirror_vertical is intuitive, asymmetric with mirror_horizontal). crop_to_content IS compositional. Update with this guideline: intuitively atomic, not mathematically minimal.
+
+[Restored all 6 geometric transforms — each is one intuitive visual concept. Decomposed crop_to_content into trim_rows + trim_cols (each operates on one axis, truly atomic). Composition: trim_cols(trim_rows(x)) = crop_to_content. Commutative — both orders give same result. Each has independent utility. 42 primitives total. 408 tests pass.]
+
 ---
 
 *This document will be updated with each new session.*

@@ -2589,5 +2589,29 @@ crop_to_content(keep_color(dominant_color(x))(x))  — chain with transform
 
 ### Test count: 403 (all passing)
 
+## Decision 99: Refine Atomicity — Restore Geometric, Decompose crop_to_content
+
+**Date:** 2026-03-14
+**Context:** User feedback: removing mirror_vertical while keeping mirror_horizontal is asymmetric/unintuitive. crop_to_content IS compositional and should be decomposed.
+
+**Principle refined:** "Intuitively atomic" (one clear concept) is the right bar, not mathematical minimality. Each geometric transform is one intuitive concept.
+
+### Geometric: all 6 restored
+Restored `rotate_90_ccw`, `rotate_180`, `mirror_vertical`. Each is one intuitive visual concept. Removing `mirror_vertical` while keeping `mirror_horizontal` was asymmetric.
+
+### crop_to_content decomposed into trim_rows + trim_cols
+`crop_to_content` was genuinely compositional — it does two independent things: remove zero-border rows AND remove zero-border columns.
+
+Replaced with two truly atomic primitives:
+- `trim_rows` — remove leading/trailing all-zero rows (one axis, one concept)
+- `trim_cols` — remove leading/trailing all-zero columns (one axis, one concept)
+
+Composition: `trim_cols(trim_rows(x))` = `trim_rows(trim_cols(x))` = `crop_to_content`. Commutative. Each component has independent utility (trim one dimension only).
+
+### Final primitive counts
+22 transforms (20 unary + 2 binary) + 12 perceptions + 8 parameterized = 42 total.
+
+### Test count: 408 (all passing)
+
 ---
 *This document will be updated with each new session and major decision.*

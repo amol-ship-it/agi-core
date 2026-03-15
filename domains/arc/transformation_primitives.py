@@ -10,16 +10,14 @@ Three categories:
    perception-derived parameters
 3. Binary (Grid, Grid → Grid): overlay, mask_by
 
-Minimal geometric set: {rotate_90_cw, mirror_horizontal, transpose} generates
-all 8 symmetries of D4 at depth ≤ 2:
-  rotate_180        = rotate_90_cw(rotate_90_cw(x))
-  rotate_90_ccw     = transpose(mirror_horizontal(x))
-  mirror_vertical   = transpose(rotate_90_cw(x))
+Atomicity principle: each primitive is one intuitive visual concept.
+Compositional operations (like crop_to_content = trim_rows(trim_cols(x)))
+are NOT primitives — they must be discovered through composition.
 
 DISCOVERY GOALS — compound operations to discover through composition:
+- crop_to_content = trim_cols(trim_rows(x)) or trim_rows(trim_cols(x))
 - extract_largest_object = label_components + largest_object_color + keep_color + mask_by
 - keep_largest/smallest_component = label_components + rank + mask
-- recolor_by_size_rank = label_components + rank + recolor
 """
 
 from __future__ import annotations
@@ -32,7 +30,7 @@ Grid = list[list[int]]
 
 
 # =============================================================================
-# Geometric transforms (3) — minimal generators for D4
+# Geometric transforms (6) — each is one intuitive visual concept
 # =============================================================================
 
 def rotate_90_cw(grid: Grid) -> Grid:
@@ -42,11 +40,32 @@ def rotate_90_cw(grid: Grid) -> Grid:
     return [list(row) for row in zip(*grid[::-1])]
 
 
+def rotate_90_ccw(grid: Grid) -> Grid:
+    """Rotate 90 degrees counter-clockwise."""
+    if not grid:
+        return grid
+    return [list(row) for row in zip(*[r[::-1] for r in grid])]
+
+
+def rotate_180(grid: Grid) -> Grid:
+    """Rotate 180 degrees."""
+    if not grid:
+        return grid
+    return [row[::-1] for row in grid[::-1]]
+
+
 def mirror_horizontal(grid: Grid) -> Grid:
     """Mirror left-right (flip along vertical axis)."""
     if not grid:
         return grid
     return [row[::-1] for row in grid]
+
+
+def mirror_vertical(grid: Grid) -> Grid:
+    """Mirror top-bottom (flip along horizontal axis)."""
+    if not grid:
+        return grid
+    return list(reversed([row[:] for row in grid]))
 
 
 def transpose(grid: Grid) -> Grid:
@@ -57,25 +76,39 @@ def transpose(grid: Grid) -> Grid:
 
 
 # =============================================================================
-# Spatial transforms (6)
+# Spatial transforms (7)
 # =============================================================================
 
-def crop_to_content(grid: Grid) -> Grid:
-    """Crop to bounding box of non-zero pixels."""
+def trim_rows(grid: Grid) -> Grid:
+    """Remove leading and trailing all-zero rows."""
+    if not grid or not grid[0]:
+        return grid
+    h = len(grid)
+    top = 0
+    while top < h and all(c == 0 for c in grid[top]):
+        top += 1
+    bot = h - 1
+    while bot >= top and all(c == 0 for c in grid[bot]):
+        bot -= 1
+    if top > bot:
+        return grid
+    return [row[:] for row in grid[top:bot + 1]]
+
+
+def trim_cols(grid: Grid) -> Grid:
+    """Remove leading and trailing all-zero columns."""
     if not grid or not grid[0]:
         return grid
     h, w = len(grid), len(grid[0])
-    min_r, max_r, min_c, max_c = h, -1, w, -1
-    for r in range(h):
-        for c in range(w):
-            if grid[r][c] != 0:
-                min_r = min(min_r, r)
-                max_r = max(max_r, r)
-                min_c = min(min_c, c)
-                max_c = max(max_c, c)
-    if max_r < 0:
+    left = 0
+    while left < w and all(grid[r][left] == 0 for r in range(h)):
+        left += 1
+    right = w - 1
+    while right >= left and all(grid[r][right] == 0 for r in range(h)):
+        right -= 1
+    if left > right:
         return grid
-    return [grid[r][min_c:max_c + 1] for r in range(min_r, max_r + 1)]
+    return [row[left:right + 1] for row in grid]
 
 
 def crop_half_top(grid: Grid) -> Grid:
@@ -414,18 +447,23 @@ def _downscale_factory(n: int):
 def build_atomic_primitives() -> list[Primitive]:
     """Build the truly atomic transformation primitives.
 
-    15 unary transforms + 2 binary (overlay, mask_by) = 17 total.
+    19 unary transforms + 2 binary (overlay, mask_by) = 21 total.
     Each performs exactly ONE visual concept.
 
-    Geometric: 3 minimal generators for D4 (all 8 symmetries at depth ≤ 2).
+    crop_to_content is NOT a primitive — it's compositional:
+    trim_cols(trim_rows(x)) or trim_rows(trim_cols(x)).
     """
     unary_ops = [
-        # Geometric (3) — minimal D4 generators
+        # Geometric (6) — each is one intuitive concept
         ("rotate_90_clockwise",         rotate_90_cw),
+        ("rotate_90_counterclockwise",  rotate_90_ccw),
+        ("rotate_180",                  rotate_180),
         ("mirror_horizontal",           mirror_horizontal),
+        ("mirror_vertical",             mirror_vertical),
         ("transpose",                   transpose),
-        # Spatial (6)
-        ("crop_to_content",             crop_to_content),
+        # Spatial (7)
+        ("trim_rows",                   trim_rows),
+        ("trim_cols",                   trim_cols),
         ("crop_half_top",               crop_half_top),
         ("crop_half_bottom",            crop_half_bottom),
         ("crop_half_left",              crop_half_left),
@@ -485,10 +523,11 @@ def build_parameterized_primitives() -> list[Primitive]:
 # =============================================================================
 
 ATOMIC_ESSENTIAL_PAIR_CONCEPTS: frozenset = frozenset([
-    "crop_to_content",
+    "trim_rows",
+    "trim_cols",
     "overlay",
     "mirror_horizontal",
-    "transpose",
+    "mirror_vertical",
     "binarize",
     "dilate",
     "erode",

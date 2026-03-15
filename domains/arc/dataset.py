@@ -10,8 +10,8 @@ import sys
 
 from core import Task
 from .transformation_primitives import (
-    rotate_90_cw, mirror_horizontal, transpose,
-    crop_to_content as crop_to_nonzero, invert_colors, gravity_down,
+    rotate_90_cw, mirror_horizontal, mirror_vertical, transpose,
+    trim_rows, trim_cols, invert_colors, gravity_down,
 )
 
 
@@ -107,7 +107,9 @@ def make_sample_tasks() -> list[Task]:
         difficulty=1.0,
     ))
 
-    # Task 3: Crop to non-zero (medium)
+    # Task 3: Crop to content (medium — needs depth-2: trim_cols(trim_rows(x)))
+    def crop_to_content(g):
+        return trim_cols(trim_rows(g))
     grid3_in = [[0, 0, 0, 0], [0, 1, 2, 0], [0, 3, 4, 0], [0, 0, 0, 0]]
     grid3_out = [[1, 2], [3, 4]]
     tasks.append(Task(
@@ -121,17 +123,17 @@ def make_sample_tasks() -> list[Task]:
         difficulty=2.0,
     ))
 
-    # Task 4: Transpose (easy)
+    # Task 4: Mirror vertical (easy)
     grid4_in = [[1, 2], [3, 4], [5, 6]]
-    grid4_out = transpose(grid4_in)
+    grid4_out = mirror_vertical(grid4_in)
     tasks.append(Task(
-        task_id="sample_transpose",
+        task_id="sample_mirror_v",
         train_examples=[
             (grid4_in, grid4_out),
-            ([[9, 8], [7, 6]], transpose([[9, 8], [7, 6]])),
+            ([[9, 8], [7, 6]], mirror_vertical([[9, 8], [7, 6]])),
         ],
         test_inputs=[[[1, 0, 2], [0, 3, 0]]],
-        test_outputs=[transpose([[1, 0, 2], [0, 3, 0]])],
+        test_outputs=[mirror_vertical([[1, 0, 2], [0, 3, 0]])],
         difficulty=1.0,
     ))
 
@@ -177,17 +179,17 @@ def make_sample_tasks() -> list[Task]:
         difficulty=4.0,
     ))
 
-    # Task 8: Invert + crop (harder — needs depth-2)
-    def invert_crop(g):
-        return crop_to_nonzero(invert_colors(g))
+    # Task 8: Invert + trim (harder — needs depth-2)
+    def invert_trim(g):
+        return trim_cols(invert_colors(g))
     tasks.append(Task(
-        task_id="sample_invert_crop",
+        task_id="sample_invert_trim",
         train_examples=[
-            ([[0, 0, 0], [0, 5, 0], [0, 0, 0]], invert_crop([[0, 0, 0], [0, 5, 0], [0, 0, 0]])),
-            ([[0, 3, 0], [0, 0, 0]], invert_crop([[0, 3, 0], [0, 0, 0]])),
+            ([[0, 5, 0], [0, 3, 0]], invert_trim([[0, 5, 0], [0, 3, 0]])),
+            ([[0, 0, 7, 0], [0, 0, 2, 0]], invert_trim([[0, 0, 7, 0], [0, 0, 2, 0]])),
         ],
-        test_inputs=[[[0, 0], [0, 2], [0, 0]]],
-        test_outputs=[invert_crop([[0, 0], [0, 2], [0, 0]])],
+        test_inputs=[[[0, 1, 0], [0, 4, 0], [0, 6, 0]]],
+        test_outputs=[invert_trim([[0, 1, 0], [0, 4, 0], [0, 6, 0]])],
         difficulty=4.5,
     ))
 

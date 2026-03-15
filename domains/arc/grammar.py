@@ -63,7 +63,7 @@ class ARCGrammar(Grammar):
         oh, ow = len(first_out), len(first_out[0]) if first_out[0] else 0
 
         if oh < h or ow < w:
-            hints.extend(["crop_to_content", "crop_half_top", "crop_half_left"])
+            hints.extend(["trim_rows", "trim_cols", "crop_half_top", "crop_half_left"])
         if oh > h or ow > w:
             hints.append("pad_border")
         if oh == h and ow == w:
