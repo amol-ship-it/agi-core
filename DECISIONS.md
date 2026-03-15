@@ -2418,4 +2418,24 @@ Added `label_components` (single BFS, truly atomic) and `mask_by` (binary grid m
 - Default rounds remains 1 (compounding opt-in via --rounds flag)
 
 ---
+
+### Decision 107: Binary near-miss refinement, compounding curve results
+
+**Date:** 2026-03-14
+
+Added binary near-miss refinement: try `overlay(near_miss, other)` and `mask_by(near_miss, other)` for top-3 near-misses × top-15 depth-1 programs. Cost: ~300 evals per task.
+
+Removed `--vocabulary`, `--beam-width`, `--max-generations`, `--adaptive-realloc` flags and `contest` preset. Atomic is now the only vocabulary for ARC.
+
+**Compounding curve (measured, 400 tasks, 3 rounds):**
+
+| Round | Train solved | Library | Eval solved |
+|-------|-------------|---------|-------------|
+| 1 | 18/400 (4.5%) | 107 | 8/400 (2.0%) |
+| 2 | 23/400 (5.8%) | 170 | 8/400 (2.0%) |
+| 3 | 24/400 (6.0%) | 204 | 8/400 (2.0%) |
+
+Training compounds (+6 from library), eval stable at 8. Library entries are mostly task-specific compositions; structural patterns transfer but don't unlock new eval tasks yet.
+
+---
 *This document will be updated with each new session and major decision.*
