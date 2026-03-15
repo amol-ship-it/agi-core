@@ -428,6 +428,12 @@ Results: All 4 experiments implemented. 631 tests pass (9 new). 50-task sequenti
 
 [User provided a detailed plan for bounded library with eviction (cap=100, reuse immunity, eviction score). Implemented and swept capacity 50/100/150/200 — all equivalent at current library sizes, cap=5 confirms eviction works. Then user identified that the old near-miss threshold (error ≤ 0.15) was too restrictive with eviction in place. Removed threshold: near-misses stored 21→46 (+119%), library entries 14→32 (+129%), solved extra task. User then requested a clean rewrite instead of patching — renamed entire concept from "near-miss" (implied threshold) to "best attempt" (stores everything). Cleaned API: `store_near_miss`→`store_best_attempt`, `get_near_misses(max_error)`→`get_best_attempts()`, `near_miss_weight`→`unsolved_weight`. Deleted dead `SleepConfig.near_miss_threshold`. Wake refinement (`_near_miss_refine`, `SearchConfig.near_miss_threshold`) unchanged — separate concept. Updated all docs. 402 tests pass.]
 
+### Prompt 64 (2026-03-14)
+
+> Is crop_to_content really atomic? Audit all primitives and make them truly minimal and atomic. Is grammar.py dead code? Remove dead code. Where are composition rules? Make them simple and minimal. We will compose perception and transformation primitives together.
+
+[Audited all 41 ARC primitives for atomicity. Removed 3 composable geometric transforms (rotate_90_ccw, rotate_180, mirror_vertical) — all reachable at depth ≤ 2 from {rotate_90_cw, mirror_horizontal, transpose}. Kept crop_to_content and fill_enclosed as pragmatic atomics — decomposing requires narrow-purpose bbox perception + arity-4 parameterized crop with no expressivity gain. Removed dead code: grammar.py decompose/recompose (never called, broken imports of non-existent _detect_any_separator_lines/_split_grid_cells). Removed environment.py structural phase overrides (try_object_decomposition, try_cross_reference, etc — all gated by allow_structural_phases()=False, try_cross_reference had broken imports). Composition rules already minimal: grammar.py compose() creates trees, environment.py _eval_tree() evaluates recursively. Perception+transformation composition works naturally via parameterized primitives. Final: 38 primitives (was 41). 403 tests pass.]
+
 ---
 
 *This document will be updated with each new session.*

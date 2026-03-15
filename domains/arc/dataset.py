@@ -10,7 +10,7 @@ import sys
 
 from core import Task
 from .transformation_primitives import (
-    rotate_90_cw, mirror_horizontal, mirror_vertical,
+    rotate_90_cw, mirror_horizontal, transpose,
     crop_to_content as crop_to_nonzero, invert_colors, gravity_down,
 )
 
@@ -121,17 +121,17 @@ def make_sample_tasks() -> list[Task]:
         difficulty=2.0,
     ))
 
-    # Task 4: Mirror vertical (easy)
+    # Task 4: Transpose (easy)
     grid4_in = [[1, 2], [3, 4], [5, 6]]
-    grid4_out = mirror_vertical(grid4_in)
+    grid4_out = transpose(grid4_in)
     tasks.append(Task(
-        task_id="sample_mirror_v",
+        task_id="sample_transpose",
         train_examples=[
             (grid4_in, grid4_out),
-            ([[9, 8], [7, 6]], mirror_vertical([[9, 8], [7, 6]])),
+            ([[9, 8], [7, 6]], transpose([[9, 8], [7, 6]])),
         ],
         test_inputs=[[[1, 0, 2], [0, 3, 0]]],
-        test_outputs=[mirror_vertical([[1, 0, 2], [0, 3, 0]])],
+        test_outputs=[transpose([[1, 0, 2], [0, 3, 0]])],
         difficulty=1.0,
     ))
 

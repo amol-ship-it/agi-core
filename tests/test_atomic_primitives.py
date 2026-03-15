@@ -16,9 +16,8 @@ from core import Program, Task, Primitive
 from core.types import ScoredProgram
 
 from domains.arc.transformation_primitives import (
-    # Atomic transforms
-    rotate_90_cw, rotate_90_ccw, rotate_180,
-    mirror_horizontal, mirror_vertical, transpose,
+    # Atomic transforms (3 geometric + rest)
+    rotate_90_cw, mirror_horizontal, transpose,
     crop_to_content, crop_half_top, crop_half_bottom,
     crop_half_left, crop_half_right,
     pad_border, binarize, invert_colors,
@@ -63,33 +62,38 @@ ENCLOSED = [
 
 
 # =============================================================================
-# 1. Geometric transforms
+# 1. Geometric transforms (minimal D4 generators)
 # =============================================================================
 
 class TestGeometricPrimitives:
     def test_rotate_90_cw(self):
         assert rotate_90_cw(SMALL_GRID) == [[3, 1], [4, 2]]
 
-    def test_rotate_90_ccw(self):
-        assert rotate_90_ccw(SMALL_GRID) == [[2, 4], [1, 3]]
-
-    def test_rotate_180(self):
-        assert rotate_180(SMALL_GRID) == [[4, 3], [2, 1]]
-
     def test_mirror_horizontal(self):
         assert mirror_horizontal(SMALL_GRID) == [[2, 1], [4, 3]]
-
-    def test_mirror_vertical(self):
-        assert mirror_vertical(SMALL_GRID) == [[3, 4], [1, 2]]
 
     def test_transpose(self):
         assert transpose(SMALL_GRID) == [[1, 3], [2, 4]]
 
     def test_geometric_on_1x1(self):
-        for fn in [rotate_90_cw, rotate_90_ccw, rotate_180,
-                   mirror_horizontal, mirror_vertical, transpose]:
+        for fn in [rotate_90_cw, mirror_horizontal, transpose]:
             result = fn(EMPTY_GRID)
             assert isinstance(result, list) and len(result) >= 1
+
+    def test_rotate_180_composable(self):
+        """rotate_180 = rotate_90_cw(rotate_90_cw(x))"""
+        result = rotate_90_cw(rotate_90_cw(SMALL_GRID))
+        assert result == [[4, 3], [2, 1]]
+
+    def test_rotate_90_ccw_composable(self):
+        """rotate_90_ccw = transpose(mirror_horizontal(x))"""
+        result = transpose(mirror_horizontal(SMALL_GRID))
+        assert result == [[2, 4], [1, 3]]
+
+    def test_mirror_vertical_composable(self):
+        """mirror_vertical = transpose(rotate_90_cw(x))"""
+        result = transpose(rotate_90_cw(SMALL_GRID))
+        assert result == [[3, 4], [1, 2]]
 
 
 # =============================================================================
@@ -288,9 +292,9 @@ class TestPerceptionPrimitives:
 class TestBuilders:
     def test_build_atomic_count(self):
         prims = build_atomic_primitives()
-        # 6 geometric + 6 spatial + 2 color + 2 morphological
-        # + 1 physics + 1 fill + 1 label_components + 2 binary (overlay, mask_by) = 21
-        assert len(prims) == 21
+        # 3 geometric + 6 spatial + 2 color + 2 morphological
+        # + 1 physics + 1 fill + 1 label_components + 2 binary (overlay, mask_by) = 18
+        assert len(prims) == 18
 
     def test_all_have_names(self):
         for p in build_atomic_primitives():
@@ -345,9 +349,18 @@ class TestBuilders:
         for name in compound_names:
             assert name not in names, f"compound prim {name} should not be in atomic set"
 
+    def test_no_composable_geometric_prims(self):
+        """Removed geometric transforms should not be in atomic set."""
+        prims = build_atomic_primitives()
+        names = {p.name for p in prims}
+        assert "rotate_90_counterclockwise" not in names
+        assert "rotate_180" not in names
+        assert "mirror_vertical" not in names
+
     def test_essential_pair_concepts(self):
         assert "crop_to_content" in ATOMIC_ESSENTIAL_PAIR_CONCEPTS
         assert "dilate" in ATOMIC_ESSENTIAL_PAIR_CONCEPTS
+        assert "transpose" in ATOMIC_ESSENTIAL_PAIR_CONCEPTS
 
 
 # =============================================================================
@@ -362,11 +375,13 @@ class TestGrammarIntegration(unittest.TestCase):
         assert "dilate" in names
         assert "erode" in names
         assert "overlay" in names
-        # Should have parameterized and perception
         assert "swap_colors" in names
         assert "background_color" in names
-        # Should NOT have compound prims
+        # Should NOT have compound or composable prims
         assert "extract_largest_object" not in names
+        assert "rotate_90_counterclockwise" not in names
+        assert "rotate_180" not in names
+        assert "mirror_vertical" not in names
 
     def test_grammar_atomic_prepare_for_task(self):
         g = ARCGrammar(seed=42, vocabulary="atomic")
@@ -382,8 +397,6 @@ class TestGrammarIntegration(unittest.TestCase):
         assert "swap_colors" in names
         assert kinds["swap_colors"] == "parameterized"
         assert "background_color" in names
-        # No task-specific color prims
-        assert "keep_only_color_1" not in names
 
     def test_grammar_blocks_structural(self):
         g = ARCGrammar(seed=42, vocabulary="atomic")

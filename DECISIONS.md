@@ -2546,4 +2546,48 @@ Note: `SearchConfig.near_miss_threshold` (wake refinement) and `_near_miss_refin
 ### Test count: 402 (all passing)
 
 ---
+
+## Decision 98: Atomic Primitive Audit & Dead Code Removal
+
+**Date:** 2026-03-14
+**Context:** Audit all ARC primitives for true atomicity, remove dead code.
+
+### Primitives made truly minimal
+
+**Removed 3 composable geometric transforms:**
+- `rotate_90_ccw` = `transpose(mirror_horizontal(x))` — depth 2
+- `rotate_180` = `rotate_90_cw(rotate_90_cw(x))` — depth 2
+- `mirror_vertical` = `transpose(rotate_90_cw(x))` — depth 2
+
+Kept minimal D4 generators: {`rotate_90_cw`, `mirror_horizontal`, `transpose`}. All 8 symmetries reachable at depth ≤ 2 via composition. Verified with tests.
+
+**Kept compound-but-pragmatic primitives:**
+- `crop_to_content` — bundles bbox perception + crop. Decomposing requires 4 narrow bbox perception prims + arity-4 parameterized crop. More complexity, no expressivity gain.
+- `fill_enclosed` — bundles enclosed-region detection + color detection + fill. Same reasoning.
+
+**Final primitive counts:** 16 unary + 2 binary transforms, 12 perceptions, 8 parameterized = 38 total (was 41).
+
+### Dead code removed
+
+**grammar.py:** Removed `decompose()`, `recompose()`, `_recompose_grid_partition()` — never called (gated by `allow_structural_phases()=False`), had broken references to non-existent functions `_detect_any_separator_lines` and `_split_grid_cells`. Also removed unused `register_prim` import.
+
+**environment.py:** Removed ALL structural phase method overrides: `try_object_decomposition`, `try_for_each_object`, `try_conditional_per_object`, `try_cross_reference`, `infer_output_correction` + 4 correction strategies + `_extract_patch` helper. All gated by `allow_structural_phases()=False` with vocabulary="atomic". `try_cross_reference` additionally had broken imports of non-existent functions.
+
+**Kept:** `objects.py` — correct utility code, currently unreferenced but available for future use.
+
+### Composition rules (already minimal)
+
+Composition is defined in two places:
+1. `grammar.py:compose()` — creates `Program(root=outer.name, children=inner_programs)`. Programs are trees.
+2. `environment.py:_eval_tree()` — recursive tree evaluation. Perception nodes → values, parameterized nodes → factories, transform nodes → Grid→Grid.
+
+Perception + transformation composition works naturally:
+```
+keep_color(dominant_color(grid))(grid)  — perception feeds parameterized
+crop_to_content(keep_color(dominant_color(x))(x))  — chain with transform
+```
+
+### Test count: 403 (all passing)
+
+---
 *This document will be updated with each new session and major decision.*

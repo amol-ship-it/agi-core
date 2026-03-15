@@ -8,19 +8,18 @@ Three categories:
 1. Transform (Grid → Grid): geometric, spatial, color, morphological, physics
 2. Parameterized ((Value,...) → Grid → Grid): color ops, scale/tile with
    perception-derived parameters
-3. Binary (Grid, Grid → Grid): overlay
+3. Binary (Grid, Grid → Grid): overlay, mask_by
 
-DISCOVERY GOALS — compound operations we want to discover through composition:
-- extract_largest_object = find_components + rank_by_size + extract
-- extract_smallest_object = find_components + rank_by_size + extract
-- keep_largest/smallest_component = find_components + rank + mask
-- recolor_by_size_rank = find_components + rank + recolor
-- extend_lines_to_contact = find_line_segments + extend_until_collision
-- complete_symmetry_90/h/v = detect_partial_symmetry + fill
-- upscale_pattern = detect_small_pattern + upscale
-- fill_tile_pattern = detect_tiling + fill
-- fill_between_diagonal = detect_diagonals + interpolate
-- mark_intersections = find_lines + mark_crossings
+Minimal geometric set: {rotate_90_cw, mirror_horizontal, transpose} generates
+all 8 symmetries of D4 at depth ≤ 2:
+  rotate_180        = rotate_90_cw(rotate_90_cw(x))
+  rotate_90_ccw     = transpose(mirror_horizontal(x))
+  mirror_vertical   = transpose(rotate_90_cw(x))
+
+DISCOVERY GOALS — compound operations to discover through composition:
+- extract_largest_object = label_components + largest_object_color + keep_color + mask_by
+- keep_largest/smallest_component = label_components + rank + mask
+- recolor_by_size_rank = label_components + rank + recolor
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ Grid = list[list[int]]
 
 
 # =============================================================================
-# Geometric transforms (6)
+# Geometric transforms (3) — minimal generators for D4
 # =============================================================================
 
 def rotate_90_cw(grid: Grid) -> Grid:
@@ -43,32 +42,11 @@ def rotate_90_cw(grid: Grid) -> Grid:
     return [list(row) for row in zip(*grid[::-1])]
 
 
-def rotate_90_ccw(grid: Grid) -> Grid:
-    """Rotate 90 degrees counter-clockwise."""
-    if not grid:
-        return grid
-    return [list(row) for row in zip(*[r[::-1] for r in grid])]
-
-
-def rotate_180(grid: Grid) -> Grid:
-    """Rotate 180 degrees."""
-    if not grid:
-        return grid
-    return [row[::-1] for row in grid[::-1]]
-
-
 def mirror_horizontal(grid: Grid) -> Grid:
     """Mirror left-right (flip along vertical axis)."""
     if not grid:
         return grid
     return [row[::-1] for row in grid]
-
-
-def mirror_vertical(grid: Grid) -> Grid:
-    """Mirror top-bottom (flip along horizontal axis)."""
-    if not grid:
-        return grid
-    return list(reversed([row[:] for row in grid]))
 
 
 def transpose(grid: Grid) -> Grid:
@@ -436,16 +414,15 @@ def _downscale_factory(n: int):
 def build_atomic_primitives() -> list[Primitive]:
     """Build the truly atomic transformation primitives.
 
-    18 unary transforms + 1 binary (overlay) = 19 total.
+    15 unary transforms + 2 binary (overlay, mask_by) = 17 total.
     Each performs exactly ONE visual concept.
+
+    Geometric: 3 minimal generators for D4 (all 8 symmetries at depth ≤ 2).
     """
     unary_ops = [
-        # Geometric (6)
+        # Geometric (3) — minimal D4 generators
         ("rotate_90_clockwise",         rotate_90_cw),
-        ("rotate_90_counterclockwise",  rotate_90_ccw),
-        ("rotate_180",                  rotate_180),
         ("mirror_horizontal",           mirror_horizontal),
-        ("mirror_vertical",             mirror_vertical),
         ("transpose",                   transpose),
         # Spatial (6)
         ("crop_to_content",             crop_to_content),
@@ -511,7 +488,7 @@ ATOMIC_ESSENTIAL_PAIR_CONCEPTS: frozenset = frozenset([
     "crop_to_content",
     "overlay",
     "mirror_horizontal",
-    "mirror_vertical",
+    "transpose",
     "binarize",
     "dilate",
     "erode",

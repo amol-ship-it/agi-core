@@ -161,7 +161,7 @@ Two modes. Pick one. That's the only knob most users need.
 | `quick` | 50 | 2 | 500K | Fast dev loop (~5s) |
 | `default` | all (400) | 2 | 3M | Full benchmark (~2 min) |
 
-All runs use **atomic vocabulary** — 41 truly atomic primitives (21 transforms + 12 perception + 8 parameterized). No compound operations; everything must be discovered through composition and compounding.
+All runs use **atomic vocabulary** — 38 truly atomic primitives (18 transforms + 12 perception + 8 parameterized). Only 3 geometric generators (rotate_90_cw, mirror_horizontal, transpose); all 8 symmetries discoverable at depth ≤ 2. No compound operations; everything must be discovered through composition and compounding.
 
 Both presets default to **2 rounds** (the measured sweet spot — see below). Results are fully deterministic with **seed 42** (`PYTHONHASHSEED=0` is enforced automatically).
 
@@ -321,7 +321,7 @@ agi-core/
 │   └── visualize_results.py # HTML visualization generator (expands learned abstractions)
 │
 ├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
-│   ├── arc/                 # ARC-AGI grid transformations (41 atomic primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (38 atomic primitives)
 │   │   ├── transformation_primitives.py # Atomic transforms + parameterized factories (self-contained)
 │   │   ├── perception_primitives.py     # Atomic perception Grid→Value (self-contained)
 │   │   ├── primitives.py    # Registry (_PRIM_MAP) + utilities (to_np, from_np)
@@ -359,7 +359,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**402 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization.
+**403 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization.
 
 ## Documentation
 
