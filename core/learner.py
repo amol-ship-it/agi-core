@@ -959,11 +959,27 @@ class Learner:
     @staticmethod
     def performance_core_count() -> int:
         """
-        Return the number of performance cores (not all logical cores).
+        Return the number of performance cores (P-cores).
 
-        Uses max(1, total_cores - 2) to leave headroom for the OS and UI,
-        preventing the machine from becoming unresponsive during long runs.
+        On Apple Silicon Macs, uses sysctl to get the true P-core count
+        (hw.perflevel0.logicalcpu). Falls back to total_cores - 2 on
+        other platforms.
         """
+        # macOS Apple Silicon: sysctl gives true P-core count
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.perflevel0.logicalcpu"],
+                capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                p_cores = int(result.stdout.strip())
+                if p_cores > 0:
+                    return p_cores
+        except (FileNotFoundError, ValueError, subprocess.TimeoutExpired,
+                OSError):
+            pass
+
+        # Fallback: total cores minus headroom
         total = os.cpu_count() or 1
         if total <= 2:
             return 1
