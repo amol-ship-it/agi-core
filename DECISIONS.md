@@ -2983,7 +2983,7 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 - In `sleep()`, when a library entry is accepted, seed its primitive_score: `update_primitive_score(entry.name, entry.usefulness * LIBRARY_ROI_SEED_SCALE)` where scale=0.1.
 - This closes the feedback loop: high-usefulness library entries get priority in `_pool_sort_key = d1_error / (1 + roi)`.
 
-**Tests:** 458 total (was 452), all passing. Added: `test_derive_search_params_{low,medium,high}_budget`, `test_derive_search_params_monotonic`, `test_derive_rounds_{low,medium,high}`, `test_resolve_auto_derives`, `test_resolve_cli_override_wins`, `test_preset_keys_minimal`, `test_library_roi_seeded_in_sleep`.
+**Tests:** 458 total (was 447), all passing. Added: `test_derive_search_params_{low,medium,high}_budget`, `test_derive_search_params_monotonic`, `test_derive_rounds_{low,medium,high}`, `test_resolve_auto_derives`, `test_resolve_cli_override_wins`, `test_preset_keys_minimal`, `test_library_roi_seeded_in_sleep`.
 
 **Files changed:** `core/config.py` (+derive_search_params, +derive_rounds), `common/benchmark.py` (simplified PRESETS, rewritten resolve_from_preset, updated CLI defaults), `common/__main__.py` (pass base_cell_size to resolve, simplified _make_config), `core/learner.py` (seed ROI in sleep), `tests/test_learner.py` (+11 tests), documentation throughout.
 

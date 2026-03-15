@@ -548,7 +548,7 @@ Implement the Session 15 plan: 6 changes to improve search strategies based on n
 **Changes made:**
 - **Part A: Auto-derive search params**: Added `derive_search_params()` and `derive_rounds()` to `core/config.py`. Simplified PRESETS to compute_cap only. Rewrote `resolve_from_preset()` to auto-derive. Changed CLI pair/triple top-k defaults to None (sentinel). Contest mode auto-derives identical params to old hand-tuned values.
 - **Part B: Library ROI seeding**: In sleep, accepted library entries get primitive_score seeded at `usefulness * 0.1`. Closes feedback loop: high-usefulness entries get search priority via ROI-blended pool ordering.
-- **Part C: Tests**: Added 11 new tests (derive params low/medium/high budget, monotonic, derive rounds, resolve auto-derives, CLI override, preset minimal keys, library ROI seeded in sleep). 452→458 tests, all pass.
+- **Part C: Tests**: Added 11 new tests (derive params low/medium/high budget, monotonic, derive rounds, resolve auto-derives, CLI override, preset minimal keys, library ROI seeded in sleep). 447→458 tests, all pass.
 - **Part D: Documentation**: Decision 123, updated README presets section, updated CLI flags.
 
 ---

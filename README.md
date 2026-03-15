@@ -199,7 +199,7 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 | contest | 2 | 39/400 (9.8%) | 11/400 (2.8%) | 200 | 6 |
 | contest | 3 | 40/400 (10.0%) | 9/400 (2.2%) | 200 | 7 |
 
-Contest mode finds +6 more training solutions (+18%) than default via wider exhaustive search and beam search. Eval peaks at 11 in R2 (vs 9 default). Overfit increases with more compute — wider search finds more task-specific solutions that don't generalize to test.
+Contest mode auto-derives wider search pools (pair_top_k=48, triple_top_k=20) and beam search (30x15) from its 50M compute budget. Finds +6 more training solutions (+18%) than default. Eval peaks at 11 in R2 (vs 9 default). Overfit increases with more compute — wider search finds more task-specific solutions that don't generalize to test.
 
 Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
 
@@ -227,7 +227,7 @@ Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
 | `--mode` | `default` | Preset: `quick`, `default`, or `contest` |
 | `--run-mode` | `pipeline` | `pipeline` (train → eval per round) or `single` (train or eval only) |
 | `--split` | `training` | Data split for single mode: `training` or `evaluation` |
-| `--rounds` | `1` | Wake-sleep rounds (use 3+ for compounding) |
+| `--rounds` | auto | Wake-sleep rounds (auto-derived: 2 for ≥200K, 3 for ≥20M budget) |
 | `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
 | `--culture` | none | Culture file to load (cross-run knowledge transfer) |
 | `--save-culture` | auto | Override auto culture save path |
@@ -255,7 +255,7 @@ Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
 2. **SLEEP**: Analyze all solved programs and best unsolved attempts.
    Extract recurring sub-programs, quality-weighted by accuracy (solved=1.0, unsolved=max(exp(-error)×0.5, solve_score×0.5)).
    Per-example solve scoring: `(k/n)^2` where k=examples solved perfectly — a 2/3-solver always beats a uniformly mediocre program.
-   **Primitive ROI tracking**: credit all primitives in program trees with quality weight; scores accumulate across tasks and decay each round.
+   **Primitive ROI tracking**: credit all primitives in program trees with quality weight; scores accumulate across tasks and decay each round. Library entries get ROI seeded from usefulness at promotion, closing the feedback loop: proven entries get search priority.
    Promote transferable compositions (depth 2+) directly as library entries.
    Train composition priors (transition matrix) on all programs.
    Bounded library with eviction: reused entries are immune, weak entries displaced by better ones.
@@ -297,7 +297,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 ### Current status
 
-**Compounding demonstrated on ARC with atomic vocabulary + structural search.** Training compounds: 24→33 (+9) across 3 rounds. Per-object recolor (10 strategies) contributes ~30% of training solves. Library entries transfer to eval. Color fix + cell-wise patches on near-misses adds 2-3 more. Eval R1 reaches 10/400 (2.5%).
+**Compounding demonstrated on ARC with atomic vocabulary + structural search.** Default mode: training 23→34 across 2 rounds (+48% compounding). Contest mode: 35→40 across 3 rounds with auto-derived beam search. Per-object recolor (10 strategies) contributes ~30% of training solves. Library entries transfer to eval. Color fix + cell-wise patches on near-misses adds 2-3 more. Eval peaks at 11/400 (2.8%) in contest R2.
 
 **Five search strategies** compose the same atomic primitives differently:
 1. **Exhaustive enumeration** — depth 1-3 sequential pipelines + mixed parameterized/transform compositions
@@ -312,7 +312,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 - **Composition depth bottleneck.** Depth-4+ compositions are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds builds up to depth-4+ but saturates quickly.
 - **Library diversity.** 200 library entries learned from training. Most entries are task-specific. Cross-task transfer remains the key challenge.
-- **Eval-train gap.** Training 8.5% vs eval 2.2% — structural strategies (per-object recolor) don't transfer to eval because the learned rules are task-specific.
+- **Eval-train gap.** Training 10.0% vs eval 2.8% (contest best) — structural strategies (per-object recolor) don't transfer to eval because the learned rules are task-specific.
 
 ## Structure
 
@@ -322,7 +322,7 @@ agi-core/
 │   ├── __init__.py          # Public API (re-exports everything)
 │   ├── types.py             # Data types: Primitive, Program, Task, ScoredProgram, LibraryEntry
 │   ├── interfaces.py        # 5 abstract interfaces (Environment, Grammar, DriveSignal, Memory, DomainAdapter)
-│   ├── config.py            # SearchConfig, SleepConfig, CurriculumConfig
+│   ├── config.py            # SearchConfig, SleepConfig, CurriculumConfig, derive_search_params
 │   ├── results.py           # ParetoEntry, WakeResult, SleepResult, RoundResult
 │   ├── transition_matrix.py # DreamCoder-style generative prior P(child|parent)
 │   ├── learner.py           # Wake-sleep loop (the algorithm)
@@ -357,7 +357,7 @@ agi-core/
 │       ├── __init__.py      # Game engine + all 4 interfaces
 │       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (402 tests)
+├── tests/                   # Test suite (458 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -376,7 +376,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**434 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization, batch mode.
+**458 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization, batch mode. Auto-derivation: compute budget → search params, rounds, ROI seeding.
 
 ## Documentation
 

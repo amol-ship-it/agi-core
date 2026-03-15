@@ -94,10 +94,11 @@ class SearchConfig:
     exhaustive_depth: int = 3
     # Pair exhaustion: top-K singles (by individual score) + essential structural
     # concepts form the pair pool. Both steps drawn from this pool → K² combos.
-    # Wider K catches solutions where the first step scores low individually.
+    # These defaults are fallbacks; the benchmark runner auto-derives optimal
+    # values from compute_cap via derive_search_params().
     exhaustive_pair_top_k: int = 40
     # Triple exhaustion: top-K singles + essential concepts → K³ combos.
-    # Smaller K (15) keeps cost manageable: ~15% of ARC needs exactly 3 steps.
+    # Auto-derived from compute_cap in practice (see derive_search_params).
     exhaustive_triple_top_k: int = 15
 
     # Per-task eval budget (0 = unlimited). When > 0, expensive phases

@@ -254,7 +254,7 @@ Examples:
     parser.add_argument("--max-tasks", type=int, default=None,
                         help="Limit number of tasks (0 = all, default: from preset)")
     parser.add_argument("--rounds", type=int, default=None,
-                        help="Wake-sleep rounds (default: 1)")
+                        help="Wake-sleep rounds (auto-derived from compute budget if not set)")
     parser.add_argument("--workers", type=int, default=0,
                         help=f"Parallel workers (0 = performance cores = {perf_cores})")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED,
