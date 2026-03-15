@@ -75,9 +75,9 @@ def main():
     parser.add_argument("--domain", type=str, required=True,
                         choices=sorted(DOMAIN_ADAPTERS),
                         help="Domain to run")
-    parser.add_argument("--run-mode", type=str, default="single",
+    parser.add_argument("--run-mode", type=str, default="pipeline",
                         choices=["single", "pipeline"],
-                        help="Run mode: 'single' or 'pipeline'")
+                        help="Run mode: 'pipeline' (train→eval per round) or 'single'")
     parser.add_argument("--split", type=str, default="training",
                         choices=["training", "evaluation"],
                         help="Data split for single mode")

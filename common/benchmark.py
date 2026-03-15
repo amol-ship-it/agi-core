@@ -293,11 +293,12 @@ class ProgressTracker:
     SCOREBOARD_INTERVAL = 10
 
     def __init__(self, jsonl_path: str, t0: float, split_label: str = "",
-                 library_map: dict = None):
+                 library_map: dict = None, round_offset: int = 0):
         self._file = open(jsonl_path, "w")
         self._t0 = t0
         self._split_label = split_label  # e.g. "TRAIN" or "EVAL"
         self.library_map = library_map or {}  # name → Program for expansion
+        self._round_offset = round_offset  # pipeline round offset
 
         # Cumulative (across all rounds)
         self.done = 0
@@ -319,6 +320,7 @@ class ProgressTracker:
         self, round_num: int, task_index: int, total_tasks: int, wr: WakeResult,
     ) -> None:
         """Called after each task completes. Streams live output."""
+        round_num = round_num + self._round_offset  # pipeline round
         # Reset per-round counters on new round
         if round_num != self._current_round:
             self._current_round = round_num
@@ -467,6 +469,7 @@ class ExperimentConfig:
 
     # Search parameters (resolved from preset + overrides)
     rounds: int = 1
+    pipeline_round: int = 0  # >0 when run as part of an interleaved pipeline
     workers: int = 0
     seed: int = DEFAULT_SEED
     compute_cap: int = 0
@@ -652,9 +655,11 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     hline("\u2550")
 
+    in_pipeline = cfg.pipeline_round > 0
     print(f"\n  Mode:       {cfg.mode}")
     print(f"  Primitives: {len(cfg.grammar.base_primitives())}")
-    print(f"  Rounds:     {rounds}")
+    if not in_pipeline:
+        print(f"  Rounds:     {rounds}")
     print(f"  Workers:    {workers} / {machine['cpu_count']} cores "
           f"({machine.get('chip', machine['arch'])})")
     print(f"  Seed:       {cfg.seed}")
@@ -747,10 +752,14 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             _split = "TRAIN"
         else:
             _split = ""
-    tracker = ProgressTracker(jsonl_path, time.time(), split_label=_split)
+    tracker = ProgressTracker(jsonl_path, time.time(), split_label=_split,
+                              round_offset=cfg.pipeline_round - 1 if in_pipeline else 0)
 
     hline("\u2500")
-    print(f"  Running {len(tasks)} tasks \u00d7 {rounds} rounds on {workers} workers")
+    if in_pipeline:
+        print(f"  Running {len(tasks)} tasks on {workers} workers")
+    else:
+        print(f"  Running {len(tasks)} tasks \u00d7 {rounds} rounds on {workers} workers")
     hline("\u2500")
     print()
 
@@ -811,12 +820,13 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     metrics = extract_metrics(results)
     total_evals = sum(wr.evaluations for rr in results for wr in rr.wake_results)
 
-    print()
-    hline("\u2550")
-    print("  COMPOUNDING CURVE \u2014 THE KEY METRIC")
-    hline("\u2550")
-    print_compounding_table(metrics)
-    print()
+    if not in_pipeline:
+        print()
+        hline("\u2550")
+        print("  COMPOUNDING CURVE \u2014 THE KEY METRIC")
+        hline("\u2550")
+        print_compounding_table(metrics)
+        print()
 
     # Use a phase label if the title contains TRAINING or EVALUATION
     phase_label = ""
@@ -826,40 +836,48 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     elif "EVALUATION" in title_upper:
         phase_label = " \u2014 EVALUATION"
 
-    hline("\u2550")
-    print(f"  FINAL RESULTS{phase_label}")
-    hline("\u2550")
-
-    # Use last round's metrics for the headline numbers (not cumulative)
     last = metrics[-1] if metrics else None
     n_tasks = len(tasks)
 
-    print(f"  Tasks:             {n_tasks}")
-    if last:
-        print(f"  \u2713 Solved:          {last.tasks_solved}/{n_tasks}  "
-              f"({last.solve_rate:.1%})")
-        if last.train_solved > last.tasks_solved:
-            overfits = last.train_solved - last.tasks_solved
-            print(f"    (+ {overfits} overfit: matched training examples "
-                  f"but failed held-out test)")
-
-    print(f"  Rounds:            {rounds}")
-    print(f"  Total evaluations: {total_evals:,}")
-    if tracker.times:
-        print(f"  Median task time:  {statistics.median(tracker.times):.2f}s")
-    print(f"  Wall-clock time:   {fmt_duration(total_time)}")
     throughput = tracker.done / max(total_time, 0.001)
-    print(f"  Throughput:        {throughput:.1f} tasks/s ({workers} workers)")
 
-    if len(metrics) >= 2:
-        first_rate = metrics[0].solve_rate
-        last_rate = metrics[-1].solve_rate
-        if last_rate > first_rate:
-            print(f"\n  >>> COMPOUNDING DETECTED: {first_rate:.1%} \u2192 {last_rate:.1%}")
-        elif last_rate == first_rate:
-            print(f"\n  >>> PLATEAU: solve rate stayed at {first_rate:.1%}")
-        else:
-            print(f"\n  >>> REGRESSION: {first_rate:.1%} \u2192 {last_rate:.1%}")
+    if in_pipeline:
+        # Brief summary — the pipeline prints the full compounding curve at the end
+        if last:
+            print(f"  \u2713 Solved: {last.tasks_solved}/{n_tasks} ({last.solve_rate:.1%}), "
+                  f"library={len(memory.get_library())}, "
+                  f"time={fmt_duration(total_time)}")
+    else:
+        hline("\u2550")
+        print(f"  FINAL RESULTS{phase_label}")
+        hline("\u2550")
+
+        print(f"  Tasks:             {n_tasks}")
+        if last:
+            print(f"  \u2713 Solved:          {last.tasks_solved}/{n_tasks}  "
+                  f"({last.solve_rate:.1%})")
+            if last.train_solved > last.tasks_solved:
+                overfits = last.train_solved - last.tasks_solved
+                print(f"    (+ {overfits} overfit: matched training examples "
+                      f"but failed held-out test)")
+
+        print(f"  Rounds:            {rounds}")
+        print(f"  Total evaluations: {total_evals:,}")
+        if tracker.times:
+            print(f"  Median task time:  {statistics.median(tracker.times):.2f}s")
+        print(f"  Wall-clock time:   {fmt_duration(total_time)}")
+        throughput = tracker.done / max(total_time, 0.001)
+        print(f"  Throughput:        {throughput:.1f} tasks/s ({workers} workers)")
+
+        if len(metrics) >= 2:
+            first_rate = metrics[0].solve_rate
+            last_rate = metrics[-1].solve_rate
+            if last_rate > first_rate:
+                print(f"\n  >>> COMPOUNDING DETECTED: {first_rate:.1%} \u2192 {last_rate:.1%}")
+            elif last_rate == first_rate:
+                print(f"\n  >>> PLATEAU: solve rate stayed at {first_rate:.1%}")
+            else:
+                print(f"\n  >>> REGRESSION: {first_rate:.1%} \u2192 {last_rate:.1%}")
 
     library = memory.get_library()
     lib_map = {e.name: e.program for e in library}
@@ -1330,6 +1348,7 @@ def run_pipeline(
             print()
             train_cfg = make_train_config(
                 args, round_resolved, max_tasks, train_tasks, shared_ts)
+            train_cfg.pipeline_round = round_num
             # Load culture from previous round for compounding
             if culture_path:
                 train_cfg.culture_path = culture_path
@@ -1347,6 +1366,7 @@ def run_pipeline(
             eval_cfg = make_eval_config(
                 args, round_resolved, max_tasks, eval_tasks,
                 culture_path, shared_ts)
+            eval_cfg.pipeline_round = round_num
             # Eval doesn't learn — suppress culture files
             eval_cfg._culture_jsonl_path = ""
             eval_cfg.save_culture = os.devnull
