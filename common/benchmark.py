@@ -1388,8 +1388,9 @@ def run_pipeline(
             eval_cfg = make_eval_config(
                 args, round_resolved, max_tasks, eval_tasks,
                 culture_path, shared_ts)
-            # Eval doesn't learn — no culture JSONL needed
+            # Eval doesn't learn — suppress culture files
             eval_cfg._culture_jsonl_path = ""
+            eval_cfg.save_culture = os.devnull
             eval_result = run_experiment(eval_cfg)
             print()
 
