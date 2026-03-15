@@ -261,8 +261,66 @@ def fill_enclosed(grid: Grid) -> Grid:
 
 
 # =============================================================================
+# Connected component labeling (1) — truly atomic, single BFS
+# =============================================================================
+
+def label_components(grid: Grid) -> Grid:
+    """Label each connected foreground component with a unique color (1, 2, 3, ...).
+
+    Background (most common color) stays 0. Each connected 4-neighbor
+    region of non-background pixels gets a unique label. This is the
+    atomic foundation for object-level operations — composition with
+    keep_color/erase_color can isolate specific components.
+
+    DISCOVERY GOAL: compositions like keep_color(largest_object_color)(label_components(x))
+    should achieve extract_largest_object.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    flat = [grid[r][c] for r in range(h) for c in range(w)]
+    bg = Counter(flat).most_common(1)[0][0]
+
+    result = [[0] * w for _ in range(h)]
+    visited = set()
+    label = 0
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != bg and (r, c) not in visited:
+                label += 1
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop()
+                    result[cr][cc] = label
+                    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        nr, nc = cr + dr, cc + dc
+                        if (0 <= nr < h and 0 <= nc < w
+                                and (nr, nc) not in visited
+                                and grid[nr][nc] != bg):
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+    return result
+
+
+# =============================================================================
 # Binary transforms (1)
 # =============================================================================
+
+def mask_by(grid1: Grid, grid2: Grid) -> Grid:
+    """Keep pixels from grid1 where grid2 is non-zero, zero elsewhere.
+
+    This is the dual of overlay: overlay combines, mask_by filters.
+    Enables compositions like mask_by(original, keep_color(largest)(label_components(original)))
+    to extract the largest connected component with original colors.
+    """
+    if not grid1 or not grid2:
+        return grid1 or grid2 or []
+    h = min(len(grid1), len(grid2))
+    w = min(len(grid1[0]), len(grid2[0])) if grid1[0] and grid2[0] else 0
+    return [[grid1[r][c] if grid2[r][c] != 0 else 0
+             for c in range(w)] for r in range(h)]
+
 
 def overlay(grid1: Grid, grid2: Grid) -> Grid:
     """Overlay two grids: non-zero pixels from grid1 take priority."""
@@ -406,11 +464,14 @@ def build_atomic_primitives() -> list[Primitive]:
         ("gravity_down",                gravity_down),
         # Fill (1)
         ("fill_enclosed",               fill_enclosed),
+        # Connected component labeling (1) — single BFS, truly atomic
+        ("label_components",            label_components),
     ]
 
     prims = [Primitive(name=name, arity=1, fn=fn, domain="arc")
              for name, fn in unary_ops]
     prims.append(Primitive(name="overlay", arity=2, fn=overlay, domain="arc"))
+    prims.append(Primitive(name="mask_by", arity=2, fn=mask_by, domain="arc"))
     return prims
 
 

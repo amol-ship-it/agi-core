@@ -289,8 +289,8 @@ class TestBuilders:
     def test_build_atomic_count(self):
         prims = build_atomic_primitives()
         # 6 geometric + 6 spatial + 2 color + 2 morphological
-        # + 1 physics + 1 fill + 1 overlay = 19
-        assert len(prims) == 19
+        # + 1 physics + 1 fill + 1 label_components + 2 binary (overlay, mask_by) = 21
+        assert len(prims) == 21
 
     def test_all_have_names(self):
         for p in build_atomic_primitives():
@@ -304,11 +304,13 @@ class TestBuilders:
                 assert isinstance(result, list), f"{p.name} didn't return a list"
                 assert len(result) > 0, f"{p.name} returned empty list"
 
-    def test_overlay_arity_2(self):
+    def test_binary_prims(self):
         prims = build_atomic_primitives()
         binary = [p for p in prims if p.arity == 2]
-        assert len(binary) == 1
-        assert binary[0].name == "overlay"
+        assert len(binary) == 2
+        names = {p.name for p in binary}
+        assert "overlay" in names
+        assert "mask_by" in names
 
     def test_parameterized_prims(self):
         prims = build_parameterized_primitives()
