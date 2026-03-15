@@ -2739,5 +2739,27 @@ Added `--batch` flag that suppresses non-essential output while keeping all data
 
 vs old atomic baseline: 18→23→24 training, 8 eval.
 
+### Decision 110: Library Cap 200 + Rounds Sweet Spot Analysis
+
+**Context:** Library was at cap (100) every round. Increased to 200 to allow more diverse compositions. Also tested 5 rounds to see if deeper compounding helps.
+
+**5-round results (400 tasks, library cap 200):**
+
+| Round | Train | Overfit | Eval | Library |
+|-------|-------|---------|------|---------|
+| 1 | 22/400 (5.5%) | 1 | 10/400 (2.5%) | 200 |
+| 2 | 30/400 (7.5%) | 2 | 9/400 (2.2%) | 200 |
+| 3 | 31/400 (7.8%) | 4 | 9/400 (2.2%) | 200 |
+| 4 | 30/400 (7.5%) | 3 | 9/400 (2.2%) | 200 |
+| 5 | 32/400 (8.0%) | 2 | 9/400 (2.2%) | 200 |
+
+**Key findings:**
+1. **3 rounds is the sweet spot** — rounds 4-5 don't improve. Training saturates at 31-32.
+2. **Eval peaks at R1 (10/400)** then drops to 9. This is because early library entries are more diverse (from unsolved attempts), while later entries are more specialized.
+3. **Library at cap (200)** — eviction is working, not starved.
+4. **Training compounds +45%** (22→32) but eval is stable.
+
+**Decision:** Keep 3 rounds as default. Library cap 200 is better than 100 (more room for diverse compositions without quality dilution).
+
 ---
 *This document will be updated with each new session and major decision.*
