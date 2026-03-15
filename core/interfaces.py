@@ -430,16 +430,20 @@ class Memory(ABC):
         """Return all stored solutions, keyed by task_id."""
         ...
 
-    # --- Near-misses (almost-solved programs for sleep learning) ---
+    # --- Best attempts (unsolved programs for sleep learning) ---
 
-    def store_near_miss(self, task_id: str, scored: ScoredProgram) -> None:
-        """Store a near-miss program (almost-solved, low but nonzero error).
+    def store_best_attempt(self, task_id: str, scored: ScoredProgram) -> None:
+        """Store the best program found for an unsolved task.
 
-        Default: no-op. Override in implementations that support sleep learning.
+        Keeps the lowest-error attempt per task. Sleep extracts subtrees
+        from these to grow the library — even imperfect programs contain
+        useful compositions.
+
+        Default: no-op.
         """
 
-    def get_near_misses(self, max_error: float = 1.0) -> dict[str, ScoredProgram]:
-        """Return near-misses, optionally filtered by max prediction error.
+    def get_best_attempts(self) -> dict[str, ScoredProgram]:
+        """Return best unsolved attempts, keyed by task_id.
 
         Default: empty dict.
         """

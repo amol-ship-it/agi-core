@@ -3,8 +3,9 @@ Tests for core/memory.py — InMemoryStore.
 
 Verifies:
 1. Episodic memory: record and replay
-2. Library: add, get, update usefulness
+2. Library: add, get, update usefulness, eviction
 3. Solutions: store and retrieve
+4. Best attempts: store and retrieve unsolved programs
 """
 
 import unittest
@@ -117,7 +118,7 @@ class TestInMemoryStoreSolutions(unittest.TestCase):
         self.assertEqual(len(store.get_solutions()), 1)
 
 
-class TestInMemoryStoreNearMisses(unittest.TestCase):
+class TestBestAttempts(unittest.TestCase):
 
     def _sp(self, root="x", error=0.10):
         return ScoredProgram(
@@ -127,45 +128,42 @@ class TestInMemoryStoreNearMisses(unittest.TestCase):
 
     def test_store_and_get(self):
         store = InMemoryStore()
-        store.store_near_miss("t1", self._sp(error=0.10))
-        nms = store.get_near_misses(max_error=0.15)
-        self.assertIn("t1", nms)
-        self.assertAlmostEqual(nms["t1"].prediction_error, 0.10)
+        store.store_best_attempt("t1", self._sp(error=0.10))
+        ba = store.get_best_attempts()
+        self.assertIn("t1", ba)
+        self.assertAlmostEqual(ba["t1"].prediction_error, 0.10)
 
-    def test_keeps_best_near_miss(self):
+    def test_keeps_lowest_error(self):
         store = InMemoryStore()
-        store.store_near_miss("t1", self._sp(error=0.10))
-        store.store_near_miss("t1", self._sp(root="y", error=0.05))
-        nms = store.get_near_misses()
-        self.assertEqual(nms["t1"].program.root, "y")  # better one kept
+        store.store_best_attempt("t1", self._sp(error=0.10))
+        store.store_best_attempt("t1", self._sp(root="y", error=0.05))
+        ba = store.get_best_attempts()
+        self.assertEqual(ba["t1"].program.root, "y")
 
     def test_does_not_overwrite_with_worse(self):
         store = InMemoryStore()
-        store.store_near_miss("t1", self._sp(error=0.05))
-        store.store_near_miss("t1", self._sp(root="y", error=0.10))
-        nms = store.get_near_misses()
-        self.assertEqual(nms["t1"].program.root, "x")  # original kept
+        store.store_best_attempt("t1", self._sp(error=0.05))
+        store.store_best_attempt("t1", self._sp(root="y", error=0.10))
+        ba = store.get_best_attempts()
+        self.assertEqual(ba["t1"].program.root, "x")
 
-    def test_filters_by_max_error(self):
+    def test_stores_high_error_programs(self):
+        """No threshold — even high-error programs are stored."""
         store = InMemoryStore()
-        store.store_near_miss("t1", self._sp(error=0.05))
-        store.store_near_miss("t2", self._sp(error=0.20))
-        nms = store.get_near_misses(max_error=0.15)
-        self.assertIn("t1", nms)
-        self.assertNotIn("t2", nms)
+        store.store_best_attempt("t1", self._sp(error=0.80))
+        ba = store.get_best_attempts()
+        self.assertIn("t1", ba)
 
     def test_empty_by_default(self):
         store = InMemoryStore()
-        self.assertEqual(store.get_near_misses(), {})
+        self.assertEqual(store.get_best_attempts(), {})
 
     def test_culture_round_trip(self):
-        """Near-misses survive save/load cycle."""
-        import json
-        import tempfile
-        import os
+        import tempfile, os
 
         store = InMemoryStore()
-        store.store_near_miss("t1", self._sp(root="crop_to_nonzero", error=0.08))
+        store.store_best_attempt("t1", self._sp(root="crop_to_nonzero", error=0.08))
+        store.store_best_attempt("t2", self._sp(root="rotate90", error=0.60))
 
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             path = f.name
@@ -173,10 +171,10 @@ class TestInMemoryStoreNearMisses(unittest.TestCase):
             store.save_culture(path)
             store2 = InMemoryStore()
             store2.load_culture(path)
-            nms = store2.get_near_misses()
-            self.assertIn("t1", nms)
-            self.assertEqual(nms["t1"].program.root, "crop_to_nonzero")
-            self.assertAlmostEqual(nms["t1"].prediction_error, 0.08)
+            ba = store2.get_best_attempts()
+            self.assertEqual(len(ba), 2)
+            self.assertEqual(ba["t1"].program.root, "crop_to_nonzero")
+            self.assertAlmostEqual(ba["t2"].prediction_error, 0.60)
         finally:
             os.unlink(path)
 

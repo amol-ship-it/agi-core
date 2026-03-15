@@ -554,9 +554,7 @@ class Learner:
                 self.memory.record_episode(
                     ctx.task.task_id, ctx.task.train_examples,
                     ctx.best_so_far.program, ctx.best_so_far.energy)
-                # Store best attempt as near-miss for sleep learning.
-                # No threshold — eviction handles quality control.
-                self.memory.store_near_miss(ctx.task.task_id, ctx.best_so_far)
+                self.memory.store_best_attempt(ctx.task.task_id, ctx.best_so_far)
         front = self._extract_pareto_front(ctx.pareto)
         wall = time.time() - ctx.t0
         train_preds, test_preds = self._compute_predictions(ctx.best_so_far, ctx.task)
@@ -786,9 +784,9 @@ class Learner:
         """
         Consolidation phase — the "dream" step.
 
-        1. Collect all solved programs AND near-misses
+        1. Collect all solved programs and best unsolved attempts
         2. Build transition matrix P(child_op | parent_op) from both
-        3. Extract sub-trees from both, quality-weighting near-misses
+        3. Extract sub-trees from both, quality-weighting unsolved programs
         4. Score by compression value with diversity bonus
         5. Add the best as new named primitives to the library
         6. Decay old entries and prune dead ones
@@ -797,23 +795,25 @@ class Learner:
         cfg = self.sleep_cfg
 
         solutions = self.memory.get_solutions()
-        near_misses = self.memory.get_near_misses()
+        unsolved = self.memory.get_best_attempts()
         lib_before = len(self.memory.get_library())
 
-        # 1. Build transition matrix from ALL solved AND near-miss programs
-        #    Near-misses give 10-50x more training data for composition priors.
-        for task_id, scored in solutions.items():
+        # 1. Build transition matrix from all programs (solved + unsolved).
+        #    Unsolved attempts often outnumber solutions 10-50x, providing
+        #    much richer training data for composition priors.
+        for scored in solutions.values():
             self._transition_matrix.observe_program(scored.program)
-        for task_id, scored in near_misses.items():
+        for scored in unsolved.values():
             self._transition_matrix.observe_program(scored.program)
 
         logger.info(
             f"  [sleep] Transition matrix: {self._transition_matrix.size} transitions "
-            f"from {len(solutions)} solved + {len(near_misses)} near-miss programs"
+            f"from {len(solutions)} solved + {len(unsolved)} unsolved programs"
         )
 
-        # 2. Extract all sub-trees from solutions (weight 1.0) and
-        #    near-misses (weight proportional to quality)
+        # 2. Extract all sub-trees. Solved programs get full weight (1.0).
+        #    Unsolved programs get quality = (1 - error) * unsolved_weight,
+        #    so a 10% error program contributes more than a 50% error one.
         subtree_counts: dict[str, list[tuple[Program, str, float]]] = {}
 
         for task_id, scored in solutions.items():
@@ -823,8 +823,8 @@ class Learner:
                     subtree_counts[key] = []
                 subtree_counts[key].append((subtree, task_id, 1.0))
 
-        for task_id, scored in near_misses.items():
-            quality = (1.0 - scored.prediction_error) * cfg.near_miss_weight
+        for task_id, scored in unsolved.items():
+            quality = (1.0 - scored.prediction_error) * cfg.unsolved_weight
             for subtree in self._enumerate_subtrees(scored.program):
                 key = repr(subtree)
                 if key not in subtree_counts:
@@ -833,7 +833,7 @@ class Learner:
 
         # Build a map of task_id → program root op for diversity scoring
         task_roots = {tid: scored.program.root for tid, scored in solutions.items()}
-        for tid, scored in near_misses.items():
+        for tid, scored in unsolved.items():
             if tid not in task_roots:
                 task_roots[tid] = scored.program.root
 
@@ -875,18 +875,16 @@ class Learner:
             new_entries.append(entry)
             existing_reprs.add(repr(subtree))
 
-        # 4b. Promote full near-miss programs as library entries.
-        #     Near-misses are programs that almost solved a task. Promoting
-        #     them directly makes them available as building blocks in the
-        #     next round: depth-1 search over library entries effectively
-        #     reaches depth-2+ without exponential cost. Each round
-        #     compounds: round N's near-misses become round N+1's primitives.
+        # 4b. Promote full unsolved programs as library entries.
+        #     Promoting whole programs makes them available as building blocks
+        #     in the next round: depth-1 search over library entries effectively
+        #     reaches depth-2+ without exponential cost. Each round compounds:
+        #     round N's best attempts become round N+1's primitives.
         #
         #     Only promote programs built from base-vocabulary primitives
         #     (not task-specific color prims), so entries transfer across tasks.
         #     Skip depth-1 programs (already in base vocabulary).
         base_names = {p.name for p in self.grammar.base_primitives()}
-        # Also allow library-entry names (for chaining across rounds)
         base_names.update(e.name for e in self.memory.get_library())
 
         def _all_nodes_transferable(prog: Program) -> bool:
@@ -895,16 +893,16 @@ class Learner:
                 return False
             return all(_all_nodes_transferable(c) for c in prog.children)
 
-        for task_id, scored in near_misses.items():
+        for task_id, scored in unsolved.items():
             prog = scored.program
             if prog.size < 2:
-                continue  # depth-1: already in base vocabulary
+                continue
             if not _all_nodes_transferable(prog):
-                continue  # skip task-specific programs (color swaps etc.)
+                continue
             key = repr(prog)
             if key in existing_reprs:
                 continue
-            quality = (1.0 - scored.prediction_error) * cfg.near_miss_weight
+            quality = (1.0 - scored.prediction_error) * cfg.unsolved_weight
             entry_name = f"learned_{lib_before + len(new_entries)}"
             entry = LibraryEntry(
                 name=entry_name,
@@ -943,7 +941,7 @@ class Learner:
         logger.info(
             f"  [sleep] Extracted {len(accepted)} new abstractions "
             f"({rejected} rejected by eviction) "
-            f"(from {len(solutions)} solved + {len(near_misses)} near-misses), "
+            f"(from {len(solutions)} solved + {len(unsolved)} unsolved), "
             f"pruned {pruned} dead entries. "
             f"Library: {lib_before} → {lib_after}. Time: {wall:.1f}s"
         )
@@ -1258,7 +1256,7 @@ class Learner:
                     self.memory.store_solution(wr.task_id, wr.best)
                     self._credit_library_usage(wr.best.program)
                 else:
-                    self.memory.store_near_miss(wr.task_id, wr.best)
+                    self.memory.store_best_attempt(wr.task_id, wr.best)
 
         return wake_results
 

@@ -55,7 +55,7 @@ class InMemoryStore(Memory):
         self._episodes: list[dict] = []
         self._library: list[LibraryEntry] = []
         self._solutions: dict[str, ScoredProgram] = {}
-        self._near_misses: dict[str, ScoredProgram] = {}
+        self._best_attempts: dict[str, ScoredProgram] = {}
         self._capacity = capacity
         self._reuse_bonus = reuse_bonus
 
@@ -148,25 +148,17 @@ class InMemoryStore(Memory):
     def get_solutions(self) -> dict[str, ScoredProgram]:
         return dict(self._solutions)
 
-    # --- Near-misses ---
+    # --- Best attempts (unsolved) ---
 
-    def store_near_miss(self, task_id: str, scored: ScoredProgram) -> None:
-        """Store a near-miss program if it's better than any existing one for that task.
-
-        Near-misses are programs that almost solved a task (low prediction_error
-        but above solve_threshold). Sleep uses them to extract subtrees from
-        richer compositional programs that perfect solutions lack.
-        """
-        existing = self._near_misses.get(task_id)
+    def store_best_attempt(self, task_id: str, scored: ScoredProgram) -> None:
+        """Keep the lowest-error program found for an unsolved task."""
+        existing = self._best_attempts.get(task_id)
         if existing is None or scored.prediction_error < existing.prediction_error:
-            self._near_misses[task_id] = scored
+            self._best_attempts[task_id] = scored
 
-    def get_near_misses(self, max_error: float = 1.0) -> dict[str, ScoredProgram]:
-        """Return near-misses, optionally filtered by max prediction error."""
-        return {
-            tid: sp for tid, sp in self._near_misses.items()
-            if sp.prediction_error <= max_error
-        }
+    def get_best_attempts(self) -> dict[str, ScoredProgram]:
+        """Return all best unsolved attempts, keyed by task_id."""
+        return dict(self._best_attempts)
 
     # --- Persistence (culture file) ---
 
@@ -198,35 +190,29 @@ class InMemoryStore(Memory):
                 }
                 for task_id, sp in self._solutions.items()
             },
-            "near_misses": {
+            "best_attempts": {
                 task_id: {
                     "program": _program_to_dict(sp.program),
                     "energy": sp.energy,
                     "prediction_error": sp.prediction_error,
                 }
-                for task_id, sp in self._near_misses.items()
+                for task_id, sp in self._best_attempts.items()
             },
             "solutions_count": len(self._solutions),
-            "near_misses_count": len(self._near_misses),
+            "best_attempts_count": len(self._best_attempts),
             "library_count": len(self._library),
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
         logger.info(
             f"Culture saved to {path} ({len(self._library)} library, "
-            f"{len(self._solutions)} solutions, {len(self._near_misses)} near-misses)")
+            f"{len(self._solutions)} solutions, {len(self._best_attempts)} best attempts)")
 
     def load_culture(self, path: str) -> None:
-        """
-        Load a culture file, reconstructing Programs from their serialized form.
-
-        This restores the library so that evaluation can use concepts learned
-        during training. Solutions are loaded as well for culture transfer.
-        """
+        """Load a culture file, reconstructing Programs from their serialized form."""
         with open(path) as f:
             data = json.load(f)
 
-        # Reconstruct library entries
         for entry_data in data.get("library", []):
             program = _program_from_dict(entry_data["program"])
             entry = LibraryEntry(
@@ -239,29 +225,25 @@ class InMemoryStore(Memory):
             )
             self._library.append(entry)
 
-        # Reconstruct solutions for culture transfer
         for task_id, sol_data in data.get("solutions", {}).items():
             program = _program_from_dict(sol_data["program"])
-            sp = ScoredProgram(
+            self._solutions[task_id] = ScoredProgram(
                 program=program,
                 energy=sol_data.get("energy", 0.0),
                 prediction_error=sol_data.get("prediction_error", 0.0),
                 complexity_cost=float(program.size),
                 task_id=task_id,
             )
-            self._solutions[task_id] = sp
 
-        # Reconstruct near-misses
-        for task_id, nm_data in data.get("near_misses", {}).items():
-            program = _program_from_dict(nm_data["program"])
-            sp = ScoredProgram(
+        for task_id, ba_data in data.get("best_attempts", {}).items():
+            program = _program_from_dict(ba_data["program"])
+            self._best_attempts[task_id] = ScoredProgram(
                 program=program,
-                energy=nm_data.get("energy", 0.0),
-                prediction_error=nm_data.get("prediction_error", 0.0),
+                energy=ba_data.get("energy", 0.0),
+                prediction_error=ba_data.get("prediction_error", 0.0),
                 complexity_cost=float(program.size),
                 task_id=task_id,
             )
-            self._near_misses[task_id] = sp
 
         # Post-load truncation: if loaded library exceeds capacity, keep top-N
         if self._capacity > 0 and len(self._library) > self._capacity:
@@ -273,5 +255,5 @@ class InMemoryStore(Memory):
         logger.info(
             f"Culture loaded from {path} "
             f"({len(self._library)} library, {len(self._solutions)} solutions, "
-            f"{len(self._near_misses)} near-misses)")
+            f"{len(self._best_attempts)} best attempts)")
 

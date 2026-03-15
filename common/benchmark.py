@@ -796,9 +796,9 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
                 "task_id": tid, "program": repr(sp.program),
                 "prediction_error": round(sp.prediction_error, 6),
             }) + "\n")
-        for tid, sp in memory.get_near_misses().items():
+        for tid, sp in memory.get_best_attempts().items():
             _culture_jsonl_file.write(_safe_dumps({
-                "event": "near_miss", "round": round_num, "timestamp": ts,
+                "event": "best_attempt", "round": round_num, "timestamp": ts,
                 "task_id": tid, "program": repr(sp.program),
                 "prediction_error": round(sp.prediction_error, 6),
             }) + "\n")
@@ -931,22 +931,22 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             err_str = f" err={r.get('test_error', '?')}" if r.get("test_error") else ""
             print(f"    ~ {r['task_id']:<24s} program: {_re_expand(r)}{err_str}")
 
-    # --- Near misses (for debugging unsolved tasks) ---
-    near_misses = [r for r in tracker.all_records
-                   if not r["solved"] and not r.get("train_solved")
-                   and r.get("prediction_error") is not None
-                   and r["prediction_error"] < 0.1]
-    if near_misses:
-        near_misses.sort(key=lambda r: r["prediction_error"])
+    # --- Close attempts (for debugging unsolved tasks) ---
+    close = [r for r in tracker.all_records
+             if not r["solved"] and not r.get("train_solved")
+             and r.get("prediction_error") is not None
+             and r["prediction_error"] < 0.1]
+    if close:
+        close.sort(key=lambda r: r["prediction_error"])
         print()
         hline("\u2500")
-        print(f"  NEAR MISSES ({len(near_misses)} tasks with error < 0.1)")
+        print(f"  CLOSE ATTEMPTS ({len(close)} tasks with error < 0.1)")
         hline("\u2500")
-        for r in near_misses[:20]:
+        for r in close[:20]:
             print(f"    \u2717 {r['task_id']:<24s} err={r['prediction_error']:.4f}  "
                   f"program: {r['program']}")
-        if len(near_misses) > 20:
-            print(f"    ... and {len(near_misses) - 20} more")
+        if len(close) > 20:
+            print(f"    ... and {len(close) - 20} more")
 
     # --- Save artifacts ---
     results_data = {

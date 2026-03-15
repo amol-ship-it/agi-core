@@ -52,15 +52,12 @@ class SearchConfig:
 @dataclass
 class SleepConfig:
     """Knobs for the sleep/consolidation phase."""
-    min_occurrences: int = 1      # sub-tree must appear in >= N solutions/near-misses
+    min_occurrences: int = 1      # sub-tree must appear in >= N programs
     min_size: int = 2             # sub-tree must have >= N nodes
     max_library_size: int = 100   # cap on total library entries
     usefulness_decay: float = 0.90  # decay old entries each sleep cycle
     reuse_bonus: float = 2.0       # scoring bonus per reuse for eviction ranking
-    # Near-miss quality weight: scales subtree usefulness from near-miss
-    # programs. All unsolved programs are stored as near-misses (no threshold);
-    # eviction handles quality control.
-    near_miss_weight: float = 0.5      # quality weight for near-miss subtrees
+    unsolved_weight: float = 0.5  # quality discount for unsolved vs solved programs
 
 
 @dataclass
@@ -73,9 +70,8 @@ class CurriculumConfig:
     # immediately promoting solved programs to the library so the next
     # task benefits. When True, overrides workers to 1.
     sequential_compounding: bool = False
-    # Adaptive compute reallocation: after each round, re-run near-miss tasks
-    # (unsolved, error < near_miss_threshold) with boosted search budget.
-    # The boost multiplier controls how much extra compute near-misses get.
+    # Adaptive compute reallocation: after each round, re-run close-to-solved
+    # tasks (error < SearchConfig.near_miss_threshold) with boosted budget.
     adaptive_realloc: bool = False
     adaptive_realloc_budget_multiplier: float = 3.0
     adaptive_realloc_pair_top_k_boost: int = 20  # added to base pair_top_k
