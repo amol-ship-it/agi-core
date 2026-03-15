@@ -1076,6 +1076,7 @@ def save_pipeline_results(
     args,
     resolved: dict,
     extra_meta: dict | None = None,
+    round_summaries: list[dict] | None = None,
 ) -> tuple[str, str]:
     """Save combined pipeline JSON + JSONL files.
 
@@ -1133,6 +1134,7 @@ def save_pipeline_results(
 
     pipeline_data = {
         "meta": meta,
+        "compounding_curve": round_summaries or [],
         "train": {**_phase_summary(train_summary),
                   "library_size": train_summary.get("library_size", 0)},
         "eval": _phase_summary(eval_summary),
@@ -1159,6 +1161,7 @@ def print_pipeline_summary(
     eval_label: str = "Evaluation Results (with culture transfer)",
     viz_paths: list[str] | None = None,
     culture_jsonl_path: str = "",
+    round_summaries: list[dict] | None = None,
 ):
     """Print a formatted pipeline summary to stdout."""
     train_data = train_result.results_data
@@ -1212,6 +1215,29 @@ def print_pipeline_summary(
 
     print()
     print(f"  Total wall time:     {fmt_duration(total_wall)}")
+
+    # Compounding curve across rounds (the key metric)
+    if round_summaries and len(round_summaries) > 1:
+        print()
+        print("  COMPOUNDING CURVE (train / eval per round):")
+        print(f"  {'Round':>5}  {'Train':>12}  {'Overfit':>7}  {'Library':>7}  {'Eval':>12}  {'Overfit':>7}")
+        print(f"  {'─'*5}  {'─'*12}  {'─'*7}  {'─'*7}  {'─'*12}  {'─'*7}")
+        for rs in round_summaries:
+            t_total = rs["train_total"]
+            e_total = rs["eval_total"]
+            t_rate = rs["train_solved"] / max(t_total, 1)
+            e_rate = rs["eval_solved"] / max(e_total, 1)
+            print(f"  {rs['round']:>5}  "
+                  f"{rs['train_solved']:>4}/{t_total} ({t_rate:>5.1%})  "
+                  f"{rs['train_overfit']:>7}  "
+                  f"{rs['train_library']:>7}  "
+                  f"{rs['eval_solved']:>4}/{e_total} ({e_rate:>5.1%})  "
+                  f"{rs['eval_overfit']:>7}")
+        # Highlight compounding
+        if round_summaries[-1]["eval_solved"] > round_summaries[0]["eval_solved"]:
+            r1 = round_summaries[0]["eval_solved"]
+            rn = round_summaries[-1]["eval_solved"]
+            print(f"\n  >>> EVAL COMPOUNDING: {r1} → {rn} eval solves across rounds")
 
     print()
     print("  Pipeline artifacts:")
@@ -1296,6 +1322,7 @@ def run_pipeline(
         culture_path = ""
         train_result = None
         eval_result = None
+        round_summaries = []  # per-round train+eval metrics
 
         for round_num in range(1, total_rounds + 1):
             # Train round N (loading culture from previous round)
@@ -1326,6 +1353,22 @@ def run_pipeline(
             eval_result = run_experiment(eval_cfg)
             print()
 
+            # Collect per-round metrics
+            t_summary = train_result.results_data.get("summary", {})
+            e_summary = eval_result.results_data.get("summary", {})
+            round_summaries.append({
+                "round": round_num,
+                "train_solved": t_summary.get("last_round_solved", 0),
+                "train_total": t_summary.get("n_tasks", 0),
+                "train_overfit": max(0, t_summary.get("last_round_train_solved", 0)
+                                     - t_summary.get("last_round_solved", 0)),
+                "train_library": t_summary.get("library_size", 0),
+                "eval_solved": e_summary.get("last_round_solved", 0),
+                "eval_total": e_summary.get("n_tasks", 0),
+                "eval_overfit": max(0, e_summary.get("last_round_train_solved", 0)
+                                    - e_summary.get("last_round_solved", 0)),
+            })
+
         # Save combined pipeline artifacts (uses last train + eval results)
         json_path, jsonl_path = save_pipeline_results(
             train_result, eval_result,
@@ -1333,6 +1376,7 @@ def run_pipeline(
             title=pipeline_title,
             domain=domain_name, args=args, resolved=resolved,
             extra_meta=extra_meta,
+            round_summaries=round_summaries,
         )
 
         # Generate HTML visualization
@@ -1348,4 +1392,5 @@ def run_pipeline(
             eval_label=eval_label,
             viz_paths=viz_paths,
             culture_jsonl_path=pipeline_culture_jsonl,
+            round_summaries=round_summaries,
         )
