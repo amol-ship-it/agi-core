@@ -115,6 +115,7 @@ def main():
             culture_path=culture_path,
             runs_dir=args.runs_dir,
             no_log=args.no_log,
+            batch=getattr(args, "batch", False),
             task_ids=getattr(args, "task_ids", ""),
             mode=args.mode,
             timestamp=timestamp,
@@ -139,8 +140,9 @@ def main():
                 pipeline_prefix=f"{adapter.name().replace('-', '_')}_pipeline",
                 pipeline_title=f"{adapter.name().upper()} FULL PIPELINE (Train -> Eval)",
                 domain_name=adapter.name(),
-                try_generate_viz=lambda p: adapter.post_run_hooks(
-                    type("R", (), {"results_path": p})()),
+                try_generate_viz=(None if getattr(args, "batch", False)
+                                  else lambda p: adapter.post_run_hooks(
+                                      type("R", (), {"results_path": p})())),
             )
         else:
             # Single mode
@@ -152,8 +154,9 @@ def main():
                                culture_path=getattr(args, "culture", ""),
                                split_label=split_label)
             result = run_experiment(cfg)
-            for vp in adapter.post_run_hooks(result):
-                print(f"  Visualization: {vp}")
+            if not getattr(args, "batch", False):
+                for vp in adapter.post_run_hooks(result):
+                    print(f"  Visualization: {vp}")
     except KeyboardInterrupt:
         print("\n\nAborted by user.\n")
         sys.exit(1)

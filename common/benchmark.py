@@ -262,6 +262,9 @@ Examples:
                         help="Directory for all run artifacts")
     parser.add_argument("--no-log", action="store_true",
                         help="Disable log file (console only)")
+    parser.add_argument("--batch", action="store_true",
+                        help="Batch mode: skip visualization and per-task console output "
+                             "(for hyperparameter sweeps). Data files still saved.")
     parser.add_argument("--exhaustive-depth", type=int, default=3,
                         help="Exhaustive enumeration depth (0=disabled, 2=pairs, 3=triples)")
     parser.add_argument("--exhaustive-pair-top-k", type=int, default=40,
@@ -294,12 +297,14 @@ class ProgressTracker:
     SCOREBOARD_INTERVAL = 10
 
     def __init__(self, jsonl_path: str, t0: float, split_label: str = "",
-                 library_map: dict = None, round_offset: int = 0):
+                 library_map: dict = None, round_offset: int = 0,
+                 quiet: bool = False):
         self._file = open(jsonl_path, "w")
         self._t0 = t0
         self._split_label = split_label  # e.g. "TRAIN" or "EVAL"
         self.library_map = library_map or {}  # name → Program for expansion
         self._round_offset = round_offset  # pipeline round offset
+        self._quiet = quiet  # batch mode: suppress per-task console output
 
         # Cumulative (across all rounds)
         self.done = 0
@@ -344,39 +349,42 @@ class ProgressTracker:
         self.times.append(wr.wall_time)
 
         elapsed = time.time() - self._t0
-        icon = "\u2713" if wr.solved else "\u2717"
-        energy_str = f"{wr.best.energy:.4f}" if wr.best else "    N/A"
-        program_str = expand_program(wr.best.program, self.library_map) if wr.best else ""
 
-        # Overfit tag: matched training but failed test
-        overfit_tag = ""
-        if wr.train_solved and wr.test_solved is False:
-            overfit_tag = " [overfit]"
+        # Per-task console output (suppressed in batch/quiet mode)
+        if not self._quiet:
+            icon = "\u2713" if wr.solved else "\u2717"
+            energy_str = f"{wr.best.energy:.4f}" if wr.best else "    N/A"
+            program_str = expand_program(wr.best.program, self.library_map) if wr.best else ""
 
-        slow_tag = ""
-        if len(self.times) >= 5:
-            med = statistics.median(self.times)
-            if wr.wall_time > med * 10:
-                slow_tag = "  *** SLOW ***"
+            # Overfit tag: matched training but failed test
+            overfit_tag = ""
+            if wr.train_solved and wr.test_solved is False:
+                overfit_tag = " [overfit]"
 
-        split_tag = f" {self._split_label}" if self._split_label else ""
-        print(
-            f"  {icon}{split_tag} R{round_num} [{task_index:>3}/{total_tasks}] "
-            f"{wr.task_id:<20s} "
-            f"E={energy_str}  gens={wr.generations_used:<4d} "
-            f"evals={wr.evaluations:<6d} {wr.wall_time:.1f}s"
-            f"{overfit_tag}{slow_tag}",
-            flush=True,
-        )
-        if wr.solved and program_str:
-            print(f"       program: {program_str}")
-        overfit_str = f"  overfit={self._round_overfit}" if self._round_overfit else ""
-        print(
-            f"       R{round_num}: solved={self._round_solved}/{self._round_done}"
-            f"{overfit_str}  "
-            f"evals={self.total_evals:,}  "
-            f"[{fmt_duration(elapsed)} elapsed]",
-        )
+            slow_tag = ""
+            if len(self.times) >= 5:
+                med = statistics.median(self.times)
+                if wr.wall_time > med * 10:
+                    slow_tag = "  *** SLOW ***"
+
+            split_tag = f" {self._split_label}" if self._split_label else ""
+            print(
+                f"  {icon}{split_tag} R{round_num} [{task_index:>3}/{total_tasks}] "
+                f"{wr.task_id:<20s} "
+                f"E={energy_str}  gens={wr.generations_used:<4d} "
+                f"evals={wr.evaluations:<6d} {wr.wall_time:.1f}s"
+                f"{overfit_tag}{slow_tag}",
+                flush=True,
+            )
+            if wr.solved and program_str:
+                print(f"       program: {program_str}")
+            overfit_str = f"  overfit={self._round_overfit}" if self._round_overfit else ""
+            print(
+                f"       R{round_num}: solved={self._round_solved}/{self._round_done}"
+                f"{overfit_str}  "
+                f"evals={self.total_evals:,}  "
+                f"[{fmt_duration(elapsed)} elapsed]",
+            )
 
         record = {
             "round": round_num,
@@ -495,6 +503,7 @@ class ExperimentConfig:
     # Output
     runs_dir: str = DEFAULT_RUNS_DIR
     no_log: bool = False
+    batch: bool = False  # batch mode: skip viz + per-task console output
     mode: str = "default"
 
     # Task filtering
@@ -605,7 +614,8 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
         culture_jsonl_path = culture_path.replace(".json", ".jsonl")
 
     tee = None
-    if not cfg.no_log and not cfg.suppress_files:
+    # Batch mode auto-suppresses log file (no verbose console output to tee)
+    if not cfg.no_log and not cfg.batch and not cfg.suppress_files:
         tee = TeeWriter(log_path, sys.stdout)
         sys.stdout = tee
 
@@ -651,40 +661,46 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             sys.exit(1)
 
     # --- Header ---
-    hline("\u2550")
-    print(f"  {cfg.title}")
-    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    hline("\u2550")
-
     in_pipeline = cfg.pipeline_round > 0
-    print(f"\n  Mode:       {cfg.mode}")
-    print(f"  Primitives: {len(cfg.grammar.base_primitives())}")
-    if not in_pipeline:
-        print(f"  Rounds:     {rounds}")
-    print(f"  Workers:    {workers} / {machine['cpu_count']} cores "
-          f"({machine.get('chip', machine['arch'])})")
-    print(f"  Seed:       {cfg.seed}")
-    if compute_cap > 0:
-        print(f"  Compute cap: {compute_cap:,} ops (cell-normalized)")
+    if cfg.batch:
+        # Batch mode: minimal one-line header
+        cap_str = f"{compute_cap:,}" if compute_cap > 0 else "unlimited"
+        print(f"  [batch] {cfg.title}  tasks={len(tasks)}  cap={cap_str}  "
+              f"depth={cfg.exhaustive_depth}", flush=True)
     else:
-        print(f"  Compute cap: unlimited")
-    print(f"  Exhaustive: depth={cfg.exhaustive_depth}, "
-          f"pair_top_k={cfg.exhaustive_pair_top_k}, "
-          f"triple_top_k={cfg.exhaustive_triple_top_k}")
-    if cfg.sequential_compounding:
-        print(f"  Sequential compounding: ON")
+        hline("\u2550")
+        print(f"  {cfg.title}")
+        print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        hline("\u2550")
 
-    print()
-    hline("\u2500")
-    print("  Output files (available now for tail -f):")
-    hline("\u2500")
-    print(f"  Results (live):   {jsonl_path}")
-    if not cfg.suppress_files:
-        print(f"  Results (final):  {results_path}")
-        print(f"  Metrics:          {metrics_json_path}")
-        if not cfg.no_log:
-            print(f"  Console log:      {log_path}")
-    print()
+        print(f"\n  Mode:       {cfg.mode}")
+        print(f"  Primitives: {len(cfg.grammar.base_primitives())}")
+        if not in_pipeline:
+            print(f"  Rounds:     {rounds}")
+        print(f"  Workers:    {workers} / {machine['cpu_count']} cores "
+              f"({machine.get('chip', machine['arch'])})")
+        print(f"  Seed:       {cfg.seed}")
+        if compute_cap > 0:
+            print(f"  Compute cap: {compute_cap:,} ops (cell-normalized)")
+        else:
+            print(f"  Compute cap: unlimited")
+        print(f"  Exhaustive: depth={cfg.exhaustive_depth}, "
+              f"pair_top_k={cfg.exhaustive_pair_top_k}, "
+              f"triple_top_k={cfg.exhaustive_triple_top_k}")
+        if cfg.sequential_compounding:
+            print(f"  Sequential compounding: ON")
+
+        print()
+        hline("\u2500")
+        print("  Output files (available now for tail -f):")
+        hline("\u2500")
+        print(f"  Results (live):   {jsonl_path}")
+        if not cfg.suppress_files:
+            print(f"  Results (final):  {results_path}")
+            print(f"  Metrics:          {metrics_json_path}")
+            if not cfg.no_log and not cfg.batch:
+                print(f"  Console log:      {log_path}")
+        print()
 
     if not tasks:
         print("  ERROR: No tasks loaded.")
@@ -714,13 +730,15 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         # Per-task budget uses domain cell size as baseline
         max_evals = max(compute_cap // default_cell_size, 500)
         eval_budget = max_evals  # default for tasks without grid info
-        print(f"\n  Compute cap: {compute_cap:,} ops \u2192 ~{max_evals:,} evals/task (cell-normalized)")
+        if not cfg.batch:
+            print(f"\n  Compute cap: {compute_cap:,} ops \u2192 ~{max_evals:,} evals/task (cell-normalized)")
 
     # Load culture file if specified (cross-run knowledge transfer)
     if cfg.culture_path and os.path.isfile(cfg.culture_path):
         memory.load_culture(cfg.culture_path)
-        print(f"\n  Culture loaded: {len(memory.get_library())} library entries, "
-              f"{len(memory.get_solutions())} solutions")
+        if not cfg.batch:
+            print(f"\n  Culture loaded: {len(memory.get_library())} library entries, "
+                  f"{len(memory.get_solutions())} solutions")
 
     learner = Learner(
         environment=cfg.environment,
@@ -738,12 +756,14 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             exhaustive_pair_top_k=cfg.exhaustive_pair_top_k,
             exhaustive_triple_top_k=cfg.exhaustive_triple_top_k,
             eval_budget=eval_budget,
+            verbose=not cfg.batch,
         ),
     )
 
-    print(f"\n  Tasks:      {len(tasks)}")
-    print(f"  Primitives: {len(cfg.grammar.base_primitives())}")
-    print(f"  Budget:     ~{evals_per_task:,} evals/task, ~{total_budget:,} total")
+    if not cfg.batch:
+        print(f"\n  Tasks:      {len(tasks)}")
+        print(f"  Primitives: {len(cfg.grammar.base_primitives())}")
+        print(f"  Budget:     ~{evals_per_task:,} evals/task, ~{total_budget:,} total")
 
     # --- Run ---
     # Use explicit split_label if provided, else derive from title
@@ -758,15 +778,17 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         else:
             _split = ""
     tracker = ProgressTracker(jsonl_path, time.time(), split_label=_split,
-                              round_offset=cfg.pipeline_round - 1 if in_pipeline else 0)
+                              round_offset=cfg.pipeline_round - 1 if in_pipeline else 0,
+                              quiet=cfg.batch)
 
-    hline("\u2500")
-    if in_pipeline:
-        print(f"  Running {len(tasks)} tasks on {workers} workers")
-    else:
-        print(f"  Running {len(tasks)} tasks \u00d7 {rounds} rounds on {workers} workers")
-    hline("\u2500")
-    print()
+    if not cfg.batch:
+        hline("\u2500")
+        if in_pipeline:
+            print(f"  Running {len(tasks)} tasks on {workers} workers")
+        else:
+            print(f"  Running {len(tasks)} tasks \u00d7 {rounds} rounds on {workers} workers")
+        hline("\u2500")
+        print()
 
     # Culture JSONL: log learning events after each round (tail -f friendly)
     # Use append mode so pipeline rounds accumulate in one file
@@ -774,9 +796,19 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
                            if culture_jsonl_path else None)
 
     _round_offset = getattr(cfg, '_pipeline_round_offset', 0)
+    _round_results_so_far: list = []
 
     def _on_round_done(round_num, round_result, memory):
-        """Write culture snapshot after each round for live observation."""
+        """Print cumulative compounding table + write culture snapshot."""
+        _round_results_so_far.append(round_result)
+
+        # Show cumulative table after each round (non-pipeline, multi-round only)
+        if not cfg.batch and not in_pipeline and rounds > 1:
+            metrics_so_far = extract_metrics(_round_results_so_far)
+            print()
+            print_compounding_table(metrics_so_far)
+            print(flush=True)
+
         if not _culture_jsonl_file:
             return
         from datetime import datetime
@@ -825,128 +857,138 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     metrics = extract_metrics(results)
     total_evals = sum(wr.evaluations for rr in results for wr in rr.wake_results)
 
-    # Always show compounding table (live feedback during pipeline runs too)
-    if len(metrics) >= 1:
-        print()
-        print_compounding_table(metrics)
-        print()
-
-    # Use a phase label if the title contains TRAINING or EVALUATION
-    phase_label = ""
-    title_upper = cfg.title.upper()
-    if "TRAINING" in title_upper:
-        phase_label = " \u2014 TRAINING"
-    elif "EVALUATION" in title_upper:
-        phase_label = " \u2014 EVALUATION"
-
     last = metrics[-1] if metrics else None
     n_tasks = len(tasks)
-
     throughput = tracker.done / max(total_time, 0.001)
-
-    if in_pipeline:
-        # Brief summary — the pipeline prints the full compounding curve at the end
-        if last:
-            print(f"  \u2713 Solved: {last.tasks_solved}/{n_tasks} ({last.solve_rate:.1%}), "
-                  f"library={len(memory.get_library())}, "
-                  f"time={fmt_duration(total_time)}")
-    else:
-        hline("\u2550")
-        print(f"  FINAL RESULTS{phase_label}")
-        hline("\u2550")
-
-        print(f"  Tasks:             {n_tasks}")
-        if last:
-            print(f"  \u2713 Solved:          {last.tasks_solved}/{n_tasks}  "
-                  f"({last.solve_rate:.1%})")
-            if last.train_solved > last.tasks_solved:
-                overfits = last.train_solved - last.tasks_solved
-                print(f"    (+ {overfits} overfit: matched training examples "
-                      f"but failed held-out test)")
-
-        print(f"  Rounds:            {rounds}")
-        print(f"  Total evaluations: {total_evals:,}")
-        if tracker.times:
-            print(f"  Median task time:  {statistics.median(tracker.times):.2f}s")
-        print(f"  Wall-clock time:   {fmt_duration(total_time)}")
-        throughput = tracker.done / max(total_time, 0.001)
-        print(f"  Throughput:        {throughput:.1f} tasks/s ({workers} workers)")
-
-        if len(metrics) >= 2:
-            first_rate = metrics[0].solve_rate
-            last_rate = metrics[-1].solve_rate
-            if last_rate > first_rate:
-                print(f"\n  >>> COMPOUNDING DETECTED: {first_rate:.1%} \u2192 {last_rate:.1%}")
-            elif last_rate == first_rate:
-                print(f"\n  >>> PLATEAU: solve rate stayed at {first_rate:.1%}")
-            else:
-                print(f"\n  >>> REGRESSION: {first_rate:.1%} \u2192 {last_rate:.1%}")
 
     library = memory.get_library()
     lib_map = {e.name: e.program for e in library}
-    print(f"\n  Library: {len(library)} learned abstractions")
-    for entry in library[:20]:
-        expanded = expand_program(entry.program, lib_map)
-        print(f"    {entry.name}: {expanded} "
-              f"(useful={entry.usefulness:.1f}, reused={entry.reuse_count}x, "
-              f"from {len(entry.source_tasks)} tasks)")
-    if len(library) > 20:
-        print(f"    ... and {len(library) - 20} more")
 
-    if len(tracker.all_records) >= 5:
-        by_time = sorted(tracker.all_records, key=lambda r: -r["wall_time"])
-        print(f"\n  Slowest tasks:")
-        for r in by_time[:5]:
-            icon = "\u2713" if r["solved"] else "\u2717"
-            print(f"    {icon} {r['task_id']}  {r['wall_time']:.1f}s  "
-                  f"evals={r['evaluations']:,}  E={r['energy']}")
+    if cfg.batch:
+        # Batch mode: one-line summary with key metrics
+        solved = last.tasks_solved if last else 0
+        rate = last.solve_rate if last else 0
+        print(f"  [batch] solved={solved}/{n_tasks} ({rate:.1%})  "
+              f"library={len(library)}  "
+              f"time={fmt_duration(total_time)}  "
+              f"throughput={throughput:.1f} tasks/s", flush=True)
+    else:
+        # Interactive mode: full verbose output
+        # Compounding table
+        if len(metrics) >= 1:
+            print()
+            print_compounding_table(metrics)
+            print()
 
-    # --- Solved tasks summary (for verification) ---
-    # Re-expand program strings with the final library map (entries
-    # may have been added during the run after programs were recorded).
-    def _re_expand(record):
-        """Re-expand program string using final library map."""
-        from core.types import Program
-        prog = record.get("_program_obj")
-        if prog and isinstance(prog, Program):
-            return expand_program(prog, lib_map)
-        return record.get("program", "")
+        # Use a phase label if the title contains TRAINING or EVALUATION
+        phase_label = ""
+        title_upper = cfg.title.upper()
+        if "TRAINING" in title_upper:
+            phase_label = " \u2014 TRAINING"
+        elif "EVALUATION" in title_upper:
+            phase_label = " \u2014 EVALUATION"
 
-    solved_records = [r for r in tracker.all_records if r["solved"]]
-    overfit_records = [r for r in tracker.all_records
-                       if r.get("train_solved") and not r["solved"]]
-    if solved_records:
-        print()
-        hline("\u2500")
-        print(f"  SOLVED TASKS ({len(solved_records)} total)")
-        hline("\u2500")
-        for r in sorted(solved_records, key=lambda r: r["task_id"]):
-            print(f"    \u2713 {r['task_id']:<24s} program: {_re_expand(r)}")
-    if overfit_records:
-        print()
-        hline("\u2500")
-        print(f"  OVERFIT TASKS ({len(overfit_records)} matched training but failed test)")
-        hline("\u2500")
-        for r in sorted(overfit_records, key=lambda r: r["task_id"]):
-            err_str = f" err={r.get('test_error', '?')}" if r.get("test_error") else ""
-            print(f"    ~ {r['task_id']:<24s} program: {_re_expand(r)}{err_str}")
+        if in_pipeline:
+            # Brief summary — the pipeline prints the full compounding curve at the end
+            if last:
+                print(f"  \u2713 Solved: {last.tasks_solved}/{n_tasks} ({last.solve_rate:.1%}), "
+                      f"library={len(library)}, "
+                      f"time={fmt_duration(total_time)}")
+        else:
+            hline("\u2550")
+            print(f"  FINAL RESULTS{phase_label}")
+            hline("\u2550")
 
-    # --- Close attempts (for debugging unsolved tasks) ---
-    close = [r for r in tracker.all_records
-             if not r["solved"] and not r.get("train_solved")
-             and r.get("prediction_error") is not None
-             and r["prediction_error"] < 0.1]
-    if close:
-        close.sort(key=lambda r: r["prediction_error"])
-        print()
-        hline("\u2500")
-        print(f"  CLOSE ATTEMPTS ({len(close)} tasks with error < 0.1)")
-        hline("\u2500")
-        for r in close[:20]:
-            print(f"    \u2717 {r['task_id']:<24s} err={r['prediction_error']:.4f}  "
-                  f"program: {r['program']}")
-        if len(close) > 20:
-            print(f"    ... and {len(close) - 20} more")
+            print(f"  Tasks:             {n_tasks}")
+            if last:
+                print(f"  \u2713 Solved:          {last.tasks_solved}/{n_tasks}  "
+                      f"({last.solve_rate:.1%})")
+                if last.train_solved > last.tasks_solved:
+                    overfits = last.train_solved - last.tasks_solved
+                    print(f"    (+ {overfits} overfit: matched training examples "
+                          f"but failed held-out test)")
+
+            print(f"  Rounds:            {rounds}")
+            print(f"  Total evaluations: {total_evals:,}")
+            if tracker.times:
+                print(f"  Median task time:  {statistics.median(tracker.times):.2f}s")
+            print(f"  Wall-clock time:   {fmt_duration(total_time)}")
+            throughput = tracker.done / max(total_time, 0.001)
+            print(f"  Throughput:        {throughput:.1f} tasks/s ({workers} workers)")
+
+            if len(metrics) >= 2:
+                first_rate = metrics[0].solve_rate
+                last_rate = metrics[-1].solve_rate
+                if last_rate > first_rate:
+                    print(f"\n  >>> COMPOUNDING DETECTED: {first_rate:.1%} \u2192 {last_rate:.1%}")
+                elif last_rate == first_rate:
+                    print(f"\n  >>> PLATEAU: solve rate stayed at {first_rate:.1%}")
+                else:
+                    print(f"\n  >>> REGRESSION: {first_rate:.1%} \u2192 {last_rate:.1%}")
+
+        print(f"\n  Library: {len(library)} learned abstractions")
+        for entry in library[:20]:
+            expanded = expand_program(entry.program, lib_map)
+            print(f"    {entry.name}: {expanded} "
+                  f"(useful={entry.usefulness:.1f}, reused={entry.reuse_count}x, "
+                  f"from {len(entry.source_tasks)} tasks)")
+        if len(library) > 20:
+            print(f"    ... and {len(library) - 20} more")
+
+        if len(tracker.all_records) >= 5:
+            by_time = sorted(tracker.all_records, key=lambda r: -r["wall_time"])
+            print(f"\n  Slowest tasks:")
+            for r in by_time[:5]:
+                icon = "\u2713" if r["solved"] else "\u2717"
+                print(f"    {icon} {r['task_id']}  {r['wall_time']:.1f}s  "
+                      f"evals={r['evaluations']:,}  E={r['energy']}")
+
+        # --- Solved tasks summary (for verification) ---
+        # Re-expand program strings with the final library map (entries
+        # may have been added during the run after programs were recorded).
+        def _re_expand(record):
+            """Re-expand program string using final library map."""
+            from core.types import Program
+            prog = record.get("_program_obj")
+            if prog and isinstance(prog, Program):
+                return expand_program(prog, lib_map)
+            return record.get("program", "")
+
+        solved_records = [r for r in tracker.all_records if r["solved"]]
+        overfit_records = [r for r in tracker.all_records
+                           if r.get("train_solved") and not r["solved"]]
+        if solved_records:
+            print()
+            hline("\u2500")
+            print(f"  SOLVED TASKS ({len(solved_records)} total)")
+            hline("\u2500")
+            for r in sorted(solved_records, key=lambda r: r["task_id"]):
+                print(f"    \u2713 {r['task_id']:<24s} program: {_re_expand(r)}")
+        if overfit_records:
+            print()
+            hline("\u2500")
+            print(f"  OVERFIT TASKS ({len(overfit_records)} matched training but failed test)")
+            hline("\u2500")
+            for r in sorted(overfit_records, key=lambda r: r["task_id"]):
+                err_str = f" err={r.get('test_error', '?')}" if r.get("test_error") else ""
+                print(f"    ~ {r['task_id']:<24s} program: {_re_expand(r)}{err_str}")
+
+        # --- Close attempts (for debugging unsolved tasks) ---
+        close = [r for r in tracker.all_records
+                 if not r["solved"] and not r.get("train_solved")
+                 and r.get("prediction_error") is not None
+                 and r["prediction_error"] < 0.1]
+        if close:
+            close.sort(key=lambda r: r["prediction_error"])
+            print()
+            hline("\u2500")
+            print(f"  CLOSE ATTEMPTS ({len(close)} tasks with error < 0.1)")
+            hline("\u2500")
+            for r in close[:20]:
+                print(f"    \u2717 {r['task_id']:<24s} err={r['prediction_error']:.4f}  "
+                      f"program: {r['program']}")
+            if len(close) > 20:
+                print(f"    ... and {len(close) - 20} more")
 
     # --- Save artifacts ---
     results_data = {
@@ -1048,24 +1090,25 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     # Always save culture file (needed for pipeline eval transfer)
     memory.save_culture(culture_path)
 
-    print()
-    hline("\u2500")
-    print("  Artifacts:")
-    hline("\u2500")
-    print(f"  Results (live):   {jsonl_path}")
-    if not cfg.suppress_files:
-        print(f"  Results (final):  {results_path}")
-        print(f"  Metrics JSON:     {metrics_json_path}")
-        print(f"  Metrics CSV:      {metrics_csv_path}")
-    print(f"  Culture:          {culture_path}")
-    print(f"  Culture (live):   {culture_jsonl_path}")
-    if not cfg.no_log:
-        print(f"  Console log:      {log_path}")
+    if not cfg.batch:
+        print()
+        hline("\u2500")
+        print("  Artifacts:")
+        hline("\u2500")
+        print(f"  Results (live):   {jsonl_path}")
+        if not cfg.suppress_files:
+            print(f"  Results (final):  {results_path}")
+            print(f"  Metrics JSON:     {metrics_json_path}")
+            print(f"  Metrics CSV:      {metrics_csv_path}")
+        print(f"  Culture:          {culture_path}")
+        print(f"  Culture (live):   {culture_jsonl_path}")
+        if not cfg.no_log:
+            print(f"  Console log:      {log_path}")
 
-    hline("\u2550")
-    print("  Done.")
-    hline("\u2550")
-    print()
+        hline("\u2550")
+        print("  Done.")
+        hline("\u2550")
+        print()
 
     return results_data
 
@@ -1273,6 +1316,30 @@ def print_pipeline_summary(
     print("=" * 72)
 
 
+def _print_live_compounding(round_summaries: list[dict]) -> None:
+    """Print the cumulative compounding curve after each pipeline round."""
+    hdr = (f"  {'Round':>5}  {'Train':>15}  {'Overfit':>7}  {'Library':>7}"
+           f"  {'Eval':>15}  {'Overfit':>7}  {'Train t':>10}  {'Eval t':>10}")
+    sep = (f"  {'─'*5}  {'─'*15}  {'─'*7}  {'─'*7}"
+           f"  {'─'*15}  {'─'*7}  {'─'*10}  {'─'*10}")
+    print()
+    print("  COMPOUNDING CURVE (so far):")
+    print(hdr)
+    print(sep)
+    for rs in round_summaries:
+        t_total = rs["train_total"]
+        e_total = rs["eval_total"]
+        t_rate = rs["train_solved"] / max(t_total, 1)
+        e_rate = rs["eval_solved"] / max(e_total, 1)
+        t_cell = f"{rs['train_solved']}/{t_total} ({t_rate:.1%})"
+        e_cell = f"{rs['eval_solved']}/{e_total} ({e_rate:.1%})"
+        t_wall = fmt_duration(rs.get("train_wall", 0))
+        e_wall = fmt_duration(rs.get("eval_wall", 0))
+        print(f"  {rs['round']:>5}  {t_cell:>15}  {rs['train_overfit']:>7}  {rs['train_library']:>7}"
+              f"  {e_cell:>15}  {rs['eval_overfit']:>7}  {t_wall:>10}  {e_wall:>10}")
+    print(flush=True)
+
+
 # =============================================================================
 # Generic pipeline runner (train -> save culture -> eval)
 # =============================================================================
@@ -1387,6 +1454,9 @@ def run_pipeline(
                 "eval_overfit": max(0, e_summary.get("last_round_train_solved", 0)
                                     - e_summary.get("last_round_solved", 0)),
             })
+
+            # Print cumulative compounding table after each round
+            _print_live_compounding(round_summaries)
 
         # Save combined pipeline artifacts (uses last train + eval results)
         json_path, jsonl_path = save_pipeline_results(

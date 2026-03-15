@@ -151,6 +151,57 @@ class TestRunExperimentARC:
                     json.loads(line)  # should not raise
 
 
+class TestBatchMode:
+    """Tests for --batch mode (suppressed viz + per-task output)."""
+
+    def test_batch_mode_produces_result(self):
+        """Batch mode still produces valid results JSON."""
+        cfg = _make_arc_config(max_tasks=3, batch=True)
+        result = run_experiment(cfg)
+        assert result is not None
+        assert os.path.exists(result.results_path)
+        with open(result.results_path) as f:
+            data = json.load(f)
+        assert data["summary"]["n_tasks"] == 3
+
+    def test_batch_mode_jsonl_written(self):
+        """Batch mode still writes JSONL (data file, not verbose output)."""
+        cfg = _make_arc_config(max_tasks=3, batch=True)
+        result = run_experiment(cfg)
+        results_dir = os.path.dirname(result.results_path)
+        jsonl_files = [f for f in os.listdir(results_dir) if f.endswith(".jsonl")]
+        assert len(jsonl_files) >= 1
+        jsonl_path = os.path.join(results_dir, jsonl_files[0])
+        lines = 0
+        with open(jsonl_path) as f:
+            for line in f:
+                if line.strip():
+                    json.loads(line)
+                    lines += 1
+        assert lines >= 3  # at least one per task
+
+    def test_batch_mode_no_log_file(self):
+        """Batch mode auto-suppresses log file creation."""
+        # Use no_log=False explicitly to verify batch overrides it
+        cfg = _make_arc_config(max_tasks=3, batch=True)
+        cfg.no_log = False  # batch should still suppress log
+        result = run_experiment(cfg)
+        results_dir = os.path.dirname(result.results_path)
+        log_files = [f for f in os.listdir(results_dir) if f.endswith(".log")]
+        assert len(log_files) == 0
+
+    def test_batch_mode_suppressed_output(self, capsys):
+        """Batch mode suppresses per-task and verbose output."""
+        cfg = _make_arc_config(max_tasks=3, batch=True)
+        run_experiment(cfg)
+        captured = capsys.readouterr()
+        # Should have [batch] markers
+        assert "[batch]" in captured.out
+        # Should NOT have per-task lines (✓/✗ icons) or verbose headers
+        assert "Output files" not in captured.out
+        assert "FINAL RESULTS" not in captured.out
+
+
 class TestRunExperimentListOps:
     """End-to-end smoke test for the list_ops domain."""
 
