@@ -57,9 +57,9 @@ class SleepConfig:
     max_library_size: int = 100   # cap on total library entries
     usefulness_decay: float = 0.90  # decay old entries each sleep cycle
     reuse_bonus: float = 2.0       # scoring bonus per reuse for eviction ranking
-    # Near-miss programs: not perfectly solved but close. Used by sleep
-    # to extract subtrees from richer compositional programs.
-    near_miss_threshold: float = 0.15  # max prediction_error to store
+    # Near-miss quality weight: scales subtree usefulness from near-miss
+    # programs. All unsolved programs are stored as near-misses (no threshold);
+    # eviction handles quality control.
     near_miss_weight: float = 0.5      # quality weight for near-miss subtrees
 
 

@@ -161,8 +161,8 @@ class InMemoryStore(Memory):
         if existing is None or scored.prediction_error < existing.prediction_error:
             self._near_misses[task_id] = scored
 
-    def get_near_misses(self, max_error: float = 0.15) -> dict[str, ScoredProgram]:
-        """Return near-misses filtered by max prediction error."""
+    def get_near_misses(self, max_error: float = 1.0) -> dict[str, ScoredProgram]:
+        """Return near-misses, optionally filtered by max prediction error."""
         return {
             tid: sp for tid, sp in self._near_misses.items()
             if sp.prediction_error <= max_error

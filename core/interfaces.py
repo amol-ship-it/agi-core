@@ -438,8 +438,8 @@ class Memory(ABC):
         Default: no-op. Override in implementations that support sleep learning.
         """
 
-    def get_near_misses(self, max_error: float = 0.15) -> dict[str, ScoredProgram]:
-        """Return near-misses filtered by max prediction error.
+    def get_near_misses(self, max_error: float = 1.0) -> dict[str, ScoredProgram]:
+        """Return near-misses, optionally filtered by max prediction error.
 
         Default: empty dict.
         """

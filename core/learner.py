@@ -554,9 +554,9 @@ class Learner:
                 self.memory.record_episode(
                     ctx.task.task_id, ctx.task.train_examples,
                     ctx.best_so_far.program, ctx.best_so_far.energy)
-                # Store near-miss for sleep: programs that almost solved
-                if ctx.best_so_far.prediction_error <= self.sleep_cfg.near_miss_threshold:
-                    self.memory.store_near_miss(ctx.task.task_id, ctx.best_so_far)
+                # Store best attempt as near-miss for sleep learning.
+                # No threshold — eviction handles quality control.
+                self.memory.store_near_miss(ctx.task.task_id, ctx.best_so_far)
         front = self._extract_pareto_front(ctx.pareto)
         wall = time.time() - ctx.t0
         train_preds, test_preds = self._compute_predictions(ctx.best_so_far, ctx.task)
@@ -797,7 +797,7 @@ class Learner:
         cfg = self.sleep_cfg
 
         solutions = self.memory.get_solutions()
-        near_misses = self.memory.get_near_misses(max_error=cfg.near_miss_threshold)
+        near_misses = self.memory.get_near_misses()
         lib_before = len(self.memory.get_library())
 
         # 1. Build transition matrix from ALL solved AND near-miss programs
@@ -1257,7 +1257,7 @@ class Learner:
                 if wr.train_solved:
                     self.memory.store_solution(wr.task_id, wr.best)
                     self._credit_library_usage(wr.best.program)
-                elif wr.best.prediction_error <= self.sleep_cfg.near_miss_threshold:
+                else:
                     self.memory.store_near_miss(wr.task_id, wr.best)
 
         return wake_results

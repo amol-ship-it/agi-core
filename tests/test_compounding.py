@@ -118,7 +118,7 @@ class TestLibraryReuse(unittest.TestCase):
         # Configure sleep to accept near-misses
         learner.sleep_cfg = SleepConfig(
             min_occurrences=2, min_size=1,
-            near_miss_threshold=0.15, near_miss_weight=0.5)
+            near_miss_weight=0.5)
         result = learner.sleep()
         # Sleep should complete and use near-misses for transition matrix
         self.assertIsNotNone(result)
