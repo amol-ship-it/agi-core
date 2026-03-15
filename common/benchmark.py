@@ -674,7 +674,9 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     hline("\u2550")
 
+    vocabulary = getattr(cfg.grammar, '_vocabulary', 'unknown')
     print(f"\n  Mode:       {cfg.mode}")
+    print(f"  Vocabulary: {vocabulary} ({len(cfg.grammar.base_primitives())} base primitives)")
     print(f"  Rounds:     {rounds}")
     print(f"  Beam:       {beam_width}")
     print(f"  Gens:       {max_gens}")
@@ -917,6 +919,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             "workers": workers,
             "seed": cfg.seed,
             "n_tasks": len(tasks),
+            "vocabulary": getattr(cfg.grammar, '_vocabulary', 'unknown'),
             "n_primitives": len(cfg.grammar.base_primitives()),
             "compute_cap": compute_cap,
             "machine": machine,
@@ -1162,6 +1165,7 @@ def print_pipeline_summary(
     print(f"    Exhaustive depth:  {getattr(args, 'exhaustive_depth', '?')}")
     print(f"    Pair top-K:        {getattr(args, 'exhaustive_pair_top_k', '?')}")
     print(f"    Triple top-K:      {getattr(args, 'exhaustive_triple_top_k', '?')}")
+    print(f"    Vocabulary:        {train_meta.get('vocabulary', '?')}")
     print(f"    Primitives:        {train_meta.get('n_primitives', '?')}")
 
     # Train + eval results
