@@ -27,13 +27,13 @@ git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI
 git clone https://github.com/arcprizeorg/ARC-AGI-2.git data/ARC-AGI-2
 
 # Reproduce our results — one command does train + eval with culture transfer
-python -m common --domain arc-agi-1 --run-mode pipeline
+python -m common --domain arc-agi-1 --run-mode pipeline --rounds 3
 
-# Run the test suite (~1 second)
+# Run the test suite (~4 seconds)
 python -m pytest tests/ -v
 ```
 
-The pipeline command runs all 400 training tasks, saves the learned culture, then runs all 400 evaluation tasks using that culture. Results, logs, visualizations, and culture snapshots are auto-saved with timestamps. Output file paths are printed at the start so you can `tail -f` them in another terminal.
+The pipeline command runs interleaved train → eval rounds, saving the learned culture after each training round and evaluating with it. Results, logs, visualizations, and culture snapshots are auto-saved with timestamps.
 
 **Requirements:** Python 3.10+, NumPy, SciPy, Numba. See `requirements.txt`.
 
@@ -51,8 +51,8 @@ git -C data/ARC-AGI-2 pull
 All domains run through a single CLI entry point:
 
 ```bash
-# Full pipeline: train → save culture → eval (default, recommended)
-python -m common --domain arc-agi-1 --run-mode pipeline
+# Full pipeline: train → eval × N rounds (default, recommended)
+python -m common --domain arc-agi-1 --run-mode pipeline --rounds 3
 
 # Quick subset for development (50 tasks, 500K compute cap, ~4s)
 python -m common --domain arc-agi-1 --mode quick
@@ -82,8 +82,8 @@ python -m common --domain arc-agi-1 --max-tasks 100
 # Tiny smoke test: 10 tasks
 python -m common --domain arc-agi-1 --mode quick --max-tasks 10
 
-# Full 400-task benchmark with quick search settings
-python -m common --domain arc-agi-1 --mode quick --max-tasks 0
+# Multi-round compounding on quick subset
+python -m common --domain arc-agi-1 --mode quick --rounds 3
 ```
 
 ### Other domains
@@ -102,30 +102,33 @@ python -m common --domain list-ops --mode quick
 python -m domains.symbolic_math
 ```
 
-The Zork domain is fully self-contained (custom game engine, no external dependencies). ARC-AGI-2 requires the dataset clone above.
-
 ### Auto-saved artifacts
 
-Every run automatically saves timestamped files. Paths are printed at the start so you can monitor progress live:
+Every run automatically saves timestamped files:
 
 ```
 runs/arc_agi_1_training_TIMESTAMP.jsonl        — live per-task results (tail -f friendly)
 runs/arc_agi_1_training_TIMESTAMP.json         — final results: meta + summary + per-task + library
 runs/arc_agi_1_training_TIMESTAMP_culture.json — learned culture snapshot (for eval / cross-run transfer)
 runs/arc_agi_1_training_TIMESTAMP_viz.html     — results visualization (index)
-runs/arc_agi_1_training_TIMESTAMP_viz/         — per-task detail pages
 runs/arc_agi_1_training_TIMESTAMP.log          — full console output
 ```
 
-Monitor a running benchmark in another terminal:
+Pipeline mode adds:
+```
+runs/arc_agi_1_pipeline_TIMESTAMP_culture.jsonl — live learning events across all rounds
+runs/arc_agi_1_pipeline_TIMESTAMP.json         — combined train + eval results + compounding curve
+```
+
+Monitor a running benchmark:
 ```bash
 tail -f runs/arc_agi_1_*.jsonl    # watch task results as they complete
-tail -f runs/arc_agi_1_*.log      # watch full console output
+tail -f runs/*_culture.jsonl      # watch library growth across rounds
 ```
 
 ### Visualization
 
-HTML visualizations are auto-generated after every run. The index page shows all tasks with colored status indicators and grid previews (Input | Expected | Predicted for each example). Click any task to see the full detail page with step-by-step primitive execution showing each intermediate transformation.
+HTML visualizations are auto-generated after every run. The index page shows all tasks with colored status indicators and grid previews. Click any task to see step-by-step primitive execution showing each intermediate transformation. Learned abstractions are expanded inline.
 
 ```bash
 # Regenerate visualization from a previous run
@@ -140,32 +143,14 @@ python -m experiments.visualize_results runs/arc_agi_1_training_TIMESTAMP.json -
 The console output ends with a **SOLVED TASKS** section listing every solved task and its program:
 
 ```
-  SOLVED TASKS (107 total)
-    ✓ 007bbfb7                 program: upscale_pattern
-    ✓ 00d62c1b                 program: fill_rect_interior_4
-    ...
-
-  OVERFIT TASKS (170 matched training but failed test)
-    ~ 22168020                 program: fill_by_symmetry
-    ...
+  SOLVED TASKS (4 total)
+    ✓ 08ed6ac7                 program: label_components
+    ✓ 1cf80156                 program: crop_to_content
+    ✓ 1e0a9b12                 program: gravity_down
+    ✓ 2013d3e2                 program: crop_half_left(learned_8=crop_half_top(crop_to_content))
 ```
 
-"Solved" means the program passes held-out test examples — the real metric. "Overfit" means it matched training examples but failed test.
-
-To verify a specific solve:
-
-```bash
-# View the original task
-cat data/ARC-AGI/data/training/007bbfb7.json | python -m json.tool
-
-# Search for a task in the JSONL results
-grep "007bbfb7" runs/arc_agi_1_*.jsonl | python -m json.tool
-
-# Search in the final JSON
-python -c "import json; d=json.load(open('runs/arc_agi_1_training_TIMESTAMP.json')); print(json.dumps(d['tasks']['007bbfb7'], indent=2))"
-```
-
-Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, `test_solved`, `test_error`, `energy`, `prediction_error`, `program`, `evaluations`, `wall_time`, `train_predictions`, `test_predictions`.
+"Solved" means the program passes held-out test examples — the real metric. Learned abstractions show their expansion inline.
 
 ## Presets
 
@@ -176,9 +161,9 @@ Two modes. Pick one. That's the only knob most users need.
 | `quick` | 50 | 500K | Fast dev loop (~4s) |
 | `default` | all (400) | 3M | Full benchmark (~5 min) |
 
-All runs use **atomic vocabulary** (41 truly atomic primitives: 21 transforms + 12 perception + 8 parameterized). Compound operations must be discovered through composition.
+All runs use **atomic vocabulary** — 41 truly atomic primitives (21 transforms + 12 perception + 8 parameterized). No compound operations; everything must be discovered through composition and compounding.
 
-All presets run **1 round** with **seed 42** by default. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
+All presets run **1 round** with **seed 42** by default. Use `--rounds 3` for compounding. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
 
 **Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
@@ -188,23 +173,17 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 ### Expected performance
 
-**ARC-AGI-1** — eval accuracy (test-verified solves on held-out evaluation set, measured 2026-03-14):
+**ARC-AGI-1** (measured 2026-03-14, 3 rounds with compounding):
 
-| Vocabulary | Training (400 tasks) | Eval (400 tasks) | Time |
-|-----------|---------------------|-----------------|------|
-| `full` (180 prims) | 112/400 (28.0%) | **35/400 (8.8%)** | ~1.5 min |
-| `minimal` (60 prims) | 95/400 (23.8%) | **35/400 (8.8%)** | ~1.5 min |
-| `atomic` (41 prims) | 36/400 (9.0%) | **14/400 (3.5%)** | ~5 min |
+| Round | Training (400 tasks) | Library entries | Eval (400 tasks) |
+|-------|---------------------|-----------------|-----------------|
+| 1 | 18/400 (4.5%) | 107 | 8/400 (2.0%) |
+| 2 | 23/400 (5.8%) | 170 | 8/400 (2.0%) |
+| 3 | 24/400 (6.0%) | 204 | 8/400 (2.0%) |
 
-Quick mode (50 training tasks, 500K compute cap, ~4s):
+Training compounds (+6 from library across rounds). Eval solves include depth-3-4 compositions using learned abstractions transferred via culture file.
 
-| Vocabulary | Training solves |
-|-----------|----------------|
-| `full` | 22/50 (44%) |
-| `minimal` | 16/50 (32%) |
-| `atomic` | 4/50 (8%, 3 rounds) |
-
-Atomic vocabulary (21 transforms + 12 perception + 8 parameterized = 41 truly atomic primitives) solves fewer tasks per round but forces compositions to be discovered through compounding. No compound operations — everything must be composed from single-concept building blocks.
+Quick mode (50 training tasks, ~4s): 4/50 (8%) with 3 rounds.
 
 **Other domains:**
 
@@ -214,10 +193,13 @@ Atomic vocabulary (21 transforms + 12 perception + 8 parameterized = 41 truly at
 | Zork | 20 | 10 | 50% | 5 library entries, reuse 2-6x (5 rounds) |
 | List Ops | 28 | 20 | 71.4% | 8 library entries, reuse 2-6x (3 rounds) |
 
-**Atomic vocabulary** (41 primitives): transforms + perception + parameterized. Uses parameterized color operations with perception-derived parameters — no task-specific color prims. All compositions are transferable.
-**Depth-3 exhaustive enumeration** with smart pool selection and no-op pruning finds 1-4 step programs efficiently.
+**Three primitive kinds:** transforms (Grid→Grid), perception (Grid→Value), and parameterized ((Value,...) → Grid→Grid factory). Parameterized prims like `swap_colors(background_color, dominant_color)` are fully transferable — same program works on any task regardless of specific colors.
+
+**Depth-3 exhaustive enumeration** with no-op pruning and binary near-miss refinement.
+
 **Near-miss sleep** promotes near-miss programs to the library for compounding across rounds. Only transferable (base-vocabulary) compositions are promoted.
-**Interleaved pipeline** runs train → eval per round, so each eval shows the value of compounding so far.
+
+**Interleaved pipeline** runs train → eval per round, so each eval shows the value of compounding so far. The compounding curve (train/eval per round) is printed at the end and saved in the pipeline JSON.
 
 ## Options
 
@@ -225,19 +207,20 @@ Atomic vocabulary (21 transforms + 12 perception + 8 parameterized = 41 truly at
 |------|---------|-------------|
 | `--domain` | (required) | Domain: `arc-agi-1`, `arc-agi-2`, `zork`, or `list-ops` |
 | `--mode` | `default` | Preset: `quick` or `default` |
-| `--run-mode` | `single` | `single` (train or eval) or `pipeline` (train → eval) |
+| `--run-mode` | `single` | `single` (train or eval) or `pipeline` (train → eval per round) |
 | `--split` | `training` | Data split for single mode: `training` or `evaluation` |
+| `--rounds` | `1` | Wake-sleep rounds (use 3+ for compounding) |
+| `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
 | `--culture` | none | Culture file to load (cross-run knowledge transfer) |
 | `--save-culture` | auto | Override auto culture save path |
-| `--max-tasks` | from preset | Limit tasks (0 = all). Quick: `50`, default/contest: all |
-| `--rounds` | `1` | Wake-sleep rounds |
-| `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
+| `--max-tasks` | from preset | Limit tasks (0 = all). Quick: `50`, default: all |
 | `--workers` | `0` (perf cores) | Parallel workers. `0` = auto-detect performance cores |
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
 | `--compute-cap` | from preset | Per-task eval budget (cell-normalized). `0` = unlimited |
 | `--exhaustive-depth` | `3` | Exhaustive enumeration depth (`0`=off, `2`=pairs, `3`=triples) |
 | `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
 | `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |
+| `--task-ids` | none | Comma-separated task IDs to run (prefix match) |
 | `--data-dir` | auto-detect | Path to data directory |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
 | `--no-log` | off | Disable log file (console only) |
@@ -247,19 +230,16 @@ Atomic vocabulary (21 transforms + 12 perception + 8 parameterized = 41 truly at
 ### The wake-sleep loop
 
 1. **WAKE**: For each task, search for a program that transforms input to output.
-   All search phases respect the per-task compute budget — large grids get fewer evaluations.
-   - **Exhaustive enumeration** (depth 1-3): systematically tries all single primitives, top-K pairs, and top-K triples.
-   - **Object decomposition**: detects per-object transform patterns via connected components, with conditional recoloring by size, shape, or position.
-   - **Conditional branching**: partitions inputs by predicates (symmetric, tall, square, etc.) and finds per-group transforms.
-   - **Near-miss refinement**: takes programs with error < 20% and tries appending/prepending each primitive.
-   - **Correction**: infers color remappings and small neighborhood patches (3x3) from near-miss programs.
-   - **Beam search**: seeded with top enumeration results, mutates and crosses programs with semantic deduplication.
-2. **SLEEP**: Analyze all solved programs AND near-miss programs (error < 15%).
-   Extract recurring sub-programs, quality-weighted by prediction accuracy.
-   Add them to the library as new reusable abstractions. Train composition
-   priors (transition matrix) on both solved and near-miss programs.
-3. **REPEAT**: The grown library biases future search toward proven compositions.
-   This is the compounding mechanism.
+   - **Exhaustive enumeration** (depth 1-3): tries all single primitives, top-K pairs, and top-K triples. Parameterized prims are tried with all perception children.
+   - **Near-miss refinement**: takes programs with error < 20% and tries appending, prepending, or wrapping with binary ops (overlay, mask_by).
+   - No-op pruning: primitives that don't change the grid are skipped at depth 2+.
+2. **SLEEP**: Analyze all solved and near-miss programs (error < 15%).
+   Promote near-miss programs (depth 2+) directly as library entries for the next round.
+   Extract recurring sub-programs, quality-weighted by accuracy.
+   Train composition priors (transition matrix) on both solved and near-miss programs.
+3. **REPEAT**: The grown library expands the effective vocabulary.
+   Depth-1 search over a promoted depth-2 near-miss reaches depth-3 effectively.
+   This is the compounding mechanism — each round builds on the last.
 
 ### The 4 interfaces
 
@@ -272,7 +252,7 @@ Every domain implements exactly 4 things:
 | **DriveSignal** | Score: error + complexity | MSE + node count | Pixel distance + size | Game score + novelty |
 | **Memory** | Store episodes, library, solutions | InMemoryStore | InMemoryStore | InMemoryStore |
 
-The core loop (`core/learner.py`) depends **only** on these interfaces. It never imports anything domain-specific. The same search framework works for grid puzzles, symbolic math, text adventures, and (eventually) robotics — but performance on each domain depends on the quality of its primitives and domain engineering.
+The core loop (`core/learner.py`) depends **only** on these interfaces. It never imports anything domain-specific.
 
 ### Terminology
 
@@ -284,28 +264,28 @@ The core loop (`core/learner.py`) depends **only** on these interfaces. It never
 ### The key metric: the compounding curve
 
 ```
-Round  Solved     Rate  Library  New  Avg Energy   Wake(s)  Sleep(s)
----------------------------------------------------------------------
-    1    2/4     50.0%        3    3      0.0012       4.2       0.1
-    2    3/4     75.0%        5    2      0.0008       3.8       0.1
-    3    3/4     75.0%        6    1      0.0005       3.1       0.0
+COMPOUNDING CURVE (train / eval per round):
+Round         Train  Overfit  Library          Eval  Overfit
+─────  ────────────  ───────  ───────  ────────────  ───────
+    1    18/400 (4.5%)        1      107     8/400 (2.0%)        1
+    2    23/400 (5.8%)        1      170     8/400 (2.0%)        1
+    3    24/400 (6.0%)        1      204     8/400 (2.0%)        1
 ```
 
 If solve rate increases across rounds without new hand-coded primitives, the framework is working.
 
-### Current status: what works and what doesn't
+### Current status
 
-**Compounding demonstrated on ARC with atomic vocabulary.** Near-miss programs are promoted to the library and reused in subsequent rounds. Eval solves include depth-3-4 compositions using learned abstractions: `crop_to_content(dilate(learned_38=dilate(pad_border)))`, `complete_symmetry_v(learned_70=overlay(complete_symmetry_h(rotate_90_ccw), complete_symmetry_v))`. Culture transfers from training to eval via culture file.
+**Compounding demonstrated on ARC with atomic vocabulary.** Training compounds: 18→24 (+6) across 3 rounds. Near-miss programs promoted to library and reused. Eval solves include depth-3-4 compositions using learned abstractions transferred via culture file.
 
-**Three primitive kinds:** transforms (Grid→Grid), perception (Grid→Value), and parameterized ((Value,...) → Grid→Grid factory). Parameterized prims like `swap_colors(background_color, dominant_color)` are fully transferable — same program works on any task regardless of specific colors.
+**Three primitive kinds:** transforms (Grid→Grid), perception (Grid→Value), and parameterized ((Value,...) → Grid→Grid factory). All compositions are fully transferable across tasks.
 
-**Compounding also demonstrated on list_ops and Zork.** List_ops: 8 library entries with reuse 2-6x across 3 rounds. Zork: 5 library entries reused 2-6x.
+**Verified:** compound operations like `extract_largest_object` CAN be expressed as depth-4 composition of atomics: `crop_to_content(mask_by(input, keep_color(largest_object_color)(label_components(input))))`. The challenge is discovering these through search + compounding.
 
 ### Current limitations
 
-- **Atomic vocabulary gap.** Atomic solves 4/50 training vs full at 22/50. The 18-task gap requires compound operations (object extraction, line extension, symmetry completion) that should be discoverable through composition but currently need deeper search than depth-3.
-- **Composition depth bottleneck.** Depth-4+ compositions like `crop_to_content(mask_by(input, keep_color(largest_object_color)(label_components(input))))` are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds can build up to depth-4+ but saturates quickly on small task sets.
-- **Beam search ROI is poor.** Exhaustive enumeration catches nearly all solves. Beam search adds ~1/400 tasks.
+- **Composition depth bottleneck.** Depth-4+ compositions are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds can build up to depth-4+ but saturates quickly on small task sets.
+- **Library transfer.** 204 library entries learned from training but most are task-specific depth-2 compositions. Structural patterns transfer but don't yet unlock many eval tasks.
 
 ## Structure
 
@@ -318,7 +298,7 @@ agi-core/
 │   ├── config.py            # SearchConfig, SleepConfig, CurriculumConfig
 │   ├── results.py           # ParetoEntry, WakeResult, SleepResult, RoundResult
 │   ├── transition_matrix.py # DreamCoder-style generative prior P(child|parent)
-│   ├── learner.py           # Wake-sleep loop + beam search (the algorithm)
+│   ├── learner.py           # Wake-sleep loop (the algorithm)
 │   ├── memory.py            # Default in-memory store
 │   └── metrics.py           # Compounding curve measurement
 │
@@ -328,19 +308,19 @@ agi-core/
 │   └── __main__.py          # Unified CLI: python -m common --domain arc-agi-1 --mode quick
 │
 ├── experiments/             # Diagnostic tools and visualization
-│   └── visualize_results.py # HTML visualization generator
+│   └── visualize_results.py # HTML visualization generator (expands learned abstractions)
 │
 ├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
-│   ├── arc/                 # ARC-AGI grid transformations (60 minimal / 180 full / 41 atomic)
-│   │   ├── primitives.py    # Full/minimal vocabulary transforms + registry
-│   │   ├── transformation_primitives.py # Atomic transforms + parameterized factories
-│   │   ├── perception_primitives.py     # Atomic perception (Grid→Value)
+│   ├── arc/                 # ARC-AGI grid transformations (41 atomic primitives)
+│   │   ├── transformation_primitives.py # Atomic transforms + parameterized factories (self-contained)
+│   │   ├── perception_primitives.py     # Atomic perception Grid→Value (self-contained)
+│   │   ├── primitives.py    # Legacy full/minimal vocabulary (used by other domains)
 │   │   ├── objects.py       # Connected component detection
-│   │   ├── environment.py   # ARCEnv
-│   │   ├── grammar.py       # ARCGrammar
+│   │   ├── environment.py   # ARCEnv (handles transform, perception, parameterized execution)
+│   │   ├── grammar.py       # ARCGrammar (atomic vocabulary, structural phase gating)
 │   │   ├── drive.py         # ARCDrive
 │   │   ├── dataset.py       # Task loading, sample tasks, data auto-detection
-│   │   └── adapter.py       # ARCAdapter (DomainAdapter for ARC-AGI-1/2)
+│   │   └── adapter.py       # ARCAdapter (hardcoded to atomic vocabulary)
 │   ├── symbolic_math/       # 1D symbolic regression (15 math primitives)
 │   │   └── __init__.py      # All 4 interfaces in one file
 │   ├── list_ops/            # List operations (22 primitives, compounding demo)
@@ -369,7 +349,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**Current coverage (654 tests):** 79% overall. Core modules: learner 80%, all other core modules 95-100%. Benchmark runner: `common/benchmark.py` 58% (covered by integration smoke tests). Domain modules: ARC primitives 75%, ARC grammar 78%, ARC objects 54%, ARC environment 78%, Zork 95%, list_ops 94%.
+**Current coverage (654 tests):** 79% overall. Core modules: learner 80%, all other core modules 95-100%. Domain modules: ARC environment 78%, ARC grammar 78%, Zork 95%, list_ops 94%.
 
 ## Documentation
 
@@ -386,15 +366,12 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 2** ✅ ARC-AGI-1 eval with culture transfer
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated
 - **Phase 4** ✅ Compounding infrastructure: Zork 10/20, list_ops 20/28 with library reuse 2-6x
-- **Phase 5** ✅ Cleanup: removed overfit correction cascade, pruned dead primitives (235→180)
-- **Phase 6** ✅ Minimal vocabulary (60 fundamental primitives: action + perception)
-- **Phase 7** ✅ Composition rules: FOR_EACH, CROSS_REFERENCE (+10 zero-overfit solves)
-- **Phase 8** ✅ ARC-AGI-1 eval 36/400 (9.0%), minimal vocab 26/400 (6.5%)
+- **Phase 5-8** ✅ Cleanup, minimal vocabulary, composition rules, eval 36/400
 - **Phase 9** ✅ Atomic vocabulary, near-miss sleep, first library entries on ARC
-- **Phase 10** ✅ Perception + parameterized primitive architecture, truly atomic (41 prims), interleaved pipeline, eval 14/400 with culture transfer
+- **Phase 10** ✅ Perception + parameterized architecture, truly atomic (41 prims), interleaved pipeline
 - **Phase 11** 🔧 Deeper composition discovery, expressiveness gap (atomic → compound ops)
-- **Phase 11** Cross-domain library transfer
-- **Phase 12** Continuous mixed-domain learning
+- **Phase 12** Cross-domain library transfer
+- **Phase 13** Continuous mixed-domain learning
 
 ## License
 
