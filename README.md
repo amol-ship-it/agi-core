@@ -164,7 +164,7 @@ Two modes. Pick one. That's the only knob most users need.
 | `quick` | 50 | 2 | 500K | Fast dev loop (~5s) |
 | `default` | all (400) | 2 | 3M | Full benchmark (~2 min) |
 
-All runs use **atomic vocabulary** — 48 truly atomic primitives (27 transforms + 18 perception + 8 parameterized). Each primitive is one intuitive visual concept. Compositional operations like crop_to_content = trim_cols(trim_rows(x)) must be discovered through composition. Structural search strategies (per-object, cross-reference, conditional) compose these same primitives in structurally different ways.
+All runs use **atomic vocabulary** — 48 truly atomic primitives (22 transforms + 18 perception + 8 parameterized). Each primitive is one intuitive visual concept. 12 predicates enable conditional branching. Compositional operations like crop_to_content = trim_cols(trim_rows(x)) must be discovered through composition. Structural search strategies (per-object, cross-reference, conditional, scale/tile detection) compose these same primitives in structurally different ways.
 
 Both presets default to **2 rounds** (the measured sweet spot — see below). Results are fully deterministic with **seed 42** (`PYTHONHASHSEED=0` is enforced automatically).
 
@@ -173,7 +173,7 @@ Both presets default to **2 rounds** (the measured sweet spot — see below). Re
 | Mode | 1 round | 2 rounds | 3 rounds |
 |------|---------|----------|----------|
 | quick (50 tasks) | 3/50 (6%) 3s | **4/50 (8%) 5s** | 6/50 (12%) 10s |
-| default (400 tasks) | 22/400 (5.5%) 30s | **30/400 (7.5%) 80s** | 31/400 (7.8%) 150s |
+| default (400 tasks) | 24/400 (6.0%) 40s | **33/400 (8.2%) 100s** | 33/400 (8.2%) 170s |
 
 Round 2 gives +36% solves. Round 3 adds +3% for 2× more time.
 
@@ -189,11 +189,11 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 | Round | Training (400 tasks) | Library entries | Eval (400 tasks) |
 |-------|---------------------|-----------------|-----------------|
-| 1 | 22/400 (5.5%) | 200 | 10/400 (2.5%) |
-| 2 | 30/400 (7.5%) | 200 | 9/400 (2.2%) |
-| 3 | 31/400 (7.8%) | 200 | 9/400 (2.2%) |
+| 1 | 24/400 (6.0%) | 200 | 10/400 (2.5%) |
+| 2 | 33/400 (8.2%) | 200 | 9/400 (2.2%) |
+| 3 | 33/400 (8.2%) | 200 | 9/400 (2.2%) |
 
-Training compounds (+9 from library across rounds). Eval solves include library-transferred compositions (75% of eval solves use library entries). Per-object recolor contributes 9 training solves (28%).
+Training compounds (+9 from library across rounds). Eval solves include library-transferred compositions. Per-object recolor (10 strategies including position-based) contributes ~30% of training solves.
 
 Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
 
@@ -281,30 +281,31 @@ The core loop (`core/learner.py`) depends **only** on these interfaces. It never
 COMPOUNDING CURVE (train / eval per round):
 Round         Train  Overfit  Library          Eval  Overfit
 ─────  ────────────  ───────  ───────  ────────────  ───────
-    1   22/400 (5.5%)        1      200    10/400 (2.5%)        2
-    2   30/400 (7.5%)        2      200     9/400 (2.2%)        2
-    3   31/400 (7.8%)        4      200     9/400 (2.2%)        2
+    1   24/400 (6.0%)        1      200    10/400 (2.5%)        2
+    2   33/400 (8.2%)        2      200     9/400 (2.2%)        2
+    3   33/400 (8.2%)        4      200     9/400 (2.2%)        2
 ```
 
 If solve rate increases across rounds without new hand-coded primitives, the framework is working.
 
 ### Current status
 
-**Compounding demonstrated on ARC with atomic vocabulary + structural search.** Training compounds: 22→31 (+9) across 3 rounds. Per-object recolor contributes 9 solves (28% of training). Library entries are 38% of training solves and 75% of eval solves. Color fix on near-misses adds 2-3 more. Eval R1 reaches 10/400 (2.5%).
+**Compounding demonstrated on ARC with atomic vocabulary + structural search.** Training compounds: 24→33 (+9) across 3 rounds. Per-object recolor (10 strategies) contributes ~30% of training solves. Library entries transfer to eval. Color fix + cell-wise patches on near-misses adds 2-3 more. Eval R1 reaches 10/400 (2.5%).
 
-**Four search strategies** compose the same atomic primitives differently:
+**Five search strategies** compose the same atomic primitives differently:
 1. **Exhaustive enumeration** — depth 1-3 sequential pipelines + mixed parameterized/transform compositions
-2. **Object decomposition** — per-object transforms, conditional recolor by properties (size, shape, hole)
-3. **Cross-reference** — boolean ops on grid halves, separator-based cell extraction
+2. **Object decomposition** — per-object transforms, conditional recolor by properties (size, shape, hole, position)
+3. **Cross-reference** — boolean ops on grid halves, separator-based cell extraction, scale/tile detection
 4. **Color fix** — learn color remapping from near-miss program outputs
+5. **Cell-wise patch** — learn fixed pixel corrections for near-miss outputs (<15% difference)
 
-**Three primitive kinds:** transforms (Grid→Grid), perception (Grid→Value), and parameterized ((Value,...) → Grid→Grid factory). All compositions are fully transferable across tasks.
+**Three primitive kinds:** transforms (Grid→Grid), perception (Grid→Value), and parameterized ((Value,...) → Grid→Grid factory). All compositions are fully transferable across tasks. **12 predicates** enable conditional branching (if/else programs).
 
 ### Current limitations
 
 - **Composition depth bottleneck.** Depth-4+ compositions are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds builds up to depth-4+ but saturates quickly.
-- **Library diversity.** 200 library entries learned from training. 75% of eval solves use library entries, but most entries are task-specific. Cross-task transfer remains the key challenge.
-- **Eval-train gap.** Training 7.8% vs eval 2.2% — structural strategies (per-object recolor) don't transfer to eval because the learned rules are task-specific.
+- **Library diversity.** 200 library entries learned from training. Most entries are task-specific. Cross-task transfer remains the key challenge.
+- **Eval-train gap.** Training 8.2% vs eval 2.2% — structural strategies (per-object recolor) don't transfer to eval because the learned rules are task-specific.
 
 ## Structure
 
@@ -330,7 +331,7 @@ agi-core/
 │   └── visualize_results.py # HTML visualization generator (expands learned abstractions)
 │
 ├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
-│   ├── arc/                 # ARC-AGI grid transformations (48 atomic primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (48 atomic primitives, 12 predicates)
 │   │   ├── transformation_primitives.py # Atomic transforms + parameterized factories (self-contained)
 │   │   ├── perception_primitives.py     # Atomic perception Grid→Value (self-contained)
 │   │   ├── primitives.py    # Registry (_PRIM_MAP) + utilities (to_np, from_np)
@@ -368,7 +369,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**419 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization, batch mode.
+**434 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization, batch mode.
 
 ## Documentation
 

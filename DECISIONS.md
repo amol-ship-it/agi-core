@@ -2761,5 +2761,76 @@ vs old atomic baseline: 18→23→24 training, 8 eval.
 
 **Decision:** Keep 3 rounds as default. Library cap 200 is better than 100 (more room for diverse compositions without quality dilution).
 
+## Session 15 — Search Strategy Improvements (2026-03-15)
+
+### Decision 111: Expand Predicates for Conditional Search (7→12)
+
+**Context:** Only 7 predicates limited conditional search branches. Added 5 new predicates:
+- `has_symmetry_v` — vertical symmetry
+- `is_small_grid` — h*w < 100
+- `has_few_colors` — n_foreground_colors <= 2
+- `has_many_colors` — n_foreground_colors > 4
+- `all_objects_same_size` — all components have equal pixel count
+
+**Cost:** ~700 extra evals/task in conditional search.
+**Result:** Expands conditional branching vocabulary. Part of session 15 combined changes.
+
+### Decision 112: Increase Binary Near-Miss Candidates 3→5
+
+**Context:** Binary near-miss refinement tried top-3 near-misses. Increased to 5 to catch more overlay/mask composition opportunities.
+**Cost:** +120 evals/task. **Result:** Included in session 15 combined results.
+
+### Decision 113: Increase Conditional Depth-2 Branch Candidates 8→15
+
+**Context:** DEPTH2_BRANCH_K limited conditional search to 8 depth-2 programs as branch candidates. Increased to 15.
+**Cost:** ~200 extra evals/task. **Result:** Included in session 15 combined results.
+
+### Decision 114: Position-Based Object Recolor (3 New Strategies)
+
+**Context:** Conditional recolor only considered property-based features (size, shape, holes). Added 3 position-based strategies:
+- `by_quadrant` — classify object center into 4 quadrants
+- `by_row_band` — classify vertical position into 5 bands
+- `by_col_band` — classify horizontal position into 5 bands
+
+Each follows existing learn + LOOCV validation pattern.
+**Cost:** Minimal (runs only during object decomposition phase).
+
+### Decision 115: Scale/Tile Detection in Cross-Reference
+
+**Context:** Cross-reference search only had boolean halves and separator strategies. Added scale/tile detection:
+- If output dims are integer multiple of input: try scale(n) and tile(n)
+- If input dims are integer multiple of output: try downscale(n)
+- Verify pixel-perfect on all training examples
+
+Uses existing `_scale_factory`, `_tile_factory`, `_downscale_factory`.
+**Cost:** ~12 evals/task.
+
+### Decision 116: Cell-Wise Patch Correction
+
+**Context:** `infer_output_correction` only tried color remapping. Added cell-wise patch for near-misses where <15% of pixels differ:
+- Learn fixed (r,c)→value patches consistent across all training pairs
+- Falls through from color remap when mapping is trivial or inconsistent
+
+**Cost:** ~20 extra evals/task (runs only on near-miss candidates).
+
+### Session 15 Combined Results
+
+**Full 400-task 3-round benchmark:**
+
+| Round | Train | Overfit | Eval | Overfit |
+|-------|-------|---------|------|---------|
+| 1 | 24/400 (6.0%) | 1 | 10/400 (2.5%) | 2 |
+| 2 | 33/400 (8.2%) | 2 | 9/400 (2.2%) | 2 |
+| 3 | 33/400 (8.2%) | 4 | 9/400 (2.2%) | 2 |
+
+vs session 14 baseline: 31 train (7.8%), 9-10 eval (2.2-2.5%).
+
+**Key findings:**
+1. Train improved 31→33 (+2 tasks, +6.5% relative)
+2. Eval stable at 10 (R1), 9 (R2/R3) — no regression
+3. Compounding strong: 24→33 in training
+4. Overfit stable (4 train R3, 2 eval — same as baseline)
+5. 15 new tests added (64→79), all passing (434 total suite)
+
 ---
 *This document will be updated with each new session and major decision.*

@@ -231,6 +231,10 @@ class ARCEnv(Environment):
         result = self._try_separator_cross_ref(task)
         if result is not None:
             return result
+        # Strategy 3: Scale/tile detection by dimension ratio
+        result = self._try_scale_tile_detection(task)
+        if result is not None:
+            return result
         return None
 
     def _try_boolean_halves(
@@ -391,6 +395,57 @@ class ARCEnv(Environment):
 
         return None
 
+    def _try_scale_tile_detection(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Try scale/tile/downscale based on integer dimension ratios."""
+        from .objects import _test_on_examples
+        from .transformation_primitives import (
+            _scale_factory, _tile_factory, _downscale_factory,
+        )
+        examples = task.train_examples
+        if not examples:
+            return None
+        first_inp, first_out = examples[0]
+        ih, iw = len(first_inp), len(first_inp[0]) if first_inp else 0
+        oh, ow = len(first_out), len(first_out[0]) if first_out else 0
+        if ih == 0 or iw == 0 or oh == 0 or ow == 0:
+            return None
+
+        # Integer upscale: oh/ih == ow/iw == n >= 2
+        if oh >= ih * 2 and ow >= iw * 2 and oh % ih == 0 and ow % iw == 0:
+            h_ratio, w_ratio = oh // ih, ow // iw
+            if h_ratio == w_ratio and h_ratio >= 2:
+                n = h_ratio
+                # Try scale(n)
+                scale_fn = _scale_factory(n)
+                if _test_on_examples(scale_fn, examples):
+                    name = f"cross_ref(scale_{n}x)"
+                    prim = Primitive(name=name, arity=0, fn=scale_fn, domain="arc")
+                    self.register_primitive(prim)
+                    return (name, scale_fn)
+                # Try tile(n)
+                tile_fn = _tile_factory(n)
+                if _test_on_examples(tile_fn, examples):
+                    name = f"cross_ref(tile_{n}x)"
+                    prim = Primitive(name=name, arity=0, fn=tile_fn, domain="arc")
+                    self.register_primitive(prim)
+                    return (name, tile_fn)
+
+        # Integer downscale: ih/oh == iw/ow == n >= 2
+        if ih >= oh * 2 and iw >= ow * 2 and ih % oh == 0 and iw % ow == 0:
+            h_ratio, w_ratio = ih // oh, iw // ow
+            if h_ratio == w_ratio and h_ratio >= 2:
+                n = h_ratio
+                ds_fn = _downscale_factory(n)
+                if _test_on_examples(ds_fn, examples):
+                    name = f"cross_ref(downscale_{n}x)"
+                    prim = Primitive(name=name, arity=0, fn=ds_fn, domain="arc")
+                    self.register_primitive(prim)
+                    return (name, ds_fn)
+
+        return None
+
     def infer_output_correction(
         self,
         program_outputs: list[Any],
@@ -422,13 +477,17 @@ class ARCEnv(Environment):
                     p_val, e_val = pred[r][c], exp[r][c]
                     if p_val in color_map:
                         if color_map[p_val] != e_val:
-                            return None  # inconsistent mapping
+                            # Inconsistent color mapping — try cell-wise patch
+                            return self._try_cell_patch_correction(
+                                program_outputs, expected_outputs)
                     else:
                         color_map[p_val] = e_val
 
         # Check if mapping is non-trivial (at least one color changes)
         if all(k == v for k, v in color_map.items()):
-            return None
+            # Color remap is trivial — fall through to cell-wise patch
+            return self._try_cell_patch_correction(
+                program_outputs, expected_outputs)
 
         # Create a color remap function
         def _make_remap(cmap=color_map):
@@ -439,6 +498,77 @@ class ARCEnv(Environment):
         remap_fn = _make_remap()
         name = f"color_remap({dict(sorted(color_map.items()))})"
         prim = Primitive(name=name, arity=1, fn=remap_fn, domain="arc")
+        self.register_primitive(prim)
+        return Program(root=name)
+
+    def _try_cell_patch_correction(
+        self,
+        program_outputs: list[Any],
+        expected_outputs: list[Any],
+    ) -> Optional[Program]:
+        """Learn a cell-wise correction patch for near-miss outputs.
+
+        For same-dims grids where <15% of pixels differ, learn a fixed
+        set of (r, c) → value patches that are consistent across all
+        training examples.
+        """
+        if len(program_outputs) != len(expected_outputs):
+            return None
+
+        # Validate all pairs are same-dims grids
+        for pred, exp in zip(program_outputs, expected_outputs):
+            if not isinstance(pred, list) or not isinstance(exp, list):
+                return None
+            if len(pred) != len(exp):
+                return None
+            for r in range(len(pred)):
+                if not pred[r] or not exp[r] or len(pred[r]) != len(exp[r]):
+                    return None
+
+        h = len(program_outputs[0])
+        w = len(program_outputs[0][0]) if h > 0 else 0
+        total_pixels = h * w
+        if total_pixels == 0:
+            return None
+
+        # Build per-cell patch: for each differing position, check if
+        # pred[r][c]→exp[r][c] is the SAME fix across all examples
+        # (i.e., the predicted value is always X and expected is always Y at that cell)
+        patch: dict[tuple[int, int], tuple[int, int]] = {}  # (r,c) → (from_val, to_val)
+
+        for pred, exp in zip(program_outputs, expected_outputs):
+            for r in range(len(pred)):
+                for c in range(len(pred[r])):
+                    if pred[r][c] != exp[r][c]:
+                        key = (r, c)
+                        fix = (pred[r][c], exp[r][c])
+                        if key in patch:
+                            if patch[key] != fix:
+                                return None  # inconsistent fix at this cell
+                        else:
+                            patch[key] = fix
+
+        if not patch:
+            return None
+        # Reject if too many cells differ (>15% — not a near-miss)
+        if len(patch) > total_pixels * 0.15:
+            return None
+
+        # Build the patch function: applies to any grid of same dims
+        patch_map = {pos: to_val for pos, (_, to_val) in patch.items()}
+
+        def _make_patch_fn(pm=patch_map):
+            def patch_fn(grid):
+                result = [row[:] for row in grid]
+                for (r, c), val in pm.items():
+                    if r < len(result) and c < len(result[0]):
+                        result[r][c] = val
+                return result
+            return patch_fn
+
+        patch_fn = _make_patch_fn()
+        name = f"cell_patch({len(patch_map)}_cells)"
+        prim = Primitive(name=name, arity=1, fn=patch_fn, domain="arc")
         self.register_primitive(prim)
         return Program(root=name)
 

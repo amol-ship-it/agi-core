@@ -1515,7 +1515,7 @@ class Learner:
             top_depth1 = sorted(
                 [sp for sp in candidates if sp.program.depth == 1],
                 key=lambda s: s.prediction_error)[:BINARY_TOP_K]
-            for nm in near_misses[:3]:  # top-3 near-misses
+            for nm in near_misses[:5]:  # top-5 near-misses
                 for bp in binary_prims:
                     for other in top_depth1:
                         # Try binary(near_miss, other)
@@ -1584,7 +1584,7 @@ class Learner:
                    if sp.program.depth == 2 and sp.program.children]
         depth2.sort(key=lambda s: s.prediction_error)
         depth2_added = 0
-        DEPTH2_BRANCH_K = 8
+        DEPTH2_BRANCH_K = 15
         for sp in depth2:
             prog_repr = repr(sp.program)
             if prog_repr in seen:

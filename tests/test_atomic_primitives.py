@@ -453,5 +453,206 @@ class TestEnvironmentExecution(unittest.TestCase):
         assert result == [[5]]
 
 
+# =============================================================================
+# 12. Predicate tests (Change A)
+# =============================================================================
+
+class TestPredicates:
+    def test_predicate_count(self):
+        g = ARCGrammar(seed=42)
+        preds = g.get_predicates()
+        assert len(preds) == 12
+
+    def test_has_symmetry_v(self):
+        g = ARCGrammar(seed=42)
+        preds = dict(g.get_predicates())
+        sym_grid = [[1, 2], [1, 2]]  # vertically symmetric
+        asym_grid = [[1, 2], [3, 4]]
+        assert preds["has_symmetry_v"](sym_grid) is True
+        assert preds["has_symmetry_v"](asym_grid) is False
+
+    def test_is_small_grid(self):
+        g = ARCGrammar(seed=42)
+        preds = dict(g.get_predicates())
+        small = [[1, 2], [3, 4]]  # 4 pixels < 100
+        big = [[0] * 20 for _ in range(10)]  # 200 pixels >= 100
+        assert preds["is_small_grid"](small) is True
+        assert preds["is_small_grid"](big) is False
+
+    def test_has_few_colors(self):
+        g = ARCGrammar(seed=42)
+        preds = dict(g.get_predicates())
+        few = [[0, 1, 1], [0, 2, 0]]  # 2 foreground colors
+        many = [[0, 1, 2], [3, 4, 5]]  # 5 foreground colors
+        assert preds["has_few_colors"](few) is True
+        assert preds["has_few_colors"](many) is False
+
+    def test_all_objects_same_size(self):
+        g = ARCGrammar(seed=42)
+        preds = dict(g.get_predicates())
+        # Two 2-pixel objects
+        same = [[1, 1, 0, 2, 2]]
+        assert preds["all_objects_same_size"](same) is True
+        # Objects of different sizes
+        diff = [[1, 0, 2, 2, 2]]
+        assert preds["all_objects_same_size"](diff) is False
+
+
+# =============================================================================
+# 13. Position-based recolor tests (Change D)
+# =============================================================================
+
+class TestPositionRecolor:
+    def _make_grid(self, objects):
+        """Helper: place colored pixels on a 10x10 grid."""
+        grid = [[0] * 10 for _ in range(10)]
+        for r, c, color in objects:
+            grid[r][c] = color
+        return grid
+
+    def test_recolor_by_quadrant(self):
+        from domains.arc.objects import _learn_recolor_by_quadrant, _make_conditional_recolor_fn
+        # 4 same-sized objects in 4 quadrants, recolored by position
+        inp = self._make_grid([(1, 1, 1), (1, 8, 1), (8, 1, 1), (8, 8, 1)])
+        out = self._make_grid([(1, 1, 2), (1, 8, 3), (8, 1, 4), (8, 8, 5)])
+        rule = _learn_recolor_by_quadrant([(inp, out)])
+        assert rule is not None
+        assert len(rule) == 4  # 4 quadrants
+        fn = _make_conditional_recolor_fn(rule, "by_quadrant")
+        assert fn(inp) == out
+
+    def test_recolor_by_row_band(self):
+        from domains.arc.objects import _try_conditional_recolor
+        # Objects at different vertical positions, recolored by row band
+        inp = self._make_grid([(1, 5, 1), (8, 5, 1)])
+        out = self._make_grid([(1, 5, 2), (8, 5, 3)])
+        result = _try_conditional_recolor([(inp, out)])
+        # May or may not match row_band specifically, but should find a strategy
+        assert result is not None
+
+    def test_recolor_by_col_band(self):
+        from domains.arc.objects import _try_conditional_recolor
+        # Objects at different horizontal positions
+        inp = self._make_grid([(5, 1, 1), (5, 8, 1)])
+        out = self._make_grid([(5, 1, 2), (5, 8, 3)])
+        result = _try_conditional_recolor([(inp, out)])
+        assert result is not None
+
+    def test_position_loocv(self):
+        from domains.arc.objects import _try_conditional_recolor
+        # With 2 training examples, LOOCV should verify generalization
+        inp1 = self._make_grid([(1, 1, 1), (1, 8, 1), (8, 1, 1), (8, 8, 1)])
+        out1 = self._make_grid([(1, 1, 2), (1, 8, 3), (8, 1, 4), (8, 8, 5)])
+        inp2 = self._make_grid([(2, 2, 1), (2, 7, 1), (7, 2, 1), (7, 7, 1)])
+        out2 = self._make_grid([(2, 2, 2), (2, 7, 3), (7, 2, 4), (7, 7, 5)])
+        result = _try_conditional_recolor([(inp1, out1), (inp2, out2)])
+        assert result is not None
+        _, fn = result
+        # Should generalize to both examples
+        assert fn(inp1) == out1
+        assert fn(inp2) == out2
+
+
+# =============================================================================
+# 14. Scale/tile detection tests (Change E)
+# =============================================================================
+
+class TestScaleDetection:
+    def test_scale_detection_2x(self):
+        env = ARCEnv()
+        from domains.arc.primitives import register_atomic_primitives
+        register_atomic_primitives()
+        # Input 2x2, output 4x4 (scale 2x)
+        inp = [[1, 2], [3, 4]]
+        out = [[1, 1, 2, 2], [1, 1, 2, 2], [3, 3, 4, 4], [3, 3, 4, 4]]
+        task = Task(task_id="test_scale", train_examples=[(inp, out)],
+                    test_inputs=[inp])
+        prims = []
+        result = env.try_cross_reference(task, prims)
+        assert result is not None
+        name, fn = result
+        assert "scale_2x" in name
+        assert fn(inp) == out
+
+    def test_tile_detection_3x(self):
+        env = ARCEnv()
+        from domains.arc.primitives import register_atomic_primitives
+        register_atomic_primitives()
+        inp = [[1, 2], [3, 4]]
+        # Tile 3x: 6x6 grid
+        from domains.arc.transformation_primitives import _tile_factory
+        out = _tile_factory(3)(inp)
+        task = Task(task_id="test_tile", train_examples=[(inp, out)],
+                    test_inputs=[inp])
+        result = env.try_cross_reference(task, [])
+        assert result is not None
+        name, fn = result
+        # Could be scale or tile — just verify it works
+        assert fn(inp) == out
+
+    def test_downscale_detection(self):
+        env = ARCEnv()
+        from domains.arc.primitives import register_atomic_primitives
+        register_atomic_primitives()
+        # Input 4x4 (each pixel is 2x2 block), output 2x2
+        inp = [[1, 1, 2, 2], [1, 1, 2, 2], [3, 3, 4, 4], [3, 3, 4, 4]]
+        out = [[1, 2], [3, 4]]
+        task = Task(task_id="test_ds", train_examples=[(inp, out)],
+                    test_inputs=[inp])
+        result = env.try_cross_reference(task, [])
+        assert result is not None
+        name, fn = result
+        assert "downscale_2x" in name
+        assert fn(inp) == out
+
+    def test_non_integer_ratio_returns_none(self):
+        env = ARCEnv()
+        from domains.arc.primitives import register_atomic_primitives
+        register_atomic_primitives()
+        # 3x3 → 5x5 (non-integer ratio)
+        inp = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+        out = [[0] * 5 for _ in range(5)]
+        task = Task(task_id="test_non_int", train_examples=[(inp, out)],
+                    test_inputs=[inp])
+        result = env.try_cross_reference(task, [])
+        # Should not match scale/tile (ratio is not integer)
+        # May match boolean halves or separator, but not scale
+        if result is not None:
+            assert "scale" not in result[0] and "tile" not in result[0]
+
+
+# =============================================================================
+# 15. Cell patch correction tests (Change F)
+# =============================================================================
+
+class TestCellPatchCorrection:
+    def test_cell_patch_correction(self):
+        env = ARCEnv()
+        # Predicted grids differ by 2 cells from expected
+        pred1 = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+        exp1 = [[1, 2, 3], [4, 0, 6], [7, 8, 9]]  # cell (1,1): 5→0
+        pred2 = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+        exp2 = [[1, 2, 3], [4, 0, 6], [7, 8, 9]]  # same fix
+        result = env.infer_output_correction(
+            [pred1, pred2], [exp1, exp2])
+        assert result is not None
+        # Verify the patch works
+        from domains.arc.primitives import _PRIM_MAP
+        prim = _PRIM_MAP.get(result.root)
+        assert prim is not None
+        assert prim.fn(pred1) == exp1
+
+    def test_cell_patch_inconsistent_returns_none(self):
+        env = ARCEnv()
+        # Same cell has different fixes in different examples
+        pred1 = [[1, 2], [3, 4]]
+        exp1 = [[1, 2], [3, 0]]  # cell (1,1): 4→0
+        pred2 = [[1, 2], [3, 4]]
+        exp2 = [[1, 2], [3, 9]]  # cell (1,1): 4→9 (inconsistent!)
+        result = env.infer_output_correction(
+            [pred1, pred2], [exp1, exp2])
+        assert result is None
+
+
 if __name__ == "__main__":
     unittest.main()

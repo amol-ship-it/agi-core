@@ -512,6 +512,9 @@ def _try_conditional_recolor(
         ("by_size_rank", _learn_recolor_by_size_rank),
         ("by_compactness", _learn_recolor_by_compactness),
         ("by_has_hole", _learn_recolor_by_has_hole),
+        ("by_quadrant", _learn_recolor_by_quadrant),
+        ("by_row_band", _learn_recolor_by_row_band),
+        ("by_col_band", _learn_recolor_by_col_band),
     ]
 
     n = len(task_examples)
@@ -683,6 +686,70 @@ def _learn_recolor_by_has_hole(examples: list[tuple]) -> Optional[dict]:
     return {True: hc, False: nhc} if hc != nhc else None
 
 
+def _object_center(shape: dict) -> tuple[float, float]:
+    """Return center (row, col) of an object's bounding box."""
+    r0, c0, r1, c1 = shape["bbox"]
+    return ((r0 + r1) / 2.0, (c0 + c1) / 2.0)
+
+
+def _learn_recolor_by_quadrant(examples: list[tuple]) -> Optional[dict]:
+    """Learn recolor by quadrant (4 regions based on object center position)."""
+    quadrant_to_color: dict[int, int] = {}
+    for inp, out in examples:
+        matches = _match_objects_by_position(inp, out)
+        if matches is None:
+            return None
+        h, w = len(inp), len(inp[0]) if inp else 0
+        mid_r, mid_c = h / 2.0, w / 2.0
+        for si, so in matches:
+            cr, cc = _object_center(si)
+            q = (0 if cr < mid_r else 2) + (0 if cc < mid_c else 1)
+            if q in quadrant_to_color and quadrant_to_color[q] != so["color"]:
+                return None
+            quadrant_to_color[q] = so["color"]
+    if len(set(quadrant_to_color.values())) < 2:
+        return None
+    return quadrant_to_color
+
+
+def _learn_recolor_by_row_band(examples: list[tuple]) -> Optional[dict]:
+    """Learn recolor by vertical position band (5 bands)."""
+    band_to_color: dict[int, int] = {}
+    for inp, out in examples:
+        matches = _match_objects_by_position(inp, out)
+        if matches is None:
+            return None
+        h = len(inp)
+        for si, so in matches:
+            cr, _ = _object_center(si)
+            band = min(int(cr / h * 5), 4)
+            if band in band_to_color and band_to_color[band] != so["color"]:
+                return None
+            band_to_color[band] = so["color"]
+    if len(set(band_to_color.values())) < 2:
+        return None
+    return band_to_color
+
+
+def _learn_recolor_by_col_band(examples: list[tuple]) -> Optional[dict]:
+    """Learn recolor by horizontal position band (5 bands)."""
+    band_to_color: dict[int, int] = {}
+    for inp, out in examples:
+        matches = _match_objects_by_position(inp, out)
+        if matches is None:
+            return None
+        w = len(inp[0]) if inp and inp[0] else 1
+        for si, so in matches:
+            _, cc = _object_center(si)
+            band = min(int(cc / w * 5), 4)
+            if band in band_to_color and band_to_color[band] != so["color"]:
+                return None
+            band_to_color[band] = so["color"]
+    if len(set(band_to_color.values())) < 2:
+        return None
+    return band_to_color
+
+
 def _make_conditional_recolor_fn(rule: dict, strategy: str) -> Callable:
     """Build a Grid→Grid function from a learned conditional recolor rule."""
     # Compute a default color for unseen keys (most common output color).
@@ -721,6 +788,20 @@ def _make_conditional_recolor_fn(rule: dict, strategy: str) -> Callable:
                 new_color = rule[_compactness(shape) >= 1.0 - 1e-9]
             elif strategy == "by_has_hole":
                 new_color = rule[_has_hole(shape)]
+            elif strategy == "by_quadrant":
+                cr, cc = _object_center(shape)
+                mid_r, mid_c = len(grid) / 2.0, (len(grid[0]) if grid else 1) / 2.0
+                q = (0 if cr < mid_r else 2) + (0 if cc < mid_c else 1)
+                new_color = rule.get(q, default_color)
+            elif strategy == "by_row_band":
+                cr, _ = _object_center(shape)
+                band = min(int(cr / len(grid) * 5), 4)
+                new_color = rule.get(band, default_color)
+            elif strategy == "by_col_band":
+                _, cc = _object_center(shape)
+                gw = len(grid[0]) if grid and grid[0] else 1
+                band = min(int(cc / gw * 5), 4)
+                new_color = rule.get(band, default_color)
             else:
                 new_color = shape["color"]
 

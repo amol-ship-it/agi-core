@@ -472,6 +472,26 @@ Results (measured, 400 tasks, 3 rounds):
 - Zero overfit on per-object and color_remap strategies
 - All 419 tests pass. 48 primitives total.]
 
+## Session 15 — Search Strategy Improvements (2026-03-15)
+
+### Prompt
+Implement the Session 15 plan: 6 changes to improve search strategies based on near-miss analysis (345 tasks with error < 0.15).
+
+### Changes Implemented
+1. **A: Expand predicates** (7→12): added has_symmetry_v, is_small_grid, has_few_colors, has_many_colors, all_objects_same_size
+2. **B: Binary near-miss 3→5**: increased near-miss candidates for binary refinement
+3. **C: DEPTH2_BRANCH_K 8→15**: more depth-2 programs as conditional branch candidates
+4. **D: Position-based recolor** (3 strategies): by_quadrant, by_row_band, by_col_band with LOOCV
+5. **E: Scale/tile detection**: integer ratio detection in cross-reference (scale, tile, downscale)
+6. **F: Cell-wise patches**: fixed pixel corrections for near-miss outputs (<15% diff)
+
+### Results
+- Train: 31→33/400 (+2 tasks, 7.8%→8.2%)
+- Eval: 10/400 R1, 9/400 R2/R3 (stable)
+- Compounding: 24→33 across rounds
+- Overfit: stable (4 train R3, 2 eval)
+- Tests: 419→434, all passing
+
 ---
 
 *This document will be updated with each new session.*

@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import random
 
+from collections import Counter
 from typing import Any
 
 from core import Grammar, Primitive, Program, Task
@@ -62,6 +63,12 @@ class ARCGrammar(Grammar):
             except Exception:
                 return []
 
+        def _n_foreground_colors(g):
+            if not g or not g[0]:
+                return 0
+            bg = Counter(c for row in g for c in row).most_common(1)[0][0]
+            return len({c for row in g for c in row if c != bg})
+
         preds = [
             ("has_single_object", lambda g: len(_safe_components(g)) == 1),
             ("has_many_objects", lambda g: len(_safe_components(g)) > 3),
@@ -73,6 +80,17 @@ class ARCGrammar(Grammar):
             ("is_mostly_bg", lambda g: sum(
                 1 for row in g for c in row if c == 0) > len(g) * len(g[0]) * 0.7
                 if g and g[0] else False),
+            # New predicates for richer conditional branching
+            ("has_symmetry_v", lambda g: all(
+                g[r][c] == g[len(g) - 1 - r][c]
+                for r in range(len(g)) for c in range(len(g[0])))
+                if g and g[0] else False),
+            ("is_small_grid", lambda g: len(g) * len(g[0]) < 100
+                if g and g[0] else True),
+            ("has_few_colors", lambda g: _n_foreground_colors(g) <= 2),
+            ("has_many_colors", lambda g: _n_foreground_colors(g) > 4),
+            ("all_objects_same_size", lambda g: len(set(
+                comp["size"] for comp in _safe_components(g))) <= 1),
         ]
         return preds
 
