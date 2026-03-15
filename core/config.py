@@ -117,12 +117,12 @@ class SearchConfig:
 @dataclass
 class SleepConfig:
     """Knobs for the sleep/consolidation phase."""
-    min_occurrences: int = 1      # sub-tree must appear in >= N programs
+    min_occurrences: int = 2      # sub-tree must appear in >= N programs
     min_size: int = 2             # sub-tree must have >= N nodes
-    max_library_size: int = 200   # cap on total library entries
+    max_library_size: int = 50    # cap on total library entries
     usefulness_decay: float = 0.90  # decay old entries each sleep cycle
     reuse_bonus: float = 2.0       # scoring bonus per reuse for eviction ranking
-    unsolved_weight: float = 0.5  # quality discount for unsolved vs solved programs
+    unsolved_weight: float = 0.10  # quality discount for unsolved vs solved programs
     example_solve_exponent: float = 2.0  # exponent for (k/n)^e per-example scoring
 
 

@@ -647,8 +647,8 @@ class TestConfigDefaults(unittest.TestCase):
 
     def test_sleep_config_defaults(self):
         cfg = SleepConfig()
-        self.assertEqual(cfg.min_occurrences, 1)
-        self.assertEqual(cfg.max_library_size, 200)
+        self.assertEqual(cfg.min_occurrences, 2)
+        self.assertEqual(cfg.max_library_size, 50)
         self.assertAlmostEqual(cfg.usefulness_decay, 0.90)
         self.assertAlmostEqual(cfg.reuse_bonus, 2.0)
 
@@ -1475,6 +1475,85 @@ class TestDeriveSearchParams(unittest.TestCase):
             self.assertGreaterEqual(resolved["exhaustive_triple_top_k"], 8)
             self.assertGreaterEqual(resolved["beam_width"], 1)
             self.assertGreaterEqual(resolved["max_generations"], 1)
+
+
+class TestMaxExampleError(unittest.TestCase):
+    """Test max_example_error tracking and solve criterion."""
+
+    def _make_learner(self):
+        env = StubEnv()
+        grammar = StubGrammar()
+        drive = StubDrive()
+        memory = InMemoryStore()
+        return Learner(env, grammar, drive, memory)
+
+    def test_max_error_prevents_partial_solve(self):
+        """2/3 perfect + 1 bad → NOT solved."""
+        sp = ScoredProgram(
+            program=Program(root="identity"),
+            energy=0.5,
+            prediction_error=0.05,  # avg is low
+            complexity_cost=1.0,
+            max_example_error=5.0,  # but max is high
+        )
+        from core.learner import _WakeContext
+        from core.config import SearchConfig
+        task = Task(task_id="t", train_examples=[(1, 1)], test_inputs=[])
+        cfg = SearchConfig()
+        ctx = _WakeContext(task, STUB_PRIMS, cfg, 100, False)
+        ctx.best_so_far = sp
+        self.assertFalse(ctx.solved)
+
+    def test_all_perfect_solves(self):
+        """All examples error=0.0 → solved."""
+        sp = ScoredProgram(
+            program=Program(root="identity"),
+            energy=0.01,
+            prediction_error=0.0,
+            complexity_cost=1.0,
+            max_example_error=0.0,
+        )
+        from core.learner import _WakeContext
+        from core.config import SearchConfig
+        task = Task(task_id="t", train_examples=[(1, 1)], test_inputs=[])
+        cfg = SearchConfig()
+        ctx = _WakeContext(task, STUB_PRIMS, cfg, 100, False)
+        ctx.best_so_far = sp
+        self.assertTrue(ctx.solved)
+
+    def test_avg_still_drives_ranking(self):
+        """Programs ranked by energy (avg-based), not max_error."""
+        sp1 = ScoredProgram(
+            program=Program(root="identity"),
+            energy=1.0,
+            prediction_error=0.5,
+            complexity_cost=0.5,
+            max_example_error=0.8,
+        )
+        sp2 = ScoredProgram(
+            program=Program(root="double"),
+            energy=2.0,
+            prediction_error=1.5,
+            complexity_cost=0.5,
+            max_example_error=0.3,
+        )
+        # sp1 has lower energy → ranked better, even though higher max_error
+        self.assertLess(sp1.energy, sp2.energy)
+
+    def test_evaluate_program_tracks_max_error(self):
+        """_evaluate_program sets max_example_error correctly."""
+        learner = self._make_learner()
+        # StubDrive returns abs(pred - expected), StubEnv applies identity
+        # Example: (5, 5) → error=0, (5, 3) → error=2
+        task = Task(task_id="t",
+                    train_examples=[(5, 5), (5, 3)],
+                    test_inputs=[])
+        prog = Program(root="identity")
+        sp = learner._evaluate_program(prog, task)
+        # avg_error = (0 + 2) / 2 = 1.0
+        self.assertAlmostEqual(sp.prediction_error, 1.0)
+        # max_error = 2.0
+        self.assertAlmostEqual(sp.max_example_error, 2.0)
 
 
 if __name__ == "__main__":

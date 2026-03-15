@@ -2987,5 +2987,61 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Files changed:** `core/config.py` (+derive_search_params, +derive_rounds), `common/benchmark.py` (simplified PRESETS, rewritten resolve_from_preset, updated CLI defaults), `common/__main__.py` (pass base_cell_size to resolve, simplified _make_config), `core/learner.py` (seed ROI in sleep), `tests/test_learner.py` (+11 tests), documentation throughout.
 
+### Decision 124: Deep Analysis of Solve Bottlenecks — Dim Penalty Fix, Max-Error Criterion, New Primitives
+
+**Date:** 2026-03-15
+**Hypothesis:** Three independent bottlenecks limit solve count: (1) wrong-dimension programs waste near-miss refinement budget, (2) programs that average well but fail one example still pass, (3) missing physics/sorting primitives block entire task families.
+
+**Part A: Dimension mismatch cap (`DIM_MISMATCH_CAP=0.35`)**
+- In `domains/arc/drive.py`, added a hard cap on similarity score when output dimensions differ from expected. Previously, a program producing the wrong grid size could still score high enough (e.g., 0.6 similarity) to enter near-miss refinement, wasting compute on fundamentally wrong programs.
+- Cap value 0.35 ensures dimension-mismatched programs never enter near-miss refinement (threshold typically ~0.80), while still allowing them to contribute to pool ranking for compositional search.
+- **Rationale:** Dimension mismatches are categorical failures — no amount of color-fix or cell-patch refinement can fix a grid that's the wrong shape.
+
+**Part B: Max-error solve criterion (`max_example_error`)**
+- Added `max_example_error` field to `ScoredProgram` in `core/types.py`.
+- Changed the solve criterion in `core/learner.py` from avg_error to max_error: a program must solve ALL examples perfectly (max_error == 0), not just average well across examples.
+- Ranking still uses avg_error for pool ordering, so programs that are close on most examples still get priority for refinement.
+- **Rationale:** A program that scores 0.0 error on 2 of 3 examples and 0.15 on the third previously had avg_error=0.05 and could be considered "solved." Now it must achieve 0.0 on every example. This prevents false solves from averaging out a single bad example.
+
+**Part C: New primitives (48→55)**
+- 3 new physics transforms: `gravity_up`, `gravity_left`, `gravity_right` (complements existing `gravity_down`). Non-zero cells fall in the specified direction, preserving column/row structure.
+- 2 new sorting transforms: `sort_rows_by_nonzero`, `sort_cols_by_nonzero`. Reorder rows/columns by their non-zero cell count — observed in several ARC tasks involving ordering by density.
+- 2 new parameterized factories: `repeat_rows(n)`, `repeat_cols(n)`. Repeat each row/column n times — enables scaling patterns along one axis, parameterized by perception values for transferability.
+- Total: 27 atomic transforms (including 2 binary) + 10 parameterized + 18 perception = 55 primitives. 12 predicates unchanged.
+
+**Tests:** 489 total (was 458), all passing. New tests cover all 7 new primitives, dim mismatch cap behavior, and max_example_error solve criterion.
+
+**Files changed:** `domains/arc/drive.py` (+DIM_MISMATCH_CAP), `core/types.py` (+max_example_error field), `core/learner.py` (max-error solve criterion), `domains/arc/transformation_primitives.py` (+7 primitives).
+
+---
+
+## Decision 115: 4-Pillar Data-Driven Fix (2026-03-15)
+
+**Context:** Deep analysis of 363 unsolved tasks revealed systemic issues compounding across 4 pillars. Current: 37/400 (9.25%).
+
+### Pillar 1: Library Quality (biggest impact)
+**Problem:** 90% of library entries (180/200) never reused. 88% sourced from unsolved (failed) programs. Library filled with noise, crowding out useful entries.
+**Changes:**
+- `unsolved_weight`: 0.5 → 0.10 (solved programs 10× more influential)
+- `max_library_size`: 200 → 50 (curate, don't hoard — 20 reused entries fit in 50)
+- `min_occurrences`: 1 → 2 (subtrees must appear in 2+ tasks = transferable patterns)
+- Quality gate for unsolved program promotion: skip if quality < 0.30 (only near-solves get promoted)
+
+### Pillar 2: Identity + Color Fix
+**Problem:** Pure color permutation tasks (e.g., `0d3d703e`) had no path to solution — identity has error=1.39 because pixel_acc=0, never passes near-miss threshold.
+**Fix:** In `_try_color_fix`, try `correction(identity)` before the main near-miss loop. Cost: 1 extra `infer_output_correction` call per task.
+
+### Pillar 3: recolor_foreground primitive
+**Problem:** "Replace all non-bg colors with X" requires 4-step composition (erase_bg→binarize→replace(1,X)→fill_bg), too deep for max depth=3 search.
+**Fix:** Add `recolor_foreground(color)` parameterized primitive. Targets task `9565186b` and similar.
+
+### Pillar 4: border_extend primitive
+**Problem:** Task `49d1d64f` passes test but fails train because `dilate` fills interior zeros too.
+**Fix:** Add `border_extend` transform — extends non-zero border pixels into adjacent zero cells on grid edges only.
+
+**Rationale:** Pillar 1 amplifies all others: cleaner library → cleaner search space → better compounding. Expected: library reuse >40% (was 10%), steeper compounding curve.
+
+**Files changed:** `core/config.py` (3 params), `core/learner.py` (quality gate + identity color fix), `domains/arc/transformation_primitives.py` (+2 primitives), `tests/test_atomic_primitives.py` (+8 tests), `tests/test_learner.py` (updated config defaults).
+
 ---
 *This document will be updated with each new session and major decision.*

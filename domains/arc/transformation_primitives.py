@@ -222,9 +222,90 @@ def gravity_down(grid: Grid) -> Grid:
     return result
 
 
+def gravity_up(grid: Grid) -> Grid:
+    """Move all non-zero pixels up by gravity (within each column)."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+    for c in range(w):
+        non_zero = [grid[r][c] for r in range(h) if grid[r][c] != 0]
+        for i, val in enumerate(non_zero):
+            result[i][c] = val
+    return result
+
+
+def gravity_left(grid: Grid) -> Grid:
+    """Move all non-zero pixels left by gravity (within each row)."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+    for r in range(h):
+        non_zero = [grid[r][c] for c in range(w) if grid[r][c] != 0]
+        for i, val in enumerate(non_zero):
+            result[r][i] = val
+    return result
+
+
+def gravity_right(grid: Grid) -> Grid:
+    """Move all non-zero pixels right by gravity (within each row)."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+    for r in range(h):
+        non_zero = [grid[r][c] for c in range(w) if grid[r][c] != 0]
+        for i, val in enumerate(non_zero):
+            result[r][w - len(non_zero) + i] = val
+    return result
+
+
+# =============================================================================
+# Sorting transforms (2)
+# =============================================================================
+
+def sort_rows_by_nonzero(grid: Grid) -> Grid:
+    """Sort rows ascending by count of non-zero pixels."""
+    if not grid or not grid[0]:
+        return grid
+    return sorted([row[:] for row in grid], key=lambda r: sum(1 for c in r if c != 0))
+
+
+def sort_cols_by_nonzero(grid: Grid) -> Grid:
+    """Sort columns ascending by count of non-zero pixels."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    cols = [[grid[r][c] for r in range(h)] for c in range(w)]
+    cols.sort(key=lambda col: sum(1 for v in col if v != 0))
+    return [[cols[c][r] for c in range(w)] for r in range(h)]
+
+
 # =============================================================================
 # Fill transforms (1)
 # =============================================================================
+
+def border_extend(grid: Grid) -> Grid:
+    """Extend non-zero border pixels into adjacent zero cells on the grid edges."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    # Top and bottom edges
+    for c in range(w):
+        if result[0][c] == 0 and h > 1 and grid[1][c] != 0:
+            result[0][c] = grid[1][c]
+        if result[h - 1][c] == 0 and h > 1 and grid[h - 2][c] != 0:
+            result[h - 1][c] = grid[h - 2][c]
+    # Left and right edges
+    for r in range(h):
+        if result[r][0] == 0 and w > 1 and grid[r][1] != 0:
+            result[r][0] = grid[r][1]
+        if result[r][w - 1] == 0 and w > 1 and grid[r][w - 2] != 0:
+            result[r][w - 1] = grid[r][w - 2]
+    return result
+
 
 def fill_enclosed(grid: Grid) -> Grid:
     """Fill zero-valued pixels enclosed by non-zero pixels.
@@ -416,6 +497,43 @@ def _tile_factory(n: int):
     return tile
 
 
+def _repeat_rows_factory(n: int):
+    """Factory: repeat each row n times."""
+    if not isinstance(n, int) or n < 1 or n > 10:
+        return lambda grid: grid
+    def repeat_rows(grid: Grid) -> Grid:
+        if not grid or not grid[0]:
+            return grid
+        result = []
+        for row in grid:
+            for _ in range(n):
+                result.append(row[:])
+        return result
+    return repeat_rows
+
+
+def _repeat_cols_factory(n: int):
+    """Factory: repeat each column n times."""
+    if not isinstance(n, int) or n < 1 or n > 10:
+        return lambda grid: grid
+    def repeat_cols(grid: Grid) -> Grid:
+        if not grid or not grid[0]:
+            return grid
+        return [[cell for cell in row for _ in range(n)] for row in grid]
+    return repeat_cols
+
+
+def _recolor_foreground_factory(color: int):
+    """Factory: replace all non-background colors with given color."""
+    def recolor(grid: Grid) -> Grid:
+        if not grid or not grid[0]:
+            return grid
+        flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+        bg = Counter(flat).most_common(1)[0][0]
+        return [[color if cell != bg else cell for cell in row] for row in grid]
+    return recolor
+
+
 def _downscale_factory(n: int):
     """Factory: downscale by factor n (majority vote per block)."""
     if not isinstance(n, int) or n < 1 or n > 10:
@@ -447,7 +565,7 @@ def _downscale_factory(n: int):
 def build_atomic_primitives() -> list[Primitive]:
     """Build the truly atomic transformation primitives.
 
-    19 unary transforms + 2 binary (overlay, mask_by) = 21 total.
+    26 unary transforms + 2 binary (overlay, mask_by) = 28 total.
     Each performs exactly ONE visual concept.
 
     crop_to_content is NOT a primitive — it's compositional:
@@ -475,10 +593,17 @@ def build_atomic_primitives() -> list[Primitive]:
         # Morphological (2)
         ("dilate",                      dilate),
         ("erode",                       erode),
-        # Physics (1)
+        # Physics (4) — directional gravity
         ("gravity_down",                gravity_down),
-        # Fill (1)
+        ("gravity_up",                  gravity_up),
+        ("gravity_left",                gravity_left),
+        ("gravity_right",               gravity_right),
+        # Sorting (2)
+        ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
+        ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
+        # Fill (2)
         ("fill_enclosed",               fill_enclosed),
+        ("border_extend",               border_extend),
         # Connected component labeling (1) — single BFS, truly atomic
         ("label_components",            label_components),
     ]
@@ -508,6 +633,8 @@ def build_parameterized_primitives() -> list[Primitive]:
                   fn=_erase_color_factory, domain="arc", kind="parameterized"),
         Primitive(name="fill_bg_with", arity=1,
                   fn=_fill_bg_with_color_factory, domain="arc", kind="parameterized"),
+        Primitive(name="recolor_foreground", arity=1,
+                  fn=_recolor_foreground_factory, domain="arc", kind="parameterized"),
         # Scale/tile parameterized
         Primitive(name="scale", arity=1,
                   fn=_scale_factory, domain="arc", kind="parameterized"),
@@ -515,6 +642,11 @@ def build_parameterized_primitives() -> list[Primitive]:
                   fn=_tile_factory, domain="arc", kind="parameterized"),
         Primitive(name="downscale", arity=1,
                   fn=_downscale_factory, domain="arc", kind="parameterized"),
+        # Row/column repetition parameterized
+        Primitive(name="repeat_rows", arity=1,
+                  fn=_repeat_rows_factory, domain="arc", kind="parameterized"),
+        Primitive(name="repeat_cols", arity=1,
+                  fn=_repeat_cols_factory, domain="arc", kind="parameterized"),
     ]
 
 

@@ -551,6 +551,18 @@ Implement the Session 15 plan: 6 changes to improve search strategies based on n
 - **Part C: Tests**: Added 11 new tests (derive params low/medium/high budget, monotonic, derive rounds, resolve auto-derives, CLI override, preset minimal keys, library ROI seeded in sleep). 447→458 tests, all pass.
 - **Part D: Documentation**: Decision 123, updated README presets section, updated CLI flags.
 
+## Session 19 — Solve Bottleneck Analysis: Dim Penalty, Max-Error, New Primitives (2026-03-15)
+
+### Prompt 1: Deep Analysis & Fixes
+
+> Analyze solve bottlenecks. Fix dimension mismatch scoring, change solve criterion to max-error, add gravity/sorting/repeat primitives.
+
+**Changes made:**
+- **Dim mismatch cap**: Added `DIM_MISMATCH_CAP=0.35` in `domains/arc/drive.py` to prevent wrong-dimension programs from entering near-miss refinement.
+- **Max-error criterion**: Added `max_example_error` to `ScoredProgram`. Solve requires max_error==0 (all examples perfect), not just low avg_error. Ranking still uses avg_error.
+- **New primitives (48→55)**: 3 gravity transforms (up/left/right), 2 sorting transforms (sort_rows/cols_by_nonzero), 2 parameterized factories (repeat_rows/cols). Total: 27 transforms + 10 parameterized + 18 perception.
+- **Tests**: 458→489 tests, all pass.
+
 ---
 
 *This document will be updated with each new session.*

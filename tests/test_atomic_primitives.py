@@ -25,9 +25,11 @@ from domains.arc.transformation_primitives import (
     crop_half_left, crop_half_right,
     pad_border, binarize, invert_colors,
     dilate, erode, gravity_down, fill_enclosed, overlay,
+    border_extend,
     # Parameterized factories
     _scale_factory, _tile_factory, _downscale_factory,
     _swap_colors_factory, _keep_color_factory, _erase_color_factory,
+    _recolor_foreground_factory,
     # Builders
     build_atomic_primitives, build_parameterized_primitives,
     ATOMIC_ESSENTIAL_PAIR_CONCEPTS,
@@ -315,8 +317,8 @@ class TestBuilders:
     def test_build_atomic_count(self):
         prims = build_atomic_primitives()
         # 6 geometric + 7 spatial + 2 color + 2 morphological
-        # + 1 physics + 1 fill + 1 label_components + 2 binary = 22
-        assert len(prims) == 22
+        # + 4 physics + 2 sorting + 2 fill + 1 label_components + 2 binary = 28
+        assert len(prims) == 28
 
     def test_all_have_names(self):
         for p in build_atomic_primitives():
@@ -652,6 +654,68 @@ class TestCellPatchCorrection:
         result = env.infer_output_correction(
             [pred1, pred2], [exp1, exp2])
         assert result is None
+
+
+# =============================================================================
+# 16. New primitive tests — recolor_foreground + border_extend
+# =============================================================================
+
+class TestRecolorForeground:
+    def test_basic(self):
+        # bg=0 (most common), foreground colors 1,2 → all become 5
+        grid = [[0, 0, 0], [0, 1, 2], [0, 0, 0]]
+        result = _recolor_foreground_factory(5)(grid)
+        assert result == [[0, 0, 0], [0, 5, 5], [0, 0, 0]]
+
+    def test_non_zero_bg(self):
+        # bg=3 (most common), foreground colors 1,2 → all become 7
+        grid = [[3, 3, 3], [3, 1, 2], [3, 3, 3]]
+        result = _recolor_foreground_factory(7)(grid)
+        assert result == [[3, 3, 3], [3, 7, 7], [3, 3, 3]]
+
+    def test_all_same_color(self):
+        grid = [[2, 2], [2, 2]]
+        result = _recolor_foreground_factory(5)(grid)
+        # bg=2, no foreground → no change
+        assert result == [[2, 2], [2, 2]]
+
+    def test_empty(self):
+        assert _recolor_foreground_factory(1)([]) == []
+
+
+class TestBorderExtend:
+    def test_basic(self):
+        grid = [
+            [0, 1, 0],
+            [2, 3, 4],
+            [0, 5, 0],
+        ]
+        result = border_extend(grid)
+        # Top edge: (0,0)=0→grid[1][0]=2, (0,2)=0→grid[1][2]=4
+        assert result[0][0] == 2
+        assert result[0][2] == 4
+        # Bottom edge: (2,0)=0→grid[1][0]=2, (2,2)=0→grid[1][2]=4
+        assert result[2][0] == 2
+        assert result[2][2] == 4
+        # Center unchanged
+        assert result[1][1] == 3
+
+    def test_no_border_zeros(self):
+        grid = [[1, 2], [3, 4]]
+        assert border_extend(grid) == [[1, 2], [3, 4]]
+
+    def test_empty(self):
+        assert border_extend([]) == []
+
+    def test_interior_zeros_unchanged(self):
+        grid = [
+            [1, 1, 1],
+            [1, 0, 1],
+            [1, 1, 1],
+        ]
+        result = border_extend(grid)
+        # Interior zero at (1,1) should NOT be changed
+        assert result[1][1] == 0
 
 
 if __name__ == "__main__":

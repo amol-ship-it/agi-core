@@ -80,7 +80,7 @@ class _WakeContext:
     @property
     def solved(self) -> bool:
         return (self.best_so_far is not None
-                and self.best_so_far.prediction_error <= self.cfg.solve_threshold)
+                and self.best_so_far.max_example_error <= self.cfg.solve_threshold)
 
     def update_best(self, sp: ScoredProgram) -> None:
         if self.best_so_far is None or sp.energy < self.best_so_far.energy:
@@ -642,6 +642,7 @@ class Learner:
             return None, None, None
 
         total_error = 0.0
+        max_test_error = 0.0
         n = len(task.test_inputs)
         n_solved = 0
         threshold = self.search_cfg.solve_threshold
@@ -652,11 +653,12 @@ class Learner:
             except Exception:
                 err = 1e6
             total_error += err
+            max_test_error = max(max_test_error, err)
             if err <= threshold:
                 n_solved += 1
 
         avg_error = total_error / n if n > 0 else total_error
-        test_solved = avg_error <= self.search_cfg.solve_threshold
+        test_solved = max_test_error <= self.search_cfg.solve_threshold
         exponent = self.sleep_cfg.example_solve_exponent
         test_solve_score = (n_solved / n) ** exponent if n > 0 else 0.0
         return avg_error, test_solved, test_solve_score
@@ -955,12 +957,15 @@ class Learner:
             prog = scored.program
             if prog.size < 2:
                 continue
+            # Only promote unsolved programs that are genuinely close to solving
+            quality = self._unsolved_quality(scored, cfg)
+            if quality < 0.30:
+                continue
             if not _all_nodes_transferable(prog):
                 continue
             key = repr(prog)
             if key in existing_reprs:
                 continue
-            quality = self._unsolved_quality(scored, cfg)
             entry_name = f"learned_{lib_before + len(new_entries)}"
             entry = LibraryEntry(
                 name=entry_name,
@@ -1771,6 +1776,20 @@ class Learner:
 
         best_fix: Optional[ScoredProgram] = None
 
+        # Try correction(identity) — catches pure color permutation tasks
+        # where the structure is already correct but colors need remapping.
+        # Cost: 1 call to infer_output_correction per task, negligible.
+        identity_outputs = [inp for inp, _ in task.train_examples]
+        identity_expected = [exp for _, exp in task.train_examples]
+        correction = self.env.infer_output_correction(
+            identity_outputs, identity_expected)
+        if correction is not None:
+            sp = self._evaluate_program(correction, task)
+            if sp.prediction_error <= solve_thresh:
+                return sp
+            if best_fix is None or sp.energy < best_fix.energy:
+                best_fix = sp
+
         for nm in near_misses:
             # Execute program on all training inputs
             outputs = []
@@ -2443,13 +2462,14 @@ class Learner:
 
         3-level scoring hierarchy:
           **Example**: drive.prediction_error per (input, output) pair
-          **Split**: Mean of example scores → prediction_error (0 iff all perfect)
+          **Split**: Mean of example scores → prediction_error (for ranking)
           **Task**: Train split during search; test split for validation
 
-        In -log space, Jensen's inequality means the mean already penalizes
-        inconsistency — explicit max-error blending is redundant.
+        Tracks both avg_error (for smooth ranking gradient) and max_error
+        (for binary solve decision — all examples must be solved).
         """
         total_error = 0.0
+        max_error = 0.0
         n = len(task.train_examples)
         n_solved = 0
         threshold = self.search_cfg.solve_threshold
@@ -2461,6 +2481,7 @@ class Learner:
             except Exception:
                 err = 1e6  # penalty for programs that crash
             total_error += err
+            max_error = max(max_error, err)
             if err <= threshold:
                 n_solved += 1
 
@@ -2478,6 +2499,7 @@ class Learner:
             energy=energy,
             prediction_error=avg_error,
             complexity_cost=comp_cost,
+            max_example_error=max_error,
             example_solve_score=solve_score,
         )
 

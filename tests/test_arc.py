@@ -15,8 +15,13 @@ import unittest
 
 from core import Program, Task
 from domains.arc import ARCEnv, ARCGrammar, ARCDrive, to_np, from_np
-from domains.arc.drive import MAX_LOG_ERROR
+from domains.arc.drive import MAX_LOG_ERROR, DIM_MISMATCH_CAP
 from domains.arc.dataset import load_arc_task, load_arc_dataset
+from domains.arc.transformation_primitives import (
+    gravity_up, gravity_left, gravity_right,
+    sort_rows_by_nonzero, sort_cols_by_nonzero,
+    _repeat_rows_factory, _repeat_cols_factory,
+)
 
 
 class TestARCDrive(unittest.TestCase):
@@ -147,6 +152,140 @@ class TestNumpyConversion(unittest.TestCase):
         self.assertEqual(arr.shape, (2, 2))
         back = from_np(arr)
         self.assertEqual(back, grid)
+
+
+class TestDimMismatchCap(unittest.TestCase):
+    """Test that dimension-mismatched programs are capped in similarity."""
+
+    def test_dim_mismatch_cap_applied(self):
+        """Wrong-dim program → error > 1.0 (well above near-miss threshold)."""
+        drive = ARCDrive()
+        pred = [[1, 2, 3], [4, 5, 6]]  # 2×3
+        exp = [[1, 2], [3, 4], [5, 6]]   # 3×2
+        error = drive.prediction_error(pred, exp)
+        # -log(DIM_MISMATCH_CAP) ≈ 1.05, so error should be > 1.0
+        self.assertGreater(error, 1.0)
+
+    def test_dim_match_not_affected(self):
+        """Right-dim program → no cap applied, can score very well."""
+        drive = ARCDrive()
+        pred = [[1, 2], [3, 4]]
+        exp = [[1, 2], [3, 4]]
+        error = drive.prediction_error(pred, exp)
+        self.assertAlmostEqual(error, 0.0)
+
+    def test_partial_dim_gradient(self):
+        """One dim correct scores better than both wrong (but both capped)."""
+        drive = ARCDrive()
+        exp = [[1, 2, 3], [4, 5, 6]]  # 2×3
+        # Same height, wrong width
+        pred_partial = [[1, 2], [4, 5]]  # 2×2
+        # Wrong both
+        pred_full_mismatch = [[1, 2, 3]]  # 1×3
+        err_partial = drive.prediction_error(pred_partial, exp)
+        err_full = drive.prediction_error(pred_full_mismatch, exp)
+        # Both should be capped (> 1.0), but they're distinguishable
+        self.assertGreater(err_partial, 1.0)
+        self.assertGreater(err_full, 1.0)
+
+
+class TestGravityDirectional(unittest.TestCase):
+    """Test directional gravity primitives."""
+
+    def test_gravity_up(self):
+        grid = [
+            [0, 0, 0],
+            [1, 0, 2],
+            [0, 3, 0],
+        ]
+        result = gravity_up(grid)
+        # Column 0: [1] floats to top
+        self.assertEqual(result[0][0], 1)
+        self.assertEqual(result[1][0], 0)
+        self.assertEqual(result[2][0], 0)
+        # Column 1: [3] floats to top
+        self.assertEqual(result[0][1], 3)
+        self.assertEqual(result[1][1], 0)
+        # Column 2: [2] floats to top
+        self.assertEqual(result[0][2], 2)
+        self.assertEqual(result[1][2], 0)
+
+    def test_gravity_left(self):
+        grid = [
+            [0, 1, 0],
+            [2, 0, 3],
+        ]
+        result = gravity_left(grid)
+        # Row 0: [1] packs left
+        self.assertEqual(result[0], [1, 0, 0])
+        # Row 1: [2, 3] pack left
+        self.assertEqual(result[1], [2, 3, 0])
+
+    def test_gravity_right(self):
+        grid = [
+            [0, 1, 0],
+            [2, 0, 3],
+        ]
+        result = gravity_right(grid)
+        # Row 0: [1] packs right
+        self.assertEqual(result[0], [0, 0, 1])
+        # Row 1: [2, 3] pack right
+        self.assertEqual(result[1], [0, 2, 3])
+
+
+class TestSortPrimitives(unittest.TestCase):
+    """Test row/column sorting primitives."""
+
+    def test_sort_rows(self):
+        grid = [
+            [1, 1, 1],  # 3 nonzero
+            [0, 0, 0],  # 0 nonzero
+            [1, 0, 1],  # 2 nonzero
+        ]
+        result = sort_rows_by_nonzero(grid)
+        # Ascending: 0, 2, 3
+        self.assertEqual(result[0], [0, 0, 0])
+        self.assertEqual(result[1], [1, 0, 1])
+        self.assertEqual(result[2], [1, 1, 1])
+
+    def test_sort_cols(self):
+        grid = [
+            [1, 0, 1],
+            [1, 0, 0],
+            [1, 0, 0],
+        ]
+        # Col 0: 3 nonzero, Col 1: 0 nonzero, Col 2: 1 nonzero
+        result = sort_cols_by_nonzero(grid)
+        # Ascending: col1(0), col2(1), col0(3)
+        self.assertEqual(result[0], [0, 1, 1])
+        self.assertEqual(result[1], [0, 0, 1])
+        self.assertEqual(result[2], [0, 0, 1])
+
+
+class TestRepeatPrimitives(unittest.TestCase):
+    """Test repeat_rows and repeat_cols parameterized primitives."""
+
+    def test_repeat_rows_basic(self):
+        repeat = _repeat_rows_factory(2)
+        grid = [[1, 2], [3, 4]]
+        result = repeat(grid)
+        self.assertEqual(len(result), 4)
+        self.assertEqual(result, [[1, 2], [1, 2], [3, 4], [3, 4]])
+
+    def test_repeat_cols_basic(self):
+        repeat = _repeat_cols_factory(3)
+        grid = [[1, 2], [3, 4]]
+        result = repeat(grid)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(len(result[0]), 6)
+        self.assertEqual(result, [[1, 1, 1, 2, 2, 2], [3, 3, 3, 4, 4, 4]])
+
+    def test_repeat_n1_identity(self):
+        repeat_r = _repeat_rows_factory(1)
+        repeat_c = _repeat_cols_factory(1)
+        grid = [[1, 2], [3, 4]]
+        self.assertEqual(repeat_r(grid), grid)
+        self.assertEqual(repeat_c(grid), grid)
 
 
 if __name__ == "__main__":

@@ -167,7 +167,7 @@ Three modes. Pick one. That's the only knob most users need.
 
 Presets differ only in compute budget. All search parameters — rounds, pair/triple pool sizes, beam width — are **auto-derived** from the compute cap via `derive_search_params()`. Higher budget → wider search pools → more solves on a single diminishing-returns curve. CLI flags like `--exhaustive-pair-top-k` override auto-derived values when explicitly set.
 
-All runs use **atomic vocabulary** — 48 truly atomic primitives (22 transforms + 18 perception + 8 parameterized). Each primitive is one intuitive visual concept. 12 predicates enable conditional branching. Compositional operations like crop_to_content = trim_cols(trim_rows(x)) must be discovered through composition. Structural search strategies (per-object, cross-reference, conditional, scale/tile detection) compose these same primitives in structurally different ways.
+All runs use **atomic vocabulary** — 55 truly atomic primitives (27 transforms + 18 perception + 10 parameterized). Each primitive is one intuitive visual concept. 12 predicates enable conditional branching. Compositional operations like crop_to_content = trim_cols(trim_rows(x)) must be discovered through composition. Structural search strategies (per-object, cross-reference, conditional, scale/tile detection) compose these same primitives in structurally different ways.
 
 Rounds are auto-derived: 2 for budget ≥200K, 3 for ≥20M. Results are fully deterministic with **seed 42** (`PYTHONHASHSEED=0` is enforced automatically).
 
@@ -177,9 +177,9 @@ Rounds are auto-derived: 2 for budget ≥200K, 3 for ≥20M. Results are fully d
 |------|---------|----------|----------|
 | quick (50 tasks) | 3/50 (6%) 3s | **4/50 (8%) 5s** | 6/50 (12%) 10s |
 | default (400 tasks) | 23/400 (5.8%) 39s | **34/400 (8.5%) 97s** | — |
-| contest (400 tasks) | 35/400 (8.8%) 187s | 39/400 (9.8%) 194s | **40/400 (10.0%) 214s** |
+| contest (400 tasks) | 33/400 (8.2%) 118s | 36/400 (9.0%) 177s | **37/400 (9.2%) 195s** |
 
-Default: round 2 gives +36% solves. Contest: +50% over default R1 from wider search; 3 rounds compounds further. Contest trades ~6× wall time for +30% more solves.
+Default: round 2 gives +48% solves. Contest: wider search + 3 rounds compounds further. Contest trades ~2× wall time for +9% more solves.
 
 **Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
@@ -193,13 +193,13 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 | Mode | Round | Training (400) | Eval (400) | Library | Overfit |
 |------|-------|---------------|------------|---------|---------|
-| default | 1 | 23/400 (5.8%) | 9/400 (2.2%) | 200 | 1 |
-| default | 2 | 34/400 (8.5%) | 9/400 (2.2%) | 200 | 1 |
-| contest | 1 | 35/400 (8.8%) | 9/400 (2.2%) | 200 | 3 |
-| contest | 2 | 39/400 (9.8%) | 11/400 (2.8%) | 200 | 6 |
-| contest | 3 | 40/400 (10.0%) | 9/400 (2.2%) | 200 | 7 |
+| default | 1 | 32/400 (8.0%) | 9/400 (2.2%) | 200 | 3 |
+| default | 2 | 34/400 (8.5%) | 10/400 (2.5%) | 200 | 3 |
+| contest | 1 | 33/400 (8.2%) | 9/400 (2.2%) | 200 | 3 |
+| contest | 2 | 36/400 (9.0%) | 9/400 (2.2%) | 200 | 4 |
+| contest | 3 | 37/400 (9.2%) | 9/400 (2.2%) | 200 | 6 |
 
-Contest mode auto-derives wider search pools (pair_top_k=48, triple_top_k=20) and beam search (30x15) from its 50M compute budget. Finds +6 more training solutions (+18%) than default. Eval peaks at 11 in R2 (vs 9 default). Overfit increases with more compute — wider search finds more task-specific solutions that don't generalize to test.
+Contest mode auto-derives wider search pools (pair_top_k=48, triple_top_k=20) and beam search (30x15) from its 50M compute budget. Finds +3 more training solutions (+9%) than default. Eval stable at 9-10. Solve criterion uses max-example-error (all examples must be solved, not just average) — this is stricter than avg-based, so numbers reflect genuine all-example solves.
 
 Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
 
@@ -297,7 +297,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 ### Current status
 
-**Compounding demonstrated on ARC with atomic vocabulary + structural search.** Default mode: training 23→34 across 2 rounds (+48% compounding). Contest mode: 35→40 across 3 rounds with auto-derived beam search. Per-object recolor (10 strategies) contributes ~30% of training solves. Library entries transfer to eval. Color fix + cell-wise patches on near-misses adds 2-3 more. Eval peaks at 11/400 (2.8%) in contest R2.
+**Compounding demonstrated on ARC with atomic vocabulary + structural search.** Default mode: training 32→34 across 2 rounds (+6% compounding). Contest mode: 33→37 across 3 rounds with auto-derived beam search. Per-object recolor (10 strategies) contributes ~30% of training solves. Library entries transfer to eval. Color fix + cell-wise patches on near-misses adds 2-3 more. Eval stable at 9-10/400 across modes. Solve criterion uses max-example-error (stricter than avg) so all numbers are genuine all-example solves.
 
 **Five search strategies** compose the same atomic primitives differently:
 1. **Exhaustive enumeration** — depth 1-3 sequential pipelines + mixed parameterized/transform compositions
@@ -338,7 +338,7 @@ agi-core/
 │   └── visualize_results.py # HTML visualization generator (expands learned abstractions)
 │
 ├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
-│   ├── arc/                 # ARC-AGI grid transformations (48 atomic primitives, 12 predicates)
+│   ├── arc/                 # ARC-AGI grid transformations (55 atomic primitives, 12 predicates)
 │   │   ├── transformation_primitives.py # Atomic transforms + parameterized factories (self-contained)
 │   │   ├── perception_primitives.py     # Atomic perception Grid→Value (self-contained)
 │   │   ├── primitives.py    # Registry (_PRIM_MAP) + utilities (to_np, from_np)
@@ -357,7 +357,7 @@ agi-core/
 │       ├── __init__.py      # Game engine + all 4 interfaces
 │       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (458 tests)
+├── tests/                   # Test suite (489 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -376,7 +376,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**458 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization, batch mode. Auto-derivation: compute budget → search params, rounds, ROI seeding.
+**489 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization, batch mode. Auto-derivation: compute budget → search params, rounds, ROI seeding.
 
 ## Documentation
 

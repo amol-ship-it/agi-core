@@ -18,6 +18,7 @@ from .primitives import to_np
 
 
 MAX_LOG_ERROR = 20.0  # cap for zero similarity (-log transform)
+DIM_MISMATCH_CAP = 0.35  # max similarity when dimensions differ (sweep: 0.25/0.35/0.45)
 
 
 class ARCDrive(DriveSignal):
@@ -100,6 +101,12 @@ class ARCDrive(DriveSignal):
                       + 0.15 * dim_match
                       + 0.15 * color_overlap
                       + 0.10 * nz_sim)
+
+        # Cap similarity when dimensions differ — wrong-dim programs must never
+        # score better than moderate right-dim programs.  This prevents them
+        # from entering near-miss refinement and wasting eval budget.
+        if dim_match < 1.0:
+            similarity = min(similarity, DIM_MISMATCH_CAP)
 
         # -log transform: 0 = perfect, higher = worse
         if similarity <= 0.0:
