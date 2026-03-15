@@ -1472,6 +1472,39 @@ class Learner:
                     if sp.prediction_error <= solve_thresh:
                         return refined, n_evals
 
+        # --- Binary near-miss refinement ---
+        # Try binary_op(near_miss, other) and binary_op(other, near_miss)
+        # where other is a top-scoring depth-1 program.
+        # Catches patterns like overlay(fill_enclosed, transpose).
+        # Cost: 5 near-misses × 15 others × 2 binary × 2 sides = 300 evals.
+        binary_prims = [p for p in primitives if p.arity == 2 and p.kind == "transform"]
+        if binary_prims:
+            BINARY_TOP_K = 15
+            top_depth1 = sorted(
+                [sp for sp in candidates if sp.program.depth == 1],
+                key=lambda s: s.prediction_error)[:BINARY_TOP_K]
+            for nm in near_misses[:3]:  # top-3 near-misses
+                for bp in binary_prims:
+                    for other in top_depth1:
+                        # Try binary(near_miss, other)
+                        prog_a = Program(root=bp.name, children=[
+                            copy.deepcopy(nm.program),
+                            copy.deepcopy(other.program)])
+                        sp = self._evaluate_program(prog_a, task)
+                        refined.append(sp)
+                        n_evals += 1
+                        if sp.prediction_error <= solve_thresh:
+                            return refined, n_evals
+                        # Try binary(other, near_miss)
+                        prog_b = Program(root=bp.name, children=[
+                            copy.deepcopy(other.program),
+                            copy.deepcopy(nm.program)])
+                        sp = self._evaluate_program(prog_b, task)
+                        refined.append(sp)
+                        n_evals += 1
+                        if sp.prediction_error <= solve_thresh:
+                            return refined, n_evals
+
         return refined, n_evals
 
     def _try_conditional_search(
