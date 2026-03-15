@@ -36,6 +36,10 @@ from .primitives import (
     extract_largest_object, extract_smallest_object,
     extend_lines_to_contact, complete_sym_90,
     complete_symmetry_h, complete_symmetry_v,
+    # Pattern — atomic pattern primitives
+    upscale_pattern, fill_tile_pattern,
+    fill_between_diagonal, mark_intersections_exclude_axis,
+    recolor_by_size_rank,
     # Task color primitives — reuse for atomic subset
     build_task_color_primitives,
     _make_keep_color, _make_erase_color, _make_replace_color,
@@ -330,6 +334,13 @@ def build_atomic_primitives() -> list[Primitive]:
         ("complete_symmetry_90",        complete_sym_90),
         ("complete_symmetry_h",         complete_symmetry_h),
         ("complete_symmetry_v",         complete_symmetry_v),
+
+        # --- Pattern (5): detect and apply patterns ---
+        ("upscale_pattern",             upscale_pattern),
+        ("fill_tile_pattern",           fill_tile_pattern),
+        ("fill_between_diagonal",       fill_between_diagonal),
+        ("mark_intersections",          mark_intersections_exclude_axis),
+        ("recolor_by_size_rank",        recolor_by_size_rank),
     ]
 
     prims = []
