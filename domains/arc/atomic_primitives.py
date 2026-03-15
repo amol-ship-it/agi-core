@@ -326,7 +326,7 @@ def build_atomic_primitives() -> list[Primitive]:
         ("keep_smallest_component",     keep_smallest_object_only),
         ("extract_largest_object",      extract_largest_object),
         ("extract_smallest_object",     extract_smallest_object),
-        ("extend_lines",               extend_lines_to_contact),
+        ("extend_lines_to_contact",    extend_lines_to_contact),
         ("complete_symmetry_90",        complete_sym_90),
         ("complete_symmetry_h",         complete_symmetry_h),
         ("complete_symmetry_v",         complete_symmetry_v),
