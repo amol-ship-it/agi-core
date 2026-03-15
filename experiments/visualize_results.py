@@ -176,8 +176,50 @@ def parse_program_tree(prog_str: str) -> Optional[Program]:
     return Program(root=name, children=[c for c in children if c])
 
 
-def _execute_steps(prog: Program, grid, env: ARCEnv) -> list[tuple[str, list]]:
-    """Execute program tree step-by-step. Returns [(prim_name, output), ...]."""
+def _expand_learned(prog: Program, library_map: dict) -> Program:
+    """Recursively expand learned entries inline.
+
+    If prog is `crop_half_left(learned_14)` and library_map has
+    `learned_14 -> crop_half_top(crop_to_content)`, returns
+    `crop_half_left(crop_half_top(crop_to_content))`.
+    """
+    if not library_map:
+        return prog
+    expanded_children = [_expand_learned(c, library_map) for c in prog.children]
+    if prog.root in library_map:
+        # Replace this node with the library entry's expanded program tree
+        inner = _expand_learned(library_map[prog.root], library_map)
+        if expanded_children:
+            # Learned entry used as outer: learned_14(something)
+            # Graft children onto the innermost leaf of the expansion
+            return _graft_children(inner, expanded_children)
+        return inner
+    return Program(root=prog.root, children=expanded_children)
+
+
+def _graft_children(tree: Program, children: list[Program]) -> Program:
+    """Attach children to the innermost (deepest-left) leaf of a tree.
+
+    Used when a learned entry wraps sub-expressions, e.g. learned_14(X)
+    where learned_14 = crop_half_top(crop_to_content). Result is
+    crop_half_top(crop_to_content(X)).
+    """
+    if not tree.children:
+        return Program(root=tree.root, children=children)
+    new_children = list(tree.children)
+    new_children[0] = _graft_children(new_children[0], children)
+    return Program(root=tree.root, children=new_children)
+
+
+def _execute_steps(prog: Program, grid, env: ARCEnv,
+                   library_map: Optional[dict] = None,
+                   ) -> list[tuple[str, list]]:
+    """Execute program tree step-by-step. Returns [(prim_name, output), ...].
+
+    If library_map is provided, learned entries are expanded inline so that
+    every primitive in the expansion gets its own step.
+    """
+    expanded = _expand_learned(prog, library_map or {})
     steps: list[tuple[str, list]] = []
 
     def _eval(node: Program, inp):
@@ -196,10 +238,53 @@ def _execute_steps(prog: Program, grid, env: ARCEnv) -> list[tuple[str, list]]:
         return result
 
     try:
-        _eval(prog, grid)
+        _eval(expanded, grid)
     except Exception:
         pass
     return steps
+
+
+def _build_library_map(results: dict) -> dict[str, Program]:
+    """Build a mapping from learned entry names to their Program trees.
+
+    The results JSON stores library entries as:
+      {"name": "learned_14", "program": "crop_half_top(crop_to_content)", ...}
+    """
+    library_map: dict[str, Program] = {}
+    for entry in results.get("library", []):
+        name = entry.get("name", "")
+        prog_str = entry.get("program", "")
+        if name and prog_str:
+            parsed = parse_program_tree(prog_str)
+            if parsed:
+                library_map[name] = parsed
+    return library_map
+
+
+def _format_expanded_program(prog_str: str, library_map: dict[str, Program]) -> str:
+    """Format a program string with learned entries expanded inline.
+
+    Example: crop_half_left(learned_14)
+         --> crop_half_left(learned_14=crop_half_top(crop_to_content))
+    """
+    if not library_map:
+        return prog_str
+    prog = parse_program_tree(prog_str)
+    if not prog:
+        return prog_str
+
+    def _fmt(node: Program) -> str:
+        children_str = ""
+        if node.children:
+            args = ", ".join(_fmt(c) for c in node.children)
+            children_str = f"({args})"
+        if node.root in library_map:
+            inner = library_map[node.root]
+            expanded = _fmt(inner)
+            return f"{node.root}={expanded}{children_str}"
+        return f"{node.root}{children_str}"
+
+    return _fmt(prog)
 
 
 def _get_prediction(stored_preds, idx, prog, inp, env):
@@ -248,13 +333,18 @@ def _render_example_row(label, inp, expected, prediction, cell_size=0) -> str:
 # Render derivation: step-by-step from input → predicted
 # --------------------------------------------------------------------------
 
-def _render_derivation(inp, prog, env) -> str:
-    """Show step-by-step execution: input --prim→ ... --prim→ predicted."""
+def _render_derivation(inp, prog, env,
+                       library_map: Optional[dict] = None) -> str:
+    """Show step-by-step execution: input --prim→ ... --prim→ predicted.
+
+    If library_map is provided, learned entries are expanded inline so every
+    primitive in the expansion gets its own step in the derivation.
+    """
     has_steps = prog.children or prog.root != "identity"
     if not has_steps:
         return ''
 
-    steps = _execute_steps(prog, inp, env)
+    steps = _execute_steps(prog, inp, env, library_map=library_map)
     if not steps:
         return ''
 
@@ -272,7 +362,8 @@ def _render_derivation(inp, prog, env) -> str:
 # Per-task detail page
 # --------------------------------------------------------------------------
 
-def _generate_task_page(tid, tdata, task, env, back_link="../index.html") -> str:
+def _generate_task_page(tid, tdata, task, env, back_link="../index.html",
+                        library_map: Optional[dict] = None) -> str:
     status = classify_task(tdata)
     prog_str = tdata.get("program", "identity") or "identity"
     err = tdata.get("prediction_error", 1.0)
@@ -280,11 +371,14 @@ def _generate_task_page(tid, tdata, task, env, back_link="../index.html") -> str
     test_preds = tdata.get("test_predictions")
     prog = parse_program_tree(prog_str) or Program(root="identity")
 
+    # Show expanded program string when learned entries are present
+    display_str = _format_expanded_program(prog_str, library_map or {})
+
     b: list[str] = []
     b.append(f'<p><a href="{back_link}">&larr; Back to index</a></p>')
     b.append(f'<h1>{html.escape(tid)} <span class="status {status}">'
              f'{status.upper()}</span></h1>')
-    b.append(f'<div class="program">Program: {html.escape(prog_str)}</div>')
+    b.append(f'<div class="program">Program: {html.escape(display_str)}</div>')
     if err < 1.0:
         b.append(f'<div class="error-info">Prediction error: {err:.4f}</div>')
     te = tdata.get("test_error")
@@ -296,7 +390,7 @@ def _generate_task_page(tid, tdata, task, env, back_link="../index.html") -> str
     for i, (inp, exp) in enumerate(task.train_examples):
         prediction = _get_prediction(train_preds, i, prog, inp, env)
         b.append(_render_example_row(f"Train {i+1}", inp, exp, prediction))
-        b.append(_render_derivation(inp, prog, env))
+        b.append(_render_derivation(inp, prog, env, library_map=library_map))
 
     # Test examples
     if task.test_inputs:
@@ -305,7 +399,7 @@ def _generate_task_page(tid, tdata, task, env, back_link="../index.html") -> str
             test_exp = task.test_outputs[i] if i < len(task.test_outputs) else None
             prediction = _get_prediction(test_preds, i, prog, test_inp, env)
             b.append(_render_example_row(f"Test {i+1}", test_inp, test_exp, prediction))
-            b.append(_render_derivation(test_inp, prog, env))
+            b.append(_render_derivation(test_inp, prog, env, library_map=library_map))
 
     return _html_page(f"Task {tid}", '\n'.join(b))
 
@@ -315,7 +409,7 @@ def _generate_task_page(tid, tdata, task, env, back_link="../index.html") -> str
 # --------------------------------------------------------------------------
 
 def _generate_index(title, source_name, task_items, task_map, tasks_dir_name,
-                    env, thumb=10) -> str:
+                    env, thumb=10, library_map: Optional[dict] = None) -> str:
     """Index page with visual preview rows for each task."""
     total = len(task_items)
     solved = sum(1 for *_, s, _ in task_items if s == "solved")
@@ -366,7 +460,8 @@ def _generate_index(title, source_name, task_items, task_map, tasks_dir_name,
         b.append(f'<span class="status {status}">{status.upper()}</span>')
         b.append('</div>')
 
-        prog_display = prog_str if len(prog_str) <= 70 else prog_str[:67] + "..."
+        expanded_str = _format_expanded_program(prog_str, library_map or {})
+        prog_display = expanded_str if len(expanded_str) <= 70 else expanded_str[:67] + "..."
         meta = [f'Program: {html.escape(prog_display)}']
         if err < 1.0:
             meta.append(f'error: {err:.4f}')
@@ -425,7 +520,8 @@ def _build_task_items(tasks_data: dict) -> list:
 
 def _generate_split(title, source_name, tasks_data, task_map, env,
                     index_path, tasks_dir, tasks_dir_name,
-                    filter_status="", max_tasks=0, back_link_prefix=""):
+                    filter_status="", max_tasks=0, back_link_prefix="",
+                    library_map: Optional[dict] = None):
     """Generate one split (train or eval): index file + task detail pages."""
     task_items = _sort_and_filter(_build_task_items(tasks_data),
                                  filter_status, max_tasks)
@@ -438,13 +534,15 @@ def _generate_split(title, source_name, tasks_data, task_map, env,
         task = task_map.get(tid)
         if task is None:
             continue
-        page = _generate_task_page(tid, tdata, task, env, back_link=back_link)
+        page = _generate_task_page(tid, tdata, task, env, back_link=back_link,
+                                   library_map=library_map)
         with open(os.path.join(tasks_dir, f"{tid}.html"), "w") as f:
             f.write(page)
 
     # Index page
     index_html = _generate_index(title, source_name, task_items,
-                                 task_map, tasks_dir_name, env)
+                                 task_map, tasks_dir_name, env,
+                                 library_map=library_map)
     with open(index_path, "w") as f:
         f.write(index_html)
 
@@ -475,6 +573,9 @@ def generate_html(results_path: str, output_base: str,
     """
     with open(results_path) as f:
         results = json.load(f)
+
+    # Build library map for expanding learned abstractions
+    library_map = _build_library_map(results)
 
     # Load actual ARC tasks for grids
     task_map: dict = {}
@@ -514,6 +615,7 @@ def generate_html(results_path: str, output_base: str,
                 filter_status=filter_status,
                 max_tasks=max_tasks,
                 back_link_prefix=back_link_name,
+                library_map=library_map,
             )
             index_paths.append(idx)
     else:
@@ -535,6 +637,7 @@ def generate_html(results_path: str, output_base: str,
             filter_status=filter_status,
             max_tasks=max_tasks,
             back_link_prefix=back_link_name,
+            library_map=library_map,
         )
         index_paths.append(idx)
 
