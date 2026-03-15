@@ -3044,4 +3044,42 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 **Files changed:** `core/config.py` (3 params), `core/learner.py` (quality gate + identity color fix), `domains/arc/transformation_primitives.py` (+2 primitives), `tests/test_atomic_primitives.py` (+8 tests), `tests/test_learner.py` (updated config defaults).
 
 ---
+
+## Session 15 — Breaking the 9% Ceiling (2026-03-15)
+
+### Decision 105: New structural strategies and primitives to expand solve coverage
+
+**Context:** Baseline 35-39/400 train (8.7-9.7%), 10/400 eval (2.5%). Failure analysis showed 264/365 unsolved tasks (72%) are near-misses (error < 0.3), with 245 same-dims unsolved (67%) and 123 separator-containing tasks unsolved.
+
+**Changes implemented:**
+
+1. **Per-row/per-column decomposition** (Step 2): New structural strategy `try_per_row_column_decomposition` that applies transforms independently per row or per column, plus row/column sorting by properties (nonzero count, sum, max, etc.). Registered as Phase 1.05 in the wake pipeline.
+
+2. **Ray extension primitives** (Step 3): 4 new atomic transforms — `extend_rays_right/left/up/down`. Each extends non-zero pixels in a direction until hitting another non-zero pixel or edge. These are natural complements to gravity primitives.
+
+3. **Flood fill from markers** (Step 6): New `flood_fill_from_markers` primitive — BFS paint-bucket fill from each non-zero seed pixel into adjacent zero regions.
+
+4. **Separator cell algebra** (Step 4): Extended `_try_separator_cross_ref` with boolean ops between cell pairs (XOR, OR, AND, A-B, mask), OR-reduction across all cells, and majority-vote reduction.
+
+5. **Template stamping** (Step 5): New `_try_template_stamp` strategy — detects a small template shape and marker pixels, stamps the template centered at each marker position.
+
+6. **Failure analysis script** (Step 1): `scripts/analyze_failures.py` categorizes unsolved tasks by dimension change, error level, object count, and near-miss patterns.
+
+**Results:**
+- 509 tests pass (99 new)
+- Train: 39→41 (+2 net), Eval: 10→10 (stable)
+- Two new tasks solved by ray extension: `d037b0a7` (extend_rays_down), `22168020` (mask_by(extend_rays_right, extend_rays_left))
+- High churn (~20 gained, ~18 lost) due to expanded search space — inherent to adding 5 new depth-1 primitives
+- Primitive count: 28→33 unary transforms, 62 total primitives
+- New near-misses using new features: flood_fill_from_markers, extend_rays compositions
+
+**Key insight from failure analysis:**
+- 72% of unsolved tasks are near-misses — the system is very close on most tasks
+- Same-dims tasks (67% unsolved) are the biggest target — per-object and structural strategies matter most
+- 123 unsolved separator tasks — cell algebra extension should help once more test data available
+- `fill_enclosed` (35x) and `crop_to_content` (34x) are the most common near-miss programs
+
+**Files changed:** `domains/arc/environment.py` (+per-row/col, +cell algebra, +template stamp), `domains/arc/transformation_primitives.py` (+5 primitives), `core/learner.py` (+phase 1.05), `scripts/analyze_failures.py` (new), `tests/test_atomic_primitives.py` (+40 tests).
+
+---
 *This document will be updated with each new session and major decision.*

@@ -60,6 +60,177 @@ class ARCEnv(Environment):
     # These are search strategies, not vocabulary choices. They compose
     # existing atomic primitives in structurally different ways.
 
+    def try_per_row_column_decomposition(
+        self, task: Task, primitives: list[Primitive],
+    ) -> Optional[tuple[str, Any]]:
+        """Try solving by applying a transform independently per row or column.
+
+        Many ARC tasks apply the same operation to each row (1×W subgrid)
+        or column (H×1 subgrid) independently. This is distinct from
+        per-object decomposition (spatially scattered regions).
+
+        Strategies:
+        1. Same primitive per row/column
+        2. Same primitive pair per row/column (composed)
+        """
+        from .objects import _test_on_examples
+        examples = task.train_examples
+        if not examples:
+            return None
+
+        # Only same-dims tasks
+        for inp, out in examples:
+            if len(inp) != len(out):
+                return None
+            if inp and out and len(inp[0]) != len(out[0]):
+                return None
+
+        unary_prims = [p for p in primitives if p.arity == 1]
+
+        # --- Strategy 1: Same primitive per row ---
+        for prim in unary_prims:
+            def _make_per_row_fn(t=prim.fn):
+                def fn(grid):
+                    return [t([row])[0] if t([row]) and len(t([row])) == 1
+                            else row for row in grid]
+                return fn
+            fn = _make_per_row_fn()
+            if _test_on_examples(fn, examples):
+                name = f"per_row({prim.name})"
+                prim_obj = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                self.register_primitive(prim_obj)
+                return (name, fn)
+
+        # --- Strategy 2: Same primitive per column ---
+        for prim in unary_prims:
+            def _make_per_col_fn(t=prim.fn):
+                def fn(grid):
+                    if not grid or not grid[0]:
+                        return grid
+                    h, w = len(grid), len(grid[0])
+                    result = [row[:] for row in grid]
+                    for c in range(w):
+                        col_grid = [[grid[r][c]] for r in range(h)]
+                        transformed = t(col_grid)
+                        if (isinstance(transformed, list)
+                                and len(transformed) == h
+                                and all(len(r) == 1 for r in transformed)):
+                            for r in range(h):
+                                result[r][c] = transformed[r][0]
+                    return result
+                return fn
+            fn = _make_per_col_fn()
+            if _test_on_examples(fn, examples):
+                name = f"per_col({prim.name})"
+                prim_obj = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                self.register_primitive(prim_obj)
+                return (name, fn)
+
+        # --- Strategy 3: Row-wise sort/reorder ---
+        # Try: output rows are a permutation of input rows
+        result = self._try_row_permutation(task)
+        if result is not None:
+            return result
+
+        # --- Strategy 4: Column-wise sort/reorder ---
+        result = self._try_col_permutation(task)
+        if result is not None:
+            return result
+
+        return None
+
+    def _try_row_permutation(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Try if output is input rows sorted by some property."""
+        from .objects import _test_on_examples
+        examples = task.train_examples
+
+        # Properties to sort rows by
+        def _row_nonzero_count(row):
+            return sum(1 for c in row if c != 0)
+
+        def _row_sum(row):
+            return sum(row)
+
+        def _row_max(row):
+            return max(row) if row else 0
+
+        def _row_min_nonzero(row):
+            nz = [c for c in row if c != 0]
+            return min(nz) if nz else 10
+
+        def _row_first_nonzero_pos(row):
+            for i, c in enumerate(row):
+                if c != 0:
+                    return i
+            return len(row)
+
+        sort_keys = [
+            ("nonzero_asc", _row_nonzero_count, False),
+            ("nonzero_desc", _row_nonzero_count, True),
+            ("sum_asc", _row_sum, False),
+            ("sum_desc", _row_sum, True),
+            ("max_asc", _row_max, False),
+            ("max_desc", _row_max, True),
+            ("min_nz_asc", _row_min_nonzero, False),
+            ("first_nz_asc", _row_first_nonzero_pos, False),
+        ]
+
+        for key_name, key_fn, rev in sort_keys:
+            def _make_sort_fn(kf=key_fn, reverse=rev):
+                def fn(grid):
+                    return sorted([row[:] for row in grid],
+                                  key=kf, reverse=reverse)
+                return fn
+            fn = _make_sort_fn()
+            if _test_on_examples(fn, examples):
+                name = f"sort_rows({key_name})"
+                prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                self.register_primitive(prim)
+                return (name, fn)
+
+        return None
+
+    def _try_col_permutation(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Try if output is input columns sorted by some property."""
+        from .objects import _test_on_examples
+        examples = task.train_examples
+
+        def _col_nonzero_count(col):
+            return sum(1 for c in col if c != 0)
+
+        def _col_sum(col):
+            return sum(col)
+
+        sort_keys = [
+            ("nonzero_asc", _col_nonzero_count, False),
+            ("nonzero_desc", _col_nonzero_count, True),
+            ("sum_asc", _col_sum, False),
+            ("sum_desc", _col_sum, True),
+        ]
+
+        for key_name, key_fn, rev in sort_keys:
+            def _make_sort_fn(kf=key_fn, reverse=rev):
+                def fn(grid):
+                    if not grid or not grid[0]:
+                        return grid
+                    h, w = len(grid), len(grid[0])
+                    cols = [[grid[r][c] for r in range(h)] for c in range(w)]
+                    cols.sort(key=kf, reverse=reverse)
+                    return [[cols[c][r] for c in range(w)] for r in range(h)]
+                return fn
+            fn = _make_sort_fn()
+            if _test_on_examples(fn, examples):
+                name = f"sort_cols({key_name})"
+                prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                self.register_primitive(prim)
+                return (name, fn)
+
+        return None
+
     def try_object_decomposition(
         self, task: Task, primitives: list[Primitive],
     ) -> Optional[tuple[str, Any]]:
@@ -235,6 +406,10 @@ class ARCEnv(Environment):
         result = self._try_scale_tile_detection(task)
         if result is not None:
             return result
+        # Strategy 4: Template stamping
+        result = self._try_template_stamp(task)
+        if result is not None:
+            return result
         return None
 
     def _try_boolean_halves(
@@ -393,6 +568,124 @@ class ARCEnv(Environment):
                         self.register_primitive(prim)
                         return (name, fn)
 
+        # --- Boolean ops between pairs of cells ---
+        n_rows = len(cells)
+        n_cols = len(cells[0]) if cells else 0
+        all_cells_flat = [(ri, ci, cells[ri][ci])
+                          for ri in range(n_rows)
+                          for ci in range(n_cols)]
+
+        # Check all cells are same size
+        cell_h = len(cells[0][0]) if cells and cells[0] and cells[0][0] else 0
+        cell_w = len(cells[0][0][0]) if cell_h > 0 and cells[0][0][0] else 0
+        same_size = all(
+            len(c) == cell_h and all(len(r) == cell_w for r in c)
+            for _, _, c in all_cells_flat
+        )
+
+        if same_size and cell_h > 0 and cell_w > 0:
+            out_h = len(first_out)
+            out_w = len(first_out[0]) if first_out else 0
+
+            if out_h == cell_h and out_w == cell_w:
+                # Binary ops between cell pairs
+                cell_ops = [
+                    ("xor", lambda a, b, ch, cw: [
+                        [int(a[r][c] != 0) ^ int(b[r][c] != 0)
+                         for c in range(cw)] for r in range(ch)]),
+                    ("or", lambda a, b, ch, cw: [
+                        [a[r][c] if a[r][c] != 0 else b[r][c]
+                         for c in range(cw)] for r in range(ch)]),
+                    ("and", lambda a, b, ch, cw: [
+                        [a[r][c] if b[r][c] != 0 else 0
+                         for c in range(cw)] for r in range(ch)]),
+                    ("a_minus_b", lambda a, b, ch, cw: [
+                        [a[r][c] if b[r][c] == 0 else 0
+                         for c in range(cw)] for r in range(ch)]),
+                    ("mask_a_color_b", lambda a, b, ch, cw: [
+                        [b[r][c] if a[r][c] != 0 else 0
+                         for c in range(cw)] for r in range(ch)]),
+                ]
+
+                for i, (ri1, ci1, _) in enumerate(all_cells_flat):
+                    for j, (ri2, ci2, _) in enumerate(all_cells_flat):
+                        if i == j:
+                            continue
+                        for op_name, op_fn in cell_ops:
+                            def _make_cell_op_fn(
+                                r1=ri1, c1=ci1, r2=ri2, c2=ci2,
+                                of=op_fn, hs=h_seps, vs=v_seps,
+                                ch=cell_h, cw=cell_w,
+                            ):
+                                def fn(grid):
+                                    cs = _split_into_cells(grid, hs, vs)
+                                    if (r1 < len(cs) and c1 < len(cs[r1])
+                                            and r2 < len(cs) and c2 < len(cs[r2])):
+                                        return of(cs[r1][c1], cs[r2][c2], ch, cw)
+                                    return grid
+                                return fn
+                            fn = _make_cell_op_fn()
+                            if _test_on_examples(fn, examples):
+                                name = f"cross_ref(cell_{ri1}_{ci1}_{op_name}_cell_{ri2}_{ci2})"
+                                prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                                self.register_primitive(prim)
+                                return (name, fn)
+
+                # --- OR-reduction across all cells ---
+                if len(all_cells_flat) >= 2:
+                    def _make_or_reduce_fn(hs=h_seps, vs=v_seps,
+                                           ch=cell_h, cw=cell_w):
+                        def fn(grid):
+                            cs = _split_into_cells(grid, hs, vs)
+                            flat = [cs[ri][ci]
+                                    for ri in range(len(cs))
+                                    for ci in range(len(cs[ri]))]
+                            if not flat:
+                                return grid
+                            result = [[0] * cw for _ in range(ch)]
+                            for cell in flat:
+                                for r in range(min(ch, len(cell))):
+                                    for c in range(min(cw, len(cell[r]))):
+                                        if cell[r][c] != 0:
+                                            result[r][c] = cell[r][c]
+                            return result
+                        return fn
+                    fn = _make_or_reduce_fn()
+                    if _test_on_examples(fn, examples):
+                        name = "cross_ref(or_reduce_cells)"
+                        prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                        self.register_primitive(prim)
+                        return (name, fn)
+
+                    # --- AND-reduction (majority) across all cells ---
+                    def _make_and_reduce_fn(hs=h_seps, vs=v_seps,
+                                            ch=cell_h, cw=cell_w):
+                        def fn(grid):
+                            cs = _split_into_cells(grid, hs, vs)
+                            flat = [cs[ri][ci]
+                                    for ri in range(len(cs))
+                                    for ci in range(len(cs[ri]))]
+                            if not flat:
+                                return grid
+                            n = len(flat)
+                            result = [[0] * cw for _ in range(ch)]
+                            for r in range(ch):
+                                for c in range(cw):
+                                    vals = [flat[k][r][c] for k in range(n)
+                                            if r < len(flat[k]) and c < len(flat[k][r])
+                                            and flat[k][r][c] != 0]
+                                    # Majority: non-zero if more than half cells are non-zero
+                                    if len(vals) > n // 2:
+                                        result[r][c] = Counter(vals).most_common(1)[0][0]
+                            return result
+                        return fn
+                    fn = _make_and_reduce_fn()
+                    if _test_on_examples(fn, examples):
+                        name = "cross_ref(majority_reduce_cells)"
+                        prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                        self.register_primitive(prim)
+                        return (name, fn)
+
         return None
 
     def _try_scale_tile_detection(
@@ -443,6 +736,100 @@ class ARCEnv(Environment):
                     prim = Primitive(name=name, arity=0, fn=ds_fn, domain="arc")
                     self.register_primitive(prim)
                     return (name, ds_fn)
+
+        return None
+
+    def _try_template_stamp(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Try template stamping: find a small pattern, stamp at marker positions.
+
+        Pattern: input contains marker pixels (rare color) and a template
+        (small connected shape). Output stamps the template at each marker.
+        """
+        from .objects import (
+            _test_on_examples, _find_connected_components,
+            _get_background_color,
+        )
+        examples = task.train_examples
+        if not examples:
+            return None
+
+        # Only same-dims tasks
+        for inp, out in examples:
+            if len(inp) != len(out):
+                return None
+            if inp and out and len(inp[0]) != len(out[0]):
+                return None
+
+        first_inp = examples[0][0]
+        bg = _get_background_color(first_inp)
+        comps = _find_connected_components(first_inp)
+        if len(comps) < 2:
+            return None
+
+        # Sort by size — smallest are likely markers, largest is likely template
+        comps.sort(key=lambda c: c["size"])
+
+        # Try: smallest component = template, singleton pixels of other color = markers
+        # Also try: largest component = template, rest = markers
+        # Strategy: for each candidate template, find markers, try stamping
+
+        for template_idx in range(min(3, len(comps))):
+            template_comp = comps[template_idx]
+            if template_comp["size"] > 25:  # template shouldn't be huge
+                continue
+            t_r0, t_c0, t_r1, t_c1 = template_comp["bbox"]
+            t_h = t_r1 - t_r0 + 1
+            t_w = t_c1 - t_c0 + 1
+            t_color = template_comp["color"]
+
+            # Build template subgrid
+            template = [[0] * t_w for _ in range(t_h)]
+            for r, c in template_comp["pixels"]:
+                template[r - t_r0][c - t_c0] = t_color
+
+            # Find marker pixels: single pixels of a different color
+            for marker_color in set(
+                c["color"] for c in comps if c["color"] != t_color and c["color"] != bg
+            ):
+                marker_comps = [c for c in comps
+                                if c["color"] == marker_color and c["size"] == 1]
+                if not marker_comps:
+                    continue
+
+                marker_positions = [next(iter(c["pixels"])) for c in marker_comps]
+
+                def _make_stamp_fn(tmpl=template, m_color=marker_color,
+                                   t_bg=bg, th=t_h, tw=t_w):
+                    def fn(grid):
+                        h, w = len(grid), len(grid[0]) if grid else 0
+                        # Find markers in this grid
+                        markers = [(r, c) for r in range(h) for c in range(w)
+                                   if grid[r][c] == m_color]
+                        # Start with grid copy, remove markers
+                        result = [row[:] for row in grid]
+                        for mr, mc in markers:
+                            result[mr][mc] = t_bg
+                        # Stamp template centered on each marker
+                        for mr, mc in markers:
+                            sr = mr - th // 2
+                            sc = mc - tw // 2
+                            for tr in range(th):
+                                for tc in range(tw):
+                                    if tmpl[tr][tc] != 0:
+                                        nr, nc = sr + tr, sc + tc
+                                        if 0 <= nr < h and 0 <= nc < w:
+                                            result[nr][nc] = tmpl[tr][tc]
+                        return result
+                    return fn
+
+                fn = _make_stamp_fn()
+                if _test_on_examples(fn, examples):
+                    name = f"template_stamp({t_color}_at_{marker_color})"
+                    prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                    self.register_primitive(prim)
+                    return (name, fn)
 
         return None
 

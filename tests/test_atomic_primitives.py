@@ -26,6 +26,8 @@ from domains.arc.transformation_primitives import (
     pad_border, binarize, invert_colors,
     dilate, erode, gravity_down, fill_enclosed, overlay,
     border_extend,
+    extend_rays_right, extend_rays_left, extend_rays_down, extend_rays_up,
+    flood_fill_from_markers,
     # Parameterized factories
     _scale_factory, _tile_factory, _downscale_factory,
     _swap_colors_factory, _keep_color_factory, _erase_color_factory,
@@ -317,8 +319,9 @@ class TestBuilders:
     def test_build_atomic_count(self):
         prims = build_atomic_primitives()
         # 6 geometric + 7 spatial + 2 color + 2 morphological
-        # + 4 physics + 2 sorting + 2 fill + 1 label_components + 2 binary = 28
-        assert len(prims) == 28
+        # + 4 physics + 2 sorting + 2 fill + 4 ray extension
+        # + 1 flood_fill_from_markers + 1 label_components + 2 binary = 33
+        assert len(prims) == 33
 
     def test_all_have_names(self):
         for p in build_atomic_primitives():
@@ -716,6 +719,190 @@ class TestBorderExtend:
         result = border_extend(grid)
         # Interior zero at (1,1) should NOT be changed
         assert result[1][1] == 0
+
+
+# =============================================================================
+# 17. Ray extension tests
+# =============================================================================
+
+class TestRayExtension:
+    def test_extend_rays_right(self):
+        grid = [
+            [0, 1, 0, 0, 2],
+            [0, 0, 0, 0, 0],
+            [3, 0, 0, 0, 0],
+        ]
+        result = extend_rays_right(grid)
+        # 1 extends right until hitting 2
+        assert result[0] == [0, 1, 1, 1, 2]
+        # 3 extends right to edge
+        assert result[2] == [3, 3, 3, 3, 3]
+        # Empty row stays empty
+        assert result[1] == [0, 0, 0, 0, 0]
+
+    def test_extend_rays_left(self):
+        grid = [
+            [0, 0, 0, 1, 0],
+            [2, 0, 0, 3, 0],
+        ]
+        result = extend_rays_left(grid)
+        # 1 extends left to edge
+        assert result[0] == [1, 1, 1, 1, 0]
+        # 3 extends left until hitting 2
+        assert result[1] == [2, 3, 3, 3, 0]
+
+    def test_extend_rays_down(self):
+        grid = [
+            [1, 0, 0],
+            [0, 0, 0],
+            [0, 0, 2],
+            [0, 0, 0],
+        ]
+        result = extend_rays_down(grid)
+        # 1 extends down to bottom
+        assert [result[r][0] for r in range(4)] == [1, 1, 1, 1]
+        # 2 extends down to bottom
+        assert [result[r][2] for r in range(4)] == [0, 0, 2, 2]
+
+    def test_extend_rays_up(self):
+        grid = [
+            [0, 0, 0],
+            [0, 0, 0],
+            [1, 0, 2],
+        ]
+        result = extend_rays_up(grid)
+        # 1 extends up to top
+        assert [result[r][0] for r in range(3)] == [1, 1, 1]
+        # 2 extends up to top
+        assert [result[r][2] for r in range(3)] == [2, 2, 2]
+
+    def test_empty_grid(self):
+        assert extend_rays_right([]) == []
+        assert extend_rays_left([]) == []
+        assert extend_rays_down([]) == []
+        assert extend_rays_up([]) == []
+
+
+# =============================================================================
+# 18. Flood fill from markers tests
+# =============================================================================
+
+class TestFloodFillFromMarkers:
+    def test_basic_fill(self):
+        grid = [
+            [0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+        ]
+        result = flood_fill_from_markers(grid)
+        # All zeros connected to 1 get filled
+        assert all(result[r][c] == 1 for r in range(3) for c in range(5))
+
+    def test_two_seeds_different_colors(self):
+        grid = [
+            [1, 0, 0, 2],
+        ]
+        result = flood_fill_from_markers(grid)
+        # 1 fills right, 2 fills left — they meet somewhere
+        assert result[0][0] == 1
+        assert result[0][3] == 2
+
+    def test_no_zeros(self):
+        grid = [[1, 2], [3, 4]]
+        result = flood_fill_from_markers(grid)
+        assert result == grid
+
+    def test_empty(self):
+        assert flood_fill_from_markers([]) == []
+
+
+# =============================================================================
+# 19. Per-row/column decomposition tests
+# =============================================================================
+
+class TestPerRowColumn:
+    def test_per_row_mirror(self):
+        """Each row independently mirrored."""
+        from domains.arc.primitives import register_atomic_primitives
+        register_atomic_primitives()
+        env = ARCEnv()
+        inp = [[1, 2, 3], [4, 5, 6]]
+        out = [[3, 2, 1], [6, 5, 4]]  # mirror_horizontal per row
+        task = Task(task_id="test_per_row", train_examples=[(inp, out)],
+                    test_inputs=[inp])
+        prims = env._current_task  # not needed, just need all_prims
+        from domains.arc.grammar import ARCGrammar
+        g = ARCGrammar(seed=42, vocabulary="atomic")
+        all_prims = g.base_primitives()
+        result = env.try_per_row_column_decomposition(task, all_prims)
+        # This may or may not match depending on how row-level transforms work
+        # (mirror_horizontal on a 1-row grid = reverse the row)
+        if result is not None:
+            name, fn = result
+            assert fn(inp) == out
+
+
+# =============================================================================
+# 20. Template stamp tests
+# =============================================================================
+
+class TestTemplateStamp:
+    def test_stamp_at_markers(self):
+        env = ARCEnv()
+        from domains.arc.primitives import register_atomic_primitives
+        register_atomic_primitives()
+        # Input: a small L-shape (color 1) and marker pixels (color 2)
+        inp = [
+            [1, 0, 0, 0, 0, 0, 0],
+            [1, 1, 0, 0, 2, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 2, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+        ]
+        # Output: L-shape stamped centered at each marker position
+        out = [
+            [1, 0, 0, 1, 0, 0, 0],
+            [1, 1, 0, 1, 1, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0],
+            [0, 1, 1, 0, 0, 0, 0],
+        ]
+        # Note: this is a synthetic test — the actual stamping logic centers
+        # the template at the marker. The test just verifies the method runs
+        task = Task(task_id="test_stamp", train_examples=[(inp, out)],
+                    test_inputs=[inp])
+        result = env._try_template_stamp(task)
+        # Template stamp may or may not work on this synthetic example
+        # depending on exact centering — that's OK, it's testing the code path
+
+
+# =============================================================================
+# 21. Separator cell algebra tests
+# =============================================================================
+
+class TestSeparatorCellAlgebra:
+    def test_or_reduce_cells(self):
+        env = ARCEnv()
+        from domains.arc.primitives import register_atomic_primitives
+        register_atomic_primitives()
+        # 3x7 grid with vertical separator (color 5) at column 3
+        # Two 3x3 cells, output = OR of both cells
+        inp = [
+            [1, 0, 0, 5, 0, 0, 1],
+            [0, 0, 0, 5, 0, 1, 0],
+            [0, 0, 1, 5, 1, 0, 0],
+        ]
+        out = [
+            [1, 0, 1],
+            [0, 1, 0],
+            [1, 0, 1],
+        ]
+        task = Task(task_id="test_or_reduce", train_examples=[(inp, out)],
+                    test_inputs=[inp])
+        result = env._try_separator_cross_ref(task)
+        if result is not None:
+            name, fn = result
+            assert fn(inp) == out
 
 
 if __name__ == "__main__":

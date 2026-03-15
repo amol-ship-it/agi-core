@@ -353,6 +353,114 @@ def fill_enclosed(grid: Grid) -> Grid:
 
 
 # =============================================================================
+# Ray extension transforms (4) — extend colored pixels in a direction
+# =============================================================================
+
+def extend_rays_right(grid: Grid) -> Grid:
+    """Extend each non-zero pixel rightward until hitting another non-zero pixel or edge."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                for cc in range(c + 1, w):
+                    if grid[r][cc] != 0:
+                        break
+                    result[r][cc] = grid[r][c]
+    return result
+
+
+def extend_rays_left(grid: Grid) -> Grid:
+    """Extend each non-zero pixel leftward until hitting another non-zero pixel or edge."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w - 1, -1, -1):
+            if grid[r][c] != 0:
+                for cc in range(c - 1, -1, -1):
+                    if grid[r][cc] != 0:
+                        break
+                    result[r][cc] = grid[r][c]
+    return result
+
+
+def extend_rays_down(grid: Grid) -> Grid:
+    """Extend each non-zero pixel downward until hitting another non-zero pixel or edge."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for c in range(w):
+        for r in range(h):
+            if grid[r][c] != 0:
+                for rr in range(r + 1, h):
+                    if grid[rr][c] != 0:
+                        break
+                    result[rr][c] = grid[r][c]
+    return result
+
+
+def extend_rays_up(grid: Grid) -> Grid:
+    """Extend each non-zero pixel upward until hitting another non-zero pixel or edge."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for c in range(w):
+        for r in range(h - 1, -1, -1):
+            if grid[r][c] != 0:
+                for rr in range(r - 1, -1, -1):
+                    if grid[rr][c] != 0:
+                        break
+                    result[rr][c] = grid[r][c]
+    return result
+
+
+# =============================================================================
+# Flood fill from markers (1) — paint bucket from each non-zero seed
+# =============================================================================
+
+def flood_fill_from_markers(grid: Grid) -> Grid:
+    """Flood fill connected zero regions from adjacent non-zero seed pixels.
+
+    For each non-zero pixel, fill all connected zero-valued neighbors with
+    that pixel's color (like paint bucket tool). Processes seeds in
+    reading order (top-left to bottom-right).
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                color = grid[r][c]
+                # BFS into adjacent zeros
+                for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    nr, nc = r + dr, c + dc
+                    if (0 <= nr < h and 0 <= nc < w
+                            and result[nr][nc] == 0):
+                        # Flood fill this connected zero region
+                        queue = [(nr, nc)]
+                        result[nr][nc] = color
+                        qi = 0
+                        while qi < len(queue):
+                            cr, cc = queue[qi]
+                            qi += 1
+                            for d2r, d2c in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                                n2r, n2c = cr + d2r, cc + d2c
+                                if (0 <= n2r < h and 0 <= n2c < w
+                                        and result[n2r][n2c] == 0):
+                                    result[n2r][n2c] = color
+                                    queue.append((n2r, n2c))
+    return result
+
+
+# =============================================================================
 # Connected component labeling (1) — truly atomic, single BFS
 # =============================================================================
 
@@ -565,7 +673,7 @@ def _downscale_factory(n: int):
 def build_atomic_primitives() -> list[Primitive]:
     """Build the truly atomic transformation primitives.
 
-    26 unary transforms + 2 binary (overlay, mask_by) = 28 total.
+    31 unary transforms + 2 binary (overlay, mask_by) = 33 total.
     Each performs exactly ONE visual concept.
 
     crop_to_content is NOT a primitive — it's compositional:
@@ -604,6 +712,13 @@ def build_atomic_primitives() -> list[Primitive]:
         # Fill (2)
         ("fill_enclosed",               fill_enclosed),
         ("border_extend",               border_extend),
+        # Ray extension (4) — extend colored pixels in a direction
+        ("extend_rays_right",           extend_rays_right),
+        ("extend_rays_left",            extend_rays_left),
+        ("extend_rays_down",            extend_rays_down),
+        ("extend_rays_up",              extend_rays_up),
+        # Flood fill from markers (1) — paint bucket from seeds
+        ("flood_fill_from_markers",     flood_fill_from_markers),
         # Connected component labeling (1) — single BFS, truly atomic
         ("label_components",            label_components),
     ]
