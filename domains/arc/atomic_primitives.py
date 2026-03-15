@@ -30,6 +30,12 @@ from .primitives import (
     binarize, invert_colors,
     # Placement — reuse directly
     overlay, tile_2x2,
+    # Perception — atomic perception primitives
+    gravity_down, fill_enclosed,
+    keep_largest_object_only, keep_smallest_object_only,
+    extract_largest_object, extract_smallest_object,
+    extend_lines_to_contact, complete_sym_90,
+    complete_symmetry_h, complete_symmetry_v,
     # Task color primitives — reuse for atomic subset
     build_task_color_primitives,
     _make_keep_color, _make_erase_color, _make_replace_color,
@@ -272,9 +278,11 @@ def make_conditional_objects(
 # =============================================================================
 
 def build_atomic_primitives() -> list[Primitive]:
-    """Build the atomic primitives vocabulary (~27 ops + overlay).
+    """Build the atomic primitives vocabulary (~31 ops + overlay).
 
-    Each performs exactly ONE visual concept. No embedded object detection.
+    Each performs exactly ONE visual concept: either an action (transform
+    pixels) or a perception (detect structure). Composition of these
+    discovers higher-level operations through compounding.
     """
     unary_ops = [
         # --- Geometric (6): reuse from primitives.py ---
@@ -308,6 +316,20 @@ def build_atomic_primitives() -> list[Primitive]:
         # --- Morphological (2): new ---
         ("dilate",                      dilate),
         ("erode",                       erode),
+
+        # --- Perception (10): atomic perception primitives ---
+        # Each does ONE perception task. Composition of these + action
+        # primitives can discover higher-level operations.
+        ("gravity_down",                gravity_down),
+        ("fill_enclosed",               fill_enclosed),
+        ("keep_largest_component",      keep_largest_object_only),
+        ("keep_smallest_component",     keep_smallest_object_only),
+        ("extract_largest_object",      extract_largest_object),
+        ("extract_smallest_object",     extract_smallest_object),
+        ("extend_lines",               extend_lines_to_contact),
+        ("complete_symmetry_90",        complete_sym_90),
+        ("complete_symmetry_h",         complete_symmetry_h),
+        ("complete_symmetry_v",         complete_symmetry_v),
     ]
 
     prims = []

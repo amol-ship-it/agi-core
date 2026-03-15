@@ -302,10 +302,10 @@ class TestBuildAtomicPrimitives:
 
     def test_build_count(self):
         prims = build_atomic_primitives()
-        # 7 geometric + 6 spatial + 3 scale + 2 color + 1 tile + 2 morphological
-        # + 1 overlay = 22
-        assert len(prims) >= 20
-        assert len(prims) <= 30
+        # 6 geometric + 6 spatial + 3 scale + 2 color + 1 tile + 2 morphological
+        # + 10 perception + 1 overlay = 31
+        assert len(prims) >= 28
+        assert len(prims) <= 40
 
     def test_all_have_names(self):
         for p in build_atomic_primitives():

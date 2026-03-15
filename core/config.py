@@ -52,7 +52,7 @@ class SearchConfig:
 @dataclass
 class SleepConfig:
     """Knobs for the sleep/consolidation phase."""
-    min_occurrences: int = 2      # sub-tree must appear in >= N solutions
+    min_occurrences: int = 1      # sub-tree must appear in >= N solutions/near-misses
     min_size: int = 2             # sub-tree must have >= N nodes
     max_library_size: int = 500   # cap on total library entries
     usefulness_decay: float = 0.95  # decay old entries each sleep cycle

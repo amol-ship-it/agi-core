@@ -637,7 +637,7 @@ class TestConfigDefaults(unittest.TestCase):
 
     def test_sleep_config_defaults(self):
         cfg = SleepConfig()
-        self.assertEqual(cfg.min_occurrences, 2)
+        self.assertEqual(cfg.min_occurrences, 1)
         self.assertEqual(cfg.max_library_size, 500)
 
     def test_curriculum_config_defaults(self):
