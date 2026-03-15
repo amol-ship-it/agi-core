@@ -687,6 +687,11 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         print(f"  Compute cap: {compute_cap:,} ops (cell-normalized)")
     else:
         print(f"  Compute cap: unlimited")
+    print(f"  Exhaustive: depth={cfg.exhaustive_depth}, "
+          f"pair_top_k={cfg.exhaustive_pair_top_k}, "
+          f"triple_top_k={cfg.exhaustive_triple_top_k}")
+    if cfg.sequential_compounding:
+        print(f"  Sequential compounding: ON")
 
     print()
     hline("\u2500")
@@ -922,6 +927,10 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             "vocabulary": getattr(cfg.grammar, '_vocabulary', 'unknown'),
             "n_primitives": len(cfg.grammar.base_primitives()),
             "compute_cap": compute_cap,
+            "exhaustive_depth": cfg.exhaustive_depth,
+            "exhaustive_pair_top_k": cfg.exhaustive_pair_top_k,
+            "exhaustive_triple_top_k": cfg.exhaustive_triple_top_k,
+            "sequential_compounding": cfg.sequential_compounding,
             "machine": machine,
         },
         "summary": {
