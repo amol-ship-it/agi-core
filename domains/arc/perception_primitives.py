@@ -149,6 +149,76 @@ def n_objects(grid: Grid) -> int:
 
 
 # =============================================================================
+# Structural perception: detect grid structure
+# =============================================================================
+
+def largest_object_color(grid: Grid) -> int:
+    """Return the color of the largest connected foreground component."""
+    if not grid or not grid[0]:
+        return 0
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    bg = Counter(flat).most_common(1)[0][0]
+    h, w = len(grid), len(grid[0])
+    visited = set()
+    largest_size = 0
+    largest_color = 0
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != bg and (r, c) not in visited:
+                color = grid[r][c]
+                size = 0
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop()
+                    size += 1
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if (0 <= nr < h and 0 <= nc < w
+                                and (nr, nc) not in visited
+                                and grid[nr][nc] != bg):
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                if size > largest_size:
+                    largest_size = size
+                    largest_color = color
+    return largest_color
+
+
+def smallest_object_color(grid: Grid) -> int:
+    """Return the color of the smallest connected foreground component."""
+    if not grid or not grid[0]:
+        return 0
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    bg = Counter(flat).most_common(1)[0][0]
+    h, w = len(grid), len(grid[0])
+    visited = set()
+    smallest_size = float('inf')
+    smallest_color = 0
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != bg and (r, c) not in visited:
+                color = grid[r][c]
+                size = 0
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop()
+                    size += 1
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if (0 <= nr < h and 0 <= nc < w
+                                and (nr, nc) not in visited
+                                and grid[nr][nc] != bg):
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                if size < smallest_size:
+                    smallest_size = size
+                    smallest_color = color
+    return smallest_color
+
+
+# =============================================================================
 # Build functions
 # =============================================================================
 
@@ -169,6 +239,8 @@ def build_perception_primitives() -> list[Primitive]:
         ("grid_width",           grid_width),
         ("grid_min_dim",         grid_min_dim),
         ("n_objects",            n_objects),
+        ("largest_object_color", largest_object_color),
+        ("smallest_object_color", smallest_object_color),
     ]
     return [
         Primitive(name=name, arity=0, fn=fn, domain="arc", kind="perception")
