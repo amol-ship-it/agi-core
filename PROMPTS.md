@@ -494,4 +494,63 @@ Implement the Session 15 plan: 6 changes to improve search strategies based on n
 
 ---
 
+## Session 16 — Per-Example Discrete Solve Scoring (2026-03-15)
+
+### Prompt 1: Implement Per-Example Solve Scoring Plan
+
+> Implement the plan for per-example discrete solve scoring for better compounding.
+
+**Changes made:**
+- Added `example_solve_score` field to `ScoredProgram` in `core/types.py`
+- Added `example_solve_exponent` to `SleepConfig` in `core/config.py`
+- Computed `example_solve_score` in `_evaluate_program` and `_evaluate_on_test`
+- Added `_unsolved_quality` helper for sleep phase quality weighting
+- Added `test_solve_score` to `WakeResult`
+- 6 new tests, all passing (440 total)
+- Sweet-spot analysis: exponents 1.5, 2.0, 3.0 — chose 2.0
+
+### Prompt 2: Reintroduce Contest Mode
+
+> Would it make sense to reintroduce contest mode with higher compute cap and exploration depth? Because we have stripped down the primitives to only be atomic, I think it might help. However, let us be data driven about this and validate the hypothesis. Also, follow instructions in CLAUDE.md. Update all documentation including code/test comments, README.md, PROMPTS.md and DECISIONS.md
+
+**Changes made:**
+- Reintroduced `contest` preset: 50M compute cap, beam 30×15, pair_top_k=48, triple_top_k=20, 3 rounds
+- Added `beam_width`, `max_generations` to ExperimentConfig and resolve_from_preset
+- Updated __main__.py to forward preset beam/top-K settings
+- Measured: default 33/400 → contest 43/400 train (+30%), eval stable 8-9
+- Contest R1 alone: 36 vs 24 (+50%) from wider search
+- Overfit trade-off: 2→9 (more task-specific solutions that don't generalize)
+- 1 new test (contest preset), all 441 tests pass
+- Updated README.md presets table, expected performance, options table
+- Decision 121 with full measured results
+
+## Session 17 — -log Scoring + Primitive ROI Tracking (2026-03-15)
+
+### Prompt 1: Implement -log Scoring + Primitive ROI Plan
+
+> Implement the plan: 3-Level -log Scoring + Primitive ROI Tracking
+
+**Changes made:**
+- **Part A: -log(similarity) transform**: Applied `-log(similarity)` in ARCDrive (was `1-similarity`), removed max-error blending in `_evaluate_program` (redundant in -log space), changed `_unsolved_quality` to `exp(-error)` (maps [0,∞)→(0,1])
+- **Part B: Primitive ROI tracking**: Added `get_primitive_scores`/`update_primitive_score` to Memory interface, implemented in InMemoryStore, credit primitives during sleep (solved=1.0, unsolved=quality), decay alongside library entries, ROI-blended pool ordering in `_exhaustive_enumerate`, persist in culture JSON
+- **Part C: Tests**: Updated 4 ARC drive tests for -log scale, added 2 new ARC tests (log_scale_partial, log_scale_near_perfect), updated 2 quality tests, added 4 primitive scoring tests (default_empty, credit_solved, decay, persist_culture). 441→447 tests, all pass.
+- **Part D: Documentation**: Decision 122, updated README.md scoring description and performance numbers
+- Measured: default 34/400 train (8.5%, was 33/400), eval 9/400 (2.2%), compounding 23→34
+
+---
+
+## Session 18 — Unified Compute Budget & ROI-Driven Search (2026-03-15)
+
+### Prompt 1: Implement Unified Compute Budget Plan
+
+> Implement: Auto-derive all search params from compute budget, simplify presets, seed library ROI in sleep.
+
+**Changes made:**
+- **Part A: Auto-derive search params**: Added `derive_search_params()` and `derive_rounds()` to `core/config.py`. Simplified PRESETS to compute_cap only. Rewrote `resolve_from_preset()` to auto-derive. Changed CLI pair/triple top-k defaults to None (sentinel). Contest mode auto-derives identical params to old hand-tuned values.
+- **Part B: Library ROI seeding**: In sleep, accepted library entries get primitive_score seeded at `usefulness * 0.1`. Closes feedback loop: high-usefulness entries get search priority via ROI-blended pool ordering.
+- **Part C: Tests**: Added 11 new tests (derive params low/medium/high budget, monotonic, derive rounds, resolve auto-derives, CLI override, preset minimal keys, library ROI seeded in sleep). 452→458 tests, all pass.
+- **Part D: Documentation**: Decision 123, updated README presets section, updated CLI flags.
+
+---
+
 *This document will be updated with each new session.*

@@ -82,18 +82,18 @@ def _safe_dumps(obj, **kwargs):
 # =============================================================================
 
 PRESETS = {
-    # Quick: fast dev loop. 50 tasks, 2 rounds (sweet spot: +33% solves).
+    # Quick: fast dev loop. 50 tasks, auto-derived search from 500K budget.
     "quick": {
-        "rounds": 2,
-        "max_tasks": 50,
         "compute_cap": 500_000,
+        "max_tasks": 50,
     },
-    # Default: full dataset, 2 rounds (sweet spot: +28% solves, 18→23/400).
-    # Round 3 adds only 1 more solve for 75s more — not worth it.
+    # Default: full dataset, auto-derived search from 3M budget.
     "default": {
-        "rounds": 2,
-        "max_tasks": 0,
         "compute_cap": 3_000_000,
+    },
+    # Contest: maximum accuracy. 50M budget auto-derives wide pools + beam.
+    "contest": {
+        "compute_cap": 50_000_000,
     },
 }
 
@@ -232,7 +232,11 @@ def make_parser(description: str, domain_name: str = "experiment") -> argparse.A
 Presets (the only knob most users need):
   quick     Fast dev loop (~25s, 50 tasks, 500K compute cap)
   default   Full dataset (all tasks, 3M compute cap)
-  contest   Maximum accuracy (all tasks, 100M compute cap, beam search)
+  contest   Maximum accuracy (all tasks, 50M compute cap)
+
+All search parameters (beam width, pair/triple pool sizes, rounds) are
+auto-derived from the compute budget. Use --exhaustive-pair-top-k or
+--exhaustive-triple-top-k to override specific values.
 
 Compute cap examples:
   --compute-cap 50M          # 50 million (cell-normalized per task)
@@ -267,10 +271,10 @@ Examples:
                              "(for hyperparameter sweeps). Data files still saved.")
     parser.add_argument("--exhaustive-depth", type=int, default=3,
                         help="Exhaustive enumeration depth (0=disabled, 2=pairs, 3=triples)")
-    parser.add_argument("--exhaustive-pair-top-k", type=int, default=40,
-                        help="Top-K singles for pair exhaustion (default 40)")
-    parser.add_argument("--exhaustive-triple-top-k", type=int, default=15,
-                        help="Top-K singles for triple exhaustion (default 15)")
+    parser.add_argument("--exhaustive-pair-top-k", type=int, default=None,
+                        help="Top-K singles for pair exhaustion (auto-derived from compute cap)")
+    parser.add_argument("--exhaustive-triple-top-k", type=int, default=None,
+                        help="Top-K singles for triple exhaustion (auto-derived from compute cap)")
     parser.add_argument("--sequential-compounding", action="store_true",
                         help="Process tasks sequentially with immediate concept promotion")
     parser.add_argument("--culture", type=str, default="",
@@ -493,6 +497,10 @@ class ExperimentConfig:
     exhaustive_pair_top_k: int = 40
     exhaustive_triple_top_k: int = 15
 
+    # Beam search (contest mode enables these; quick/default use 1×1 = off)
+    beam_width: int = 1
+    max_generations: int = 1
+
     # Sequential compounding
     sequential_compounding: bool = False
 
@@ -524,18 +532,34 @@ class ExperimentConfig:
     # 800 = median ARC grid size. Other domains can override.
     default_cell_size: int = 800
 
+    # Sleep phase: per-example solve score exponent (None = use SleepConfig default)
+    example_solve_exponent: float = None
 
-def resolve_from_preset(args, preset: dict) -> dict:
-    """Resolve argument values: explicit args override preset defaults."""
-    # CLI --compute-cap > 0 overrides preset; 0 means "use preset default"
+
+def resolve_from_preset(args, preset: dict, n_prims: int = 48,
+                        base_cell_size: int = 800) -> dict:
+    """Resolve: compute_cap → auto-derive all search params. CLI overrides win."""
+    from core.config import derive_search_params, derive_rounds
+
     preset_cap = preset.get("compute_cap", 0)
     args_cap = getattr(args, "compute_cap", 0)
-    explicit_cap = args_cap if args_cap > 0 else preset_cap
+    compute_cap = args_cap if args_cap > 0 else preset_cap
+
+    eval_budget = max(compute_cap // base_cell_size, 500) if compute_cap > 0 else 0
+    derived = derive_search_params(eval_budget, n_prims)
+
+    # CLI overrides (None = not explicitly set by user)
+    if getattr(args, "exhaustive_pair_top_k", None) is not None:
+        derived["exhaustive_pair_top_k"] = args.exhaustive_pair_top_k
+    if getattr(args, "exhaustive_triple_top_k", None) is not None:
+        derived["exhaustive_triple_top_k"] = args.exhaustive_triple_top_k
+
     return {
-        "rounds": args.rounds if args.rounds is not None else preset["rounds"],
-        "max_tasks": args.max_tasks if args.max_tasks is not None else preset["max_tasks"],
+        "rounds": args.rounds if args.rounds is not None else derive_rounds(compute_cap),
+        "max_tasks": args.max_tasks if args.max_tasks is not None else preset.get("max_tasks", 0),
         "workers": args.workers if args.workers > 0 else Learner.performance_core_count(),
-        "compute_cap": explicit_cap,
+        "compute_cap": compute_cap,
+        **derived,
     }
 
 
@@ -740,14 +764,22 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             print(f"\n  Culture loaded: {len(memory.get_library())} library entries, "
                   f"{len(memory.get_solutions())} solutions")
 
+    sleep_cfg = SleepConfig()
+    # Allow exponent override from config or environment
+    if hasattr(cfg, 'example_solve_exponent') and cfg.example_solve_exponent is not None:
+        sleep_cfg.example_solve_exponent = cfg.example_solve_exponent
+    env_exp = os.environ.get("EXAMPLE_SOLVE_EXPONENT")
+    if env_exp:
+        sleep_cfg.example_solve_exponent = float(env_exp)
+
     learner = Learner(
         environment=cfg.environment,
         grammar=cfg.grammar,
         drive=cfg.drive,
         memory=memory,
         search_config=SearchConfig(
-            beam_width=1,
-            max_generations=1,
+            beam_width=cfg.beam_width,
+            max_generations=cfg.max_generations,
             energy_alpha=cfg.energy_alpha,
             energy_beta=cfg.energy_beta,
             solve_threshold=cfg.solve_threshold,
@@ -758,6 +790,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             eval_budget=eval_budget,
             verbose=not cfg.batch,
         ),
+        sleep_config=sleep_cfg,
     )
 
     if not cfg.batch:

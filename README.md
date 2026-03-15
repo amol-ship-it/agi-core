@@ -157,25 +157,29 @@ The console output ends with a **SOLVED TASKS** section listing every solved tas
 
 ## Presets
 
-Two modes. Pick one. That's the only knob most users need.
+Three modes. Pick one. That's the only knob most users need.
 
-| Mode | Tasks | Rounds | Compute Cap | Use case |
-|------|-------|--------|-------------|----------|
-| `quick` | 50 | 2 | 500K | Fast dev loop (~5s) |
-| `default` | all (400) | 2 | 3M | Full benchmark (~2 min) |
+| Mode | Tasks | Compute Cap | Use case |
+|------|-------|-------------|----------|
+| `quick` | 50 | 500K | Fast dev loop (~5s) |
+| `default` | all (400) | 3M | Full benchmark (~2 min) |
+| `contest` | all (400) | 50M | Maximum accuracy (~12 min) |
+
+Presets differ only in compute budget. All search parameters — rounds, pair/triple pool sizes, beam width — are **auto-derived** from the compute cap via `derive_search_params()`. Higher budget → wider search pools → more solves on a single diminishing-returns curve. CLI flags like `--exhaustive-pair-top-k` override auto-derived values when explicitly set.
 
 All runs use **atomic vocabulary** — 48 truly atomic primitives (22 transforms + 18 perception + 8 parameterized). Each primitive is one intuitive visual concept. 12 predicates enable conditional branching. Compositional operations like crop_to_content = trim_cols(trim_rows(x)) must be discovered through composition. Structural search strategies (per-object, cross-reference, conditional, scale/tile detection) compose these same primitives in structurally different ways.
 
-Both presets default to **2 rounds** (the measured sweet spot — see below). Results are fully deterministic with **seed 42** (`PYTHONHASHSEED=0` is enforced automatically).
+Rounds are auto-derived: 2 for budget ≥200K, 3 for ≥20M. Results are fully deterministic with **seed 42** (`PYTHONHASHSEED=0` is enforced automatically).
 
 **Rounds sweet spot** (measured 2026-03-15):
 
 | Mode | 1 round | 2 rounds | 3 rounds |
 |------|---------|----------|----------|
 | quick (50 tasks) | 3/50 (6%) 3s | **4/50 (8%) 5s** | 6/50 (12%) 10s |
-| default (400 tasks) | 24/400 (6.0%) 40s | **33/400 (8.2%) 100s** | 33/400 (8.2%) 170s |
+| default (400 tasks) | 23/400 (5.8%) 39s | **34/400 (8.5%) 97s** | — |
+| contest (400 tasks) | 35/400 (8.8%) 187s | 39/400 (9.8%) 194s | **40/400 (10.0%) 214s** |
 
-Round 2 gives +36% solves. Round 3 adds +3% for 2× more time.
+Default: round 2 gives +36% solves. Contest: +50% over default R1 from wider search; 3 rounds compounds further. Contest trades ~6× wall time for +30% more solves.
 
 **Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
@@ -185,15 +189,17 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 ### Expected performance
 
-**ARC-AGI-1** (measured 2026-03-15, 3 rounds with compounding):
+**ARC-AGI-1** (measured 2026-03-15):
 
-| Round | Training (400 tasks) | Library entries | Eval (400 tasks) |
-|-------|---------------------|-----------------|-----------------|
-| 1 | 24/400 (6.0%) | 200 | 10/400 (2.5%) |
-| 2 | 33/400 (8.2%) | 200 | 9/400 (2.2%) |
-| 3 | 33/400 (8.2%) | 200 | 9/400 (2.2%) |
+| Mode | Round | Training (400) | Eval (400) | Library | Overfit |
+|------|-------|---------------|------------|---------|---------|
+| default | 1 | 23/400 (5.8%) | 9/400 (2.2%) | 200 | 1 |
+| default | 2 | 34/400 (8.5%) | 9/400 (2.2%) | 200 | 1 |
+| contest | 1 | 35/400 (8.8%) | 9/400 (2.2%) | 200 | 3 |
+| contest | 2 | 39/400 (9.8%) | 11/400 (2.8%) | 200 | 6 |
+| contest | 3 | 40/400 (10.0%) | 9/400 (2.2%) | 200 | 7 |
 
-Training compounds (+9 from library across rounds). Eval solves include library-transferred compositions. Per-object recolor (10 strategies including position-based) contributes ~30% of training solves.
+Contest mode finds +6 more training solutions (+18%) than default via wider exhaustive search and beam search. Eval peaks at 11 in R2 (vs 9 default). Overfit increases with more compute — wider search finds more task-specific solutions that don't generalize to test.
 
 Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
 
@@ -218,7 +224,7 @@ Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--domain` | (required) | Domain: `arc-agi-1`, `arc-agi-2`, `zork`, or `list-ops` |
-| `--mode` | `default` | Preset: `quick` or `default` |
+| `--mode` | `default` | Preset: `quick`, `default`, or `contest` |
 | `--run-mode` | `pipeline` | `pipeline` (train → eval per round) or `single` (train or eval only) |
 | `--split` | `training` | Data split for single mode: `training` or `evaluation` |
 | `--rounds` | `1` | Wake-sleep rounds (use 3+ for compounding) |
@@ -230,8 +236,8 @@ Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
 | `--compute-cap` | from preset | Per-task eval budget (cell-normalized). `0` = unlimited |
 | `--exhaustive-depth` | `3` | Exhaustive enumeration depth (`0`=off, `2`=pairs, `3`=triples) |
-| `--exhaustive-pair-top-k` | `40` | Top-K singles for pair enumeration pool |
-| `--exhaustive-triple-top-k` | `15` | Top-K singles for triple enumeration pool |
+| `--exhaustive-pair-top-k` | auto | Top-K singles for pair enumeration pool (auto-derived from compute cap) |
+| `--exhaustive-triple-top-k` | auto | Top-K singles for triple enumeration pool (auto-derived from compute cap) |
 | `--task-ids` | none | Comma-separated task IDs to run (prefix match) |
 | `--data-dir` | auto-detect | Path to data directory |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
@@ -247,7 +253,9 @@ Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
    - **Near-miss refinement**: takes programs with error < 20% and tries appending, prepending, or wrapping with binary ops (overlay, mask_by).
    - No-op pruning: primitives that don't change the grid are skipped at depth 2+.
 2. **SLEEP**: Analyze all solved programs and best unsolved attempts.
-   Extract recurring sub-programs, quality-weighted by accuracy (solved=1.0, unsolved=(1-error)×0.5).
+   Extract recurring sub-programs, quality-weighted by accuracy (solved=1.0, unsolved=max(exp(-error)×0.5, solve_score×0.5)).
+   Per-example solve scoring: `(k/n)^2` where k=examples solved perfectly — a 2/3-solver always beats a uniformly mediocre program.
+   **Primitive ROI tracking**: credit all primitives in program trees with quality weight; scores accumulate across tasks and decay each round.
    Promote transferable compositions (depth 2+) directly as library entries.
    Train composition priors (transition matrix) on all programs.
    Bounded library with eviction: reused entries are immune, weak entries displaced by better ones.
@@ -263,7 +271,7 @@ Every domain implements exactly 4 things:
 |-----------|-------------|---------------|---------|------|
 | **Environment** | Execute programs | Evaluate formula on x | Apply grid transform | Execute game action |
 | **Grammar** | Define primitives, compose/mutate | sin, cos, +, × | rotate, flip, crop | move, take, use |
-| **DriveSignal** | Score: error + complexity | MSE + node count | Pixel distance + size | Game score + novelty |
+| **DriveSignal** | Score: error + complexity | MSE + node count | -log(similarity) + size | Game score + novelty |
 | **Memory** | Store episodes, library, solutions | InMemoryStore | InMemoryStore | InMemoryStore |
 
 The core loop (`core/learner.py`) depends **only** on these interfaces. It never imports anything domain-specific.
@@ -281,9 +289,8 @@ The core loop (`core/learner.py`) depends **only** on these interfaces. It never
 COMPOUNDING CURVE (train / eval per round):
 Round         Train  Overfit  Library          Eval  Overfit
 ─────  ────────────  ───────  ───────  ────────────  ───────
-    1   24/400 (6.0%)        1      200    10/400 (2.5%)        2
-    2   33/400 (8.2%)        2      200     9/400 (2.2%)        2
-    3   33/400 (8.2%)        4      200     9/400 (2.2%)        2
+    1   23/400 (5.8%)        1      200     9/400 (2.2%)        2
+    2   34/400 (8.5%)        1      200     9/400 (2.2%)        2
 ```
 
 If solve rate increases across rounds without new hand-coded primitives, the framework is working.
@@ -305,7 +312,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 - **Composition depth bottleneck.** Depth-4+ compositions are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds builds up to depth-4+ but saturates quickly.
 - **Library diversity.** 200 library entries learned from training. Most entries are task-specific. Cross-task transfer remains the key challenge.
-- **Eval-train gap.** Training 8.2% vs eval 2.2% — structural strategies (per-object recolor) don't transfer to eval because the learned rules are task-specific.
+- **Eval-train gap.** Training 8.5% vs eval 2.2% — structural strategies (per-object recolor) don't transfer to eval because the learned rules are task-specific.
 
 ## Structure
 

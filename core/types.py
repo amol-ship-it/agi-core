@@ -120,6 +120,7 @@ class ScoredProgram:
     energy: float           # total energy = error + complexity cost
     prediction_error: float
     complexity_cost: float
+    example_solve_score: float = 0.0  # (k/n)^exp where k = examples solved perfectly
     task_id: str = ""
     metadata: dict = field(default_factory=dict)
 

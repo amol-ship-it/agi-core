@@ -1048,21 +1048,56 @@ class TestRunnerHelpers(unittest.TestCase):
         import argparse
         args = argparse.Namespace(
             rounds=None, max_tasks=None, workers=0, compute_cap=0,
+            exhaustive_pair_top_k=None, exhaustive_triple_top_k=None,
         )
         resolved = resolve_from_preset(args, PRESETS["quick"])
-        self.assertEqual(resolved["rounds"], 2)
+        self.assertEqual(resolved["rounds"], 2)  # auto-derived from 500K
         self.assertEqual(resolved["compute_cap"], 500_000)
+        # Auto-derived params present
+        self.assertIn("beam_width", resolved)
+        self.assertIn("exhaustive_pair_top_k", resolved)
+        self.assertIn("exhaustive_triple_top_k", resolved)
 
     def test_resolve_from_preset_overrides(self):
         from common.benchmark import resolve_from_preset, PRESETS
         import argparse
         args = argparse.Namespace(
             rounds=5, max_tasks=10, workers=4, compute_cap=0,
+            exhaustive_pair_top_k=None, exhaustive_triple_top_k=None,
         )
         resolved = resolve_from_preset(args, PRESETS["quick"])
         self.assertEqual(resolved["rounds"], 5)
         self.assertEqual(resolved["max_tasks"], 10)
         self.assertEqual(resolved["workers"], 4)
+
+    def test_resolve_from_preset_contest(self):
+        """Contest preset auto-derives wide pools and beam search from 50M budget."""
+        from common.benchmark import resolve_from_preset, PRESETS
+        import argparse
+        args = argparse.Namespace(
+            rounds=None, max_tasks=None, workers=0, compute_cap=0,
+            exhaustive_pair_top_k=None, exhaustive_triple_top_k=None,
+        )
+        resolved = resolve_from_preset(args, PRESETS["contest"])
+        self.assertEqual(resolved["rounds"], 3)  # auto: 50M >= 20M
+        self.assertEqual(resolved["compute_cap"], 50_000_000)
+        # Auto-derived: wide pools and beam from 50M budget
+        self.assertEqual(resolved["exhaustive_pair_top_k"], 48)
+        self.assertEqual(resolved["exhaustive_triple_top_k"], 20)
+        self.assertGreater(resolved["beam_width"], 1)
+        self.assertGreater(resolved["max_generations"], 1)
+
+    def test_resolve_cli_override_wins(self):
+        """Explicit CLI pair/triple top-k overrides auto-derived values."""
+        from common.benchmark import resolve_from_preset, PRESETS
+        import argparse
+        args = argparse.Namespace(
+            rounds=None, max_tasks=None, workers=0, compute_cap=0,
+            exhaustive_pair_top_k=25, exhaustive_triple_top_k=10,
+        )
+        resolved = resolve_from_preset(args, PRESETS["default"])
+        self.assertEqual(resolved["exhaustive_pair_top_k"], 25)
+        self.assertEqual(resolved["exhaustive_triple_top_k"], 10)
 
 
     def test_task_ids_filtering(self):
@@ -1115,6 +1150,14 @@ class TestRunnerHelpers(unittest.TestCase):
         from common.benchmark import PRESETS
         self.assertEqual(PRESETS["quick"]["compute_cap"], 500_000)
         self.assertEqual(PRESETS["default"]["compute_cap"], 3_000_000)
+        self.assertEqual(PRESETS["contest"]["compute_cap"], 50_000_000)
+
+    def test_preset_keys_minimal(self):
+        """Presets only contain compute_cap (+ max_tasks for quick)."""
+        from common.benchmark import PRESETS
+        self.assertEqual(set(PRESETS["quick"].keys()), {"compute_cap", "max_tasks"})
+        self.assertEqual(set(PRESETS["default"].keys()), {"compute_cap"})
+        self.assertEqual(set(PRESETS["contest"].keys()), {"compute_cap"})
 
 
 class TestSimplifyProgram(unittest.TestCase):
@@ -1188,6 +1231,250 @@ class TestSimplifyProgram(unittest.TestCase):
         original = self.learner._evaluate_program(prog, task)
         result = self.learner._try_simplify(original, task)
         self.assertIs(result, original)
+
+
+class TestExampleSolveScore(unittest.TestCase):
+    """Tests for per-example discrete solve scoring."""
+
+    def setUp(self):
+        self.learner = _make_learner()
+
+    def test_example_solve_score_all_solved(self):
+        """Identity program on identity task → score 1.0."""
+        task = _make_identity_task()
+        prog = Program(root="identity")
+        scored = self.learner._evaluate_program(prog, task)
+        self.assertAlmostEqual(scored.example_solve_score, 1.0, places=4)
+
+    def test_example_solve_score_none_solved(self):
+        """Wrong program → score 0.0."""
+        task = _make_identity_task()
+        prog = Program(root="double")  # double ≠ identity
+        scored = self.learner._evaluate_program(prog, task)
+        self.assertAlmostEqual(scored.example_solve_score, 0.0, places=4)
+
+    def test_example_solve_score_partial(self):
+        """2/3 solved → score ≈ 0.444 with exponent=2."""
+        # Task: outputs [5, 6, 14]. identity solves (5,5) and mismatch on rest.
+        # We need a program that solves exactly 2 out of 3 examples.
+        # Use identity on a task where 2 examples have input==output, 1 doesn't.
+        task = Task(
+            task_id="partial",
+            train_examples=[(5.0, 5.0), (3.0, 3.0), (7.0, 14.0)],
+            test_inputs=[], test_outputs=[],
+        )
+        prog = Program(root="identity")
+        scored = self.learner._evaluate_program(prog, task)
+        expected_score = (2.0 / 3.0) ** 2  # ≈ 0.444
+        self.assertAlmostEqual(scored.example_solve_score, expected_score, places=3)
+
+    def test_example_solve_score_default_zero(self):
+        """Backward compat: ScoredProgram() defaults to 0.0."""
+        sp = ScoredProgram(
+            program=Program(root="identity"),
+            energy=0.0,
+            prediction_error=0.0,
+            complexity_cost=0.0,
+        )
+        self.assertEqual(sp.example_solve_score, 0.0)
+
+    def test_unsolved_quality_with_example_score(self):
+        """2/3-solver beats uniformly mediocre program with same avg_error."""
+        from core.config import SleepConfig
+        cfg = SleepConfig()
+
+        # 2/3-solver: high avg_error (one example failed badly), but 2/3 perfect
+        # base_quality = exp(-0.60) * 0.5 = 0.274
+        # discrete_quality = 0.444 * 0.5 = 0.222 → max picks base (exp wins)
+        # But with higher error, discrete may win:
+        solver_2of3 = ScoredProgram(
+            program=Program(root="a"),
+            energy=0.5, prediction_error=1.5,
+            complexity_cost=0.01, example_solve_score=(2.0/3.0)**2,
+        )
+        # Uniformly mediocre: same avg_error, no examples solved perfectly
+        # base_quality = exp(-1.5) * 0.5 = 0.112
+        mediocre = ScoredProgram(
+            program=Program(root="b"),
+            energy=0.5, prediction_error=1.5,
+            complexity_cost=0.01, example_solve_score=0.0,
+        )
+        q_solver = self.learner._unsolved_quality(solver_2of3, cfg)
+        q_mediocre = self.learner._unsolved_quality(mediocre, cfg)
+        self.assertGreater(q_solver, q_mediocre)
+
+    def test_unsolved_quality_backward_compat(self):
+        """score=0 gives exp(-error) * unsolved_weight."""
+        from core.config import SleepConfig
+        cfg = SleepConfig()
+
+        sp = ScoredProgram(
+            program=Program(root="a"),
+            energy=0.5, prediction_error=0.4,
+            complexity_cost=0.01, example_solve_score=0.0,
+        )
+        quality = self.learner._unsolved_quality(sp, cfg)
+        expected = math.exp(-0.4) * cfg.unsolved_weight
+        self.assertAlmostEqual(quality, expected, places=6)
+
+    # --- Primitive ROI scoring tests ---
+
+    def test_primitive_scores_default_empty(self):
+        """New memory has empty primitive scores."""
+        mem = InMemoryStore()
+        self.assertEqual(mem.get_primitive_scores(), {})
+
+    def test_primitive_scores_credit_solved(self):
+        """Crediting a solved program increases primitive scores."""
+        task = Task(
+            task_id="roi_test",
+            train_examples=[(5.0, 5.0)],
+            test_inputs=[], test_outputs=[],
+        )
+        prog = Program(root="identity", children=[Program(root="double")])
+        sp = ScoredProgram(
+            program=prog, energy=0.0,
+            prediction_error=0.0, complexity_cost=1.0,
+        )
+        self.learner.memory.store_solution("roi_test", sp)
+        self.learner.sleep()
+        scores = self.learner.memory.get_primitive_scores()
+        self.assertIn("identity", scores)
+        self.assertIn("double", scores)
+        self.assertGreater(scores["identity"], 0.0)
+        self.assertGreater(scores["double"], 0.0)
+
+    def test_primitive_scores_decay(self):
+        """Decay reduces primitive scores by (1 - decay) factor."""
+        self.learner.memory.update_primitive_score("test_prim", 10.0)
+        scores_before = self.learner.memory.get_primitive_scores()
+        self.assertAlmostEqual(scores_before["test_prim"], 10.0)
+
+        # Manually apply decay logic (same as sleep does)
+        decay = self.learner.sleep_cfg.usefulness_decay
+        prim_scores = self.learner.memory.get_primitive_scores()
+        for name, score in prim_scores.items():
+            self.learner.memory.update_primitive_score(
+                name, score * (decay - 1))
+
+        scores_after = self.learner.memory.get_primitive_scores()
+        expected = 10.0 * decay
+        self.assertAlmostEqual(scores_after["test_prim"], expected, places=4)
+
+    def test_primitive_scores_persist_culture(self):
+        """Primitive scores survive save/load culture cycle."""
+        import tempfile, os
+        self.learner.memory.update_primitive_score("prim_a", 5.0)
+        self.learner.memory.update_primitive_score("prim_b", 3.0)
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            self.learner.memory.save_culture(path)
+            new_mem = InMemoryStore()
+            new_mem.load_culture(path)
+            scores = new_mem.get_primitive_scores()
+            self.assertAlmostEqual(scores["prim_a"], 5.0)
+            self.assertAlmostEqual(scores["prim_b"], 3.0)
+        finally:
+            os.unlink(path)
+
+    def test_library_roi_seeded_in_sleep(self):
+        """After sleep promotes a library entry, its name appears in primitive_scores."""
+        # Create a solved program with ≥ 2 nodes (sleep extracts it)
+        prog = Program(root="identity", children=[Program(root="double")])
+        sp = ScoredProgram(
+            program=prog, energy=0.0,
+            prediction_error=0.0, complexity_cost=1.0,
+        )
+        self.learner.memory.store_solution("roi_seed_test", sp)
+        self.learner.sleep()
+
+        # Check that accepted library entries got their ROI seeded
+        # Score = seed * decay (decay runs in the same sleep cycle)
+        decay = self.learner.sleep_cfg.usefulness_decay  # 0.9
+        lib = self.learner.memory.get_library()
+        scores = self.learner.memory.get_primitive_scores()
+        for entry in lib:
+            if entry.name.startswith("learned_"):
+                self.assertIn(entry.name, scores,
+                              f"Library entry {entry.name} should have ROI seeded")
+                # Seeded at usefulness * 0.1, then decayed by usefulness_decay
+                expected = entry.usefulness * 0.1 * decay
+                self.assertAlmostEqual(scores[entry.name], expected, places=4)
+
+
+class TestDeriveSearchParams(unittest.TestCase):
+    """Tests for auto-derivation of search params from compute budget."""
+
+    def test_derive_search_params_low_budget(self):
+        """Low budget (625 evals) → small pair pool, no beam."""
+        from core.config import derive_search_params
+        result = derive_search_params(625, n_prims=48)
+        self.assertGreaterEqual(result["exhaustive_pair_top_k"], 15)
+        self.assertLessEqual(result["exhaustive_pair_top_k"], 25)
+        self.assertEqual(result["beam_width"], 1)
+        self.assertEqual(result["max_generations"], 1)
+
+    def test_derive_search_params_medium_budget(self):
+        """Medium budget (3750 evals) → wider pair pool, maybe small beam."""
+        from core.config import derive_search_params
+        result = derive_search_params(3750, n_prims=48)
+        self.assertGreaterEqual(result["exhaustive_pair_top_k"], 30)
+        self.assertLessEqual(result["exhaustive_pair_top_k"], 48)
+
+    def test_derive_search_params_high_budget(self):
+        """High budget (62500 evals) → max pair pool, beam search active."""
+        from core.config import derive_search_params
+        result = derive_search_params(62500, n_prims=48)
+        self.assertEqual(result["exhaustive_pair_top_k"], 48)
+        self.assertEqual(result["exhaustive_triple_top_k"], 20)
+        self.assertGreater(result["beam_width"], 1)
+        self.assertGreater(result["max_generations"], 1)
+
+    def test_derive_search_params_monotonic(self):
+        """Higher budget → wider or equal params (never shrink)."""
+        from core.config import derive_search_params
+        budgets = [500, 1000, 3000, 10000, 50000]
+        prev = derive_search_params(budgets[0])
+        for b in budgets[1:]:
+            curr = derive_search_params(b)
+            self.assertGreaterEqual(curr["exhaustive_pair_top_k"],
+                                    prev["exhaustive_pair_top_k"])
+            self.assertGreaterEqual(curr["exhaustive_triple_top_k"],
+                                    prev["exhaustive_triple_top_k"])
+            prev = curr
+
+    def test_derive_rounds_low(self):
+        from core.config import derive_rounds
+        self.assertEqual(derive_rounds(100_000), 1)
+
+    def test_derive_rounds_medium(self):
+        from core.config import derive_rounds
+        self.assertEqual(derive_rounds(500_000), 2)
+        self.assertEqual(derive_rounds(3_000_000), 2)
+
+    def test_derive_rounds_high(self):
+        from core.config import derive_rounds
+        self.assertEqual(derive_rounds(20_000_000), 3)
+        self.assertEqual(derive_rounds(50_000_000), 3)
+
+    def test_resolve_auto_derives(self):
+        """resolve_from_preset with no CLI overrides produces valid params."""
+        from common.benchmark import resolve_from_preset, PRESETS
+        import argparse
+        args = argparse.Namespace(
+            rounds=None, max_tasks=None, workers=0, compute_cap=0,
+            exhaustive_pair_top_k=None, exhaustive_triple_top_k=None,
+        )
+        for mode in ["quick", "default", "contest"]:
+            resolved = resolve_from_preset(args, PRESETS[mode])
+            self.assertGreater(resolved["compute_cap"], 0)
+            self.assertGreater(resolved["rounds"], 0)
+            self.assertGreaterEqual(resolved["exhaustive_pair_top_k"], 15)
+            self.assertGreaterEqual(resolved["exhaustive_triple_top_k"], 8)
+            self.assertGreaterEqual(resolved["beam_width"], 1)
+            self.assertGreaterEqual(resolved["max_generations"], 1)
 
 
 if __name__ == "__main__":

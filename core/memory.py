@@ -56,6 +56,7 @@ class InMemoryStore(Memory):
         self._library: list[LibraryEntry] = []
         self._solutions: dict[str, ScoredProgram] = {}
         self._best_attempts: dict[str, ScoredProgram] = {}
+        self._primitive_scores: dict[str, float] = {}
         self._capacity = capacity
         self._reuse_bonus = reuse_bonus
 
@@ -140,6 +141,14 @@ class InMemoryStore(Memory):
             logger.debug(f"Pruned {pruned} dead library entries (usefulness < {min_usefulness})")
         return pruned
 
+    # --- Primitive ROI scores ---
+
+    def get_primitive_scores(self) -> dict[str, float]:
+        return dict(self._primitive_scores)
+
+    def update_primitive_score(self, name: str, delta: float) -> None:
+        self._primitive_scores[name] = self._primitive_scores.get(name, 0.0) + delta
+
     # --- Solutions ---
 
     def store_solution(self, task_id: str, scored: ScoredProgram) -> None:
@@ -198,6 +207,7 @@ class InMemoryStore(Memory):
                 }
                 for task_id, sp in self._best_attempts.items()
             },
+            "primitive_scores": self._primitive_scores,
             "solutions_count": len(self._solutions),
             "best_attempts_count": len(self._best_attempts),
             "library_count": len(self._library),
@@ -244,6 +254,9 @@ class InMemoryStore(Memory):
                 complexity_cost=float(program.size),
                 task_id=task_id,
             )
+
+        # Load primitive scores
+        self._primitive_scores.update(data.get("primitive_scores", {}))
 
         # Post-load truncation: if loaded library exceeds capacity, keep top-N
         if self._capacity > 0 and len(self._library) > self._capacity:

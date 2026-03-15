@@ -430,6 +430,22 @@ class Memory(ABC):
         """Return all stored solutions, keyed by task_id."""
         ...
 
+    # --- Primitive ROI scores ---
+
+    def get_primitive_scores(self) -> dict[str, float]:
+        """Per-primitive ROI scores accumulated across tasks and rounds.
+
+        Higher score = more useful across tasks. Used to order search.
+        Default: empty (no tracking).
+        """
+        return {}
+
+    def update_primitive_score(self, name: str, delta: float) -> None:
+        """Update ROI score for a primitive by adding delta.
+
+        Default: no-op.
+        """
+
     # --- Best attempts (unsolved programs for sleep learning) ---
 
     def store_best_attempt(self, task_id: str, scored: ScoredProgram) -> None:

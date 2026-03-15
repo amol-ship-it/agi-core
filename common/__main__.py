@@ -90,7 +90,11 @@ def main():
     args = parser.parse_args()
 
     preset = PRESETS[args.mode]
-    resolved = resolve_from_preset(args, preset)
+    resolved = resolve_from_preset(
+        args, preset,
+        n_prims=defaults.get("n_prims", 48),
+        base_cell_size=adapter.default_cell_size(),
+    )
     max_tasks = resolved["max_tasks"]
 
     def _make_config(args, resolved, max_tasks, tasks, timestamp,
@@ -109,8 +113,10 @@ def main():
             energy_beta=defaults.get("energy_beta", 0.001),
             solve_threshold=defaults.get("solve_threshold", 0.001),
             exhaustive_depth=defaults.get("exhaustive_depth", args.exhaustive_depth),
-            exhaustive_pair_top_k=defaults.get("exhaustive_pair_top_k", args.exhaustive_pair_top_k),
-            exhaustive_triple_top_k=defaults.get("exhaustive_triple_top_k", args.exhaustive_triple_top_k),
+            exhaustive_pair_top_k=resolved["exhaustive_pair_top_k"],
+            exhaustive_triple_top_k=resolved["exhaustive_triple_top_k"],
+            beam_width=resolved.get("beam_width", 1),
+            max_generations=resolved.get("max_generations", 1),
             sequential_compounding=defaults.get("sequential_compounding", args.sequential_compounding),
             culture_path=culture_path,
             runs_dir=args.runs_dir,

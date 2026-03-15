@@ -526,12 +526,12 @@ class Learner:
 
     def _make_solved_result(self, ctx: _WakeContext, phase_name: str) -> WakeResult:
         """Build WakeResult for a training-solved task using top-k test evaluation."""
-        top_sp, te, ts, n_perf, s_rank = self._evaluate_top_k_on_test(
+        top_sp, te, ts, n_perf, s_rank, tss = self._evaluate_top_k_on_test(
             ctx.enum_candidates, ctx.task, top_k=10)
         if top_sp is not None and top_sp is not ctx.best_so_far:
             ctx.best_so_far = top_sp
         if ts is None and ctx.best_so_far is not None:
-            te, ts = self._evaluate_on_test(ctx.best_so_far, ctx.task)
+            te, ts, tss = self._evaluate_on_test(ctx.best_so_far, ctx.task)
         # Simplify: remove identity steps before storing
         ctx.best_so_far = self._try_simplify(ctx.best_so_far, ctx.task)
         ctx.best_so_far.task_id = ctx.task.task_id
@@ -547,7 +547,7 @@ class Learner:
             task_id=ctx.task.task_id, train_solved=True, best=ctx.best_so_far,
             generations_used=ctx.gens_used, evaluations=ctx.n_evals, wall_time=wall,
             pareto_front=front, dedup_count=ctx.total_deduped,
-            test_error=te, test_solved=ts,
+            test_error=te, test_solved=ts, test_solve_score=tss,
             n_train_perfect=n_perf, solving_rank=s_rank,
             train_predictions=train_preds, test_predictions=test_preds)
 
@@ -630,18 +630,21 @@ class Learner:
 
     def _evaluate_on_test(
         self, best: Optional[ScoredProgram], task: Task
-    ) -> tuple[Optional[float], Optional[bool]]:
+    ) -> tuple[Optional[float], Optional[bool], Optional[float]]:
         """Evaluate the best program on held-out test examples.
 
-        Returns (avg_test_error, test_solved) or (None, None) if no test data.
+        Returns (avg_test_error, test_solved, test_solve_score) or
+        (None, None, None) if no test data.
         """
         if best is None or not task.test_inputs or not task.test_outputs:
-            return None, None
+            return None, None, None
         if len(task.test_inputs) != len(task.test_outputs):
-            return None, None
+            return None, None, None
 
         total_error = 0.0
         n = len(task.test_inputs)
+        n_solved = 0
+        threshold = self.search_cfg.solve_threshold
         for inp, expected in zip(task.test_inputs, task.test_outputs):
             try:
                 predicted = self.env.execute(best.program, inp)
@@ -649,10 +652,14 @@ class Learner:
             except Exception:
                 err = 1e6
             total_error += err
+            if err <= threshold:
+                n_solved += 1
 
         avg_error = total_error / n if n > 0 else total_error
         test_solved = avg_error <= self.search_cfg.solve_threshold
-        return avg_error, test_solved
+        exponent = self.sleep_cfg.example_solve_exponent
+        test_solve_score = (n_solved / n) ** exponent if n > 0 else 0.0
+        return avg_error, test_solved, test_solve_score
 
     def _loocv_score(self, sp: ScoredProgram, task: Task) -> float:
         """Leave-one-out cross-validation score for a training-perfect candidate.
@@ -702,7 +709,7 @@ class Learner:
 
     def _evaluate_top_k_on_test(
         self, candidates: list[ScoredProgram], task: Task, top_k: int = 3
-    ) -> tuple[Optional[ScoredProgram], Optional[float], Optional[bool], int, Optional[int]]:
+    ) -> tuple[Optional[ScoredProgram], Optional[float], Optional[bool], int, Optional[int], Optional[float]]:
         """Try top-k training-perfect candidates on test, return best.
 
         Collects all candidates with prediction_error <= threshold, deduplicates
@@ -710,11 +717,11 @@ class Learner:
         LOOCV catches overfitting: candidates whose learned components don't
         generalize to held-out training examples are demoted (not eliminated).
 
-        Returns: (best_program, test_error, test_solved, n_train_perfect, solving_rank)
+        Returns: (best_program, test_error, test_solved, n_train_perfect, solving_rank, test_solve_score)
         """
         threshold = self.search_cfg.solve_threshold
         if not task.test_inputs or not task.test_outputs:
-            return None, None, None, 0, None
+            return None, None, None, 0, None, None
 
         # Collect training-perfect candidates, deduplicate by program repr
         seen: set[str] = set()
@@ -727,7 +734,7 @@ class Learner:
                     perfect.append(sp)
 
         if not perfect:
-            return None, None, None, 0, None
+            return None, None, None, 0, None, None
 
         n_train_perfect = len(perfect)
 
@@ -781,24 +788,46 @@ class Learner:
         best_test_sp = None
         solving_rank = None
 
+        best_test_tss = None
+
         for rank, sp in enumerate(perfect[:top_k]):
-            test_error, test_solved = self._evaluate_on_test(sp, task)
+            test_error, test_solved, tss = self._evaluate_on_test(sp, task)
             if test_error is not None and (best_test_error is None or test_error < best_test_error):
                 best_test_error = test_error
                 best_test_sp = sp
+                best_test_tss = tss
             if test_solved:
                 solving_rank = rank
-                return sp, test_error, True, n_train_perfect, rank
+                return sp, test_error, True, n_train_perfect, rank, tss
 
         # No candidate passed test — return the one with best test error
         if best_test_sp is not None:
-            return best_test_sp, best_test_error, False, n_train_perfect, None
+            return best_test_sp, best_test_error, False, n_train_perfect, None, best_test_tss
 
-        return perfect[0], None, None, n_train_perfect, None
+        return perfect[0], None, None, n_train_perfect, None, None
 
     # -------------------------------------------------------------------------
     # SLEEP PHASE: analyze → extract → compress → add to library
     # -------------------------------------------------------------------------
+
+    def _unsolved_quality(self, scored: ScoredProgram, cfg: SleepConfig) -> float:
+        """Quality weight for an unsolved program in sleep phase.
+
+        Uses exp(-error) to map [0, ∞) → (0, 1], compatible with -log scoring.
+        For small errors, exp(-x) ≈ 1-x (backward compatible).
+        Uses max(base, discrete_score) so a 2/3-solver always beats a
+        uniformly mediocre program with the same avg_error.
+        """
+        base_quality = math.exp(-scored.prediction_error) * cfg.unsolved_weight
+        if scored.example_solve_score > 0:
+            return max(base_quality, scored.example_solve_score * cfg.unsolved_weight)
+        return base_quality
+
+    def _credit_primitives(self, program: Program, quality: float) -> None:
+        """Credit all primitives in a program tree with quality weight."""
+        self.memory.update_primitive_score(program.root, quality)
+        for child in program.children:
+            self._credit_primitives(child, quality)
 
     def sleep(self) -> SleepResult:
         """
@@ -806,10 +835,11 @@ class Learner:
 
         1. Collect all solved programs and best unsolved attempts
         2. Build transition matrix P(child_op | parent_op) from both
-        3. Extract sub-trees from both, quality-weighting unsolved programs
-        4. Score by compression value with diversity bonus
-        5. Add the best as new named primitives to the library
-        6. Decay old entries and prune dead ones
+        3. Credit primitives with quality-weighted ROI scores
+        4. Extract sub-trees from both, quality-weighting unsolved programs
+        5. Score by compression value with diversity bonus
+        6. Add the best as new named primitives to the library
+        7. Decay old entries, primitive scores, and prune dead ones
         """
         t0 = time.time()
         cfg = self.sleep_cfg
@@ -831,8 +861,16 @@ class Learner:
             f"from {len(solutions)} solved + {len(unsolved)} unsolved programs"
         )
 
-        # 2. Extract all sub-trees. Solved programs get full weight (1.0).
-        #    Unsolved programs get quality = (1 - error) * unsolved_weight,
+        # 2. Credit primitives with quality-weighted ROI scores.
+        #    Solved programs contribute 1.0, unsolved contribute exp(-error)*weight.
+        for scored in solutions.values():
+            self._credit_primitives(scored.program, 1.0)
+        for scored in unsolved.values():
+            quality = self._unsolved_quality(scored, cfg)
+            self._credit_primitives(scored.program, quality)
+
+        # 4. Extract all sub-trees. Solved programs get full weight (1.0).
+        #    Unsolved programs get quality = exp(-error) * unsolved_weight,
         #    so a 10% error program contributes more than a 50% error one.
         subtree_counts: dict[str, list[tuple[Program, str, float]]] = {}
 
@@ -844,7 +882,7 @@ class Learner:
                 subtree_counts[key].append((subtree, task_id, 1.0))
 
         for task_id, scored in unsolved.items():
-            quality = (1.0 - scored.prediction_error) * cfg.unsolved_weight
+            quality = self._unsolved_quality(scored, cfg)
             for subtree in self._enumerate_subtrees(scored.program):
                 key = repr(subtree)
                 if key not in subtree_counts:
@@ -857,7 +895,7 @@ class Learner:
             if tid not in task_roots:
                 task_roots[tid] = scored.program.root
 
-        # 3. Filter: must appear in >= min_occurrences different tasks,
+        # 5. Filter: must appear in >= min_occurrences different tasks,
         #    must be >= min_size nodes (no trivial single-node entries)
         candidates = []
         for key, occurrences in subtree_counts.items():
@@ -874,7 +912,7 @@ class Learner:
                 usefulness = total_quality * math.log(subtree.size + 1) * diversity_bonus
                 candidates.append((subtree, task_ids, usefulness))
 
-        # 4. Sort by usefulness, add top entries to library
+        # 5b. Sort by usefulness, add top entries to library
         candidates.sort(key=lambda c: c[2], reverse=True)
 
         existing_reprs = {repr(e.program) for e in self.memory.get_library()}
@@ -895,7 +933,7 @@ class Learner:
             new_entries.append(entry)
             existing_reprs.add(repr(subtree))
 
-        # 4b. Promote full unsolved programs as library entries.
+        # 5c. Promote full unsolved programs as library entries.
         #     Promoting whole programs makes them available as building blocks
         #     in the next round: depth-1 search over library entries effectively
         #     reaches depth-2+ without exponential cost. Each round compounds:
@@ -922,7 +960,7 @@ class Learner:
             key = repr(prog)
             if key in existing_reprs:
                 continue
-            quality = (1.0 - scored.prediction_error) * cfg.unsolved_weight
+            quality = self._unsolved_quality(scored, cfg)
             entry_name = f"learned_{lib_before + len(new_entries)}"
             entry = LibraryEntry(
                 name=entry_name,
@@ -935,13 +973,18 @@ class Learner:
             new_entries.append(entry)
             existing_reprs.add(key)
 
-        # 5. Add to memory (eviction handles capacity)
+        # 6. Add to memory (eviction handles capacity)
+        # Seed primitive ROI scores from library usefulness so proven entries
+        # get search priority in the next round's pool ordering.
+        LIBRARY_ROI_SEED_SCALE = 0.1
         accepted = []
         for entry in new_entries:
             if self.memory.add_to_library(entry):
                 accepted.append(entry)
+                self.memory.update_primitive_score(
+                    entry.name, entry.usefulness * LIBRARY_ROI_SEED_SCALE)
 
-        # 6. Decay old entries
+        # 7. Decay old entries
         for entry in self.memory.get_library():
             if entry not in accepted:
                 self.memory.update_usefulness(
@@ -949,7 +992,13 @@ class Learner:
                     entry.usefulness * (cfg.usefulness_decay - 1),  # negative delta
                 )
 
-        # 7. Prune dead entries: remove library entries that have decayed
+        # 7b. Decay primitive ROI scores (same rate as library)
+        prim_scores = self.memory.get_primitive_scores()
+        for name, score in prim_scores.items():
+            self.memory.update_primitive_score(
+                name, score * (cfg.usefulness_decay - 1))
+
+        # 8. Prune dead entries: remove library entries that have decayed
         #    below threshold and were never reused. Prevents the library
         #    from filling with stale abstractions that crowd out better ones.
         pruned = self.memory.prune_library(min_usefulness=0.01)
@@ -1967,6 +2016,9 @@ class Learner:
         # Strategy: include top-scoring singles first, then add essentials
         # that aren't already included (sorted by their depth-1 score so
         # the most task-relevant essentials get priority).
+        # ROI blending: high cross-task ROI reduces effective error for ordering.
+        prim_scores = self.memory.get_primitive_scores()
+
         depth1_ranked = sorted(scored, key=lambda s: s.prediction_error)
         essential_names = self.grammar.essential_pair_concepts()
 
@@ -1975,6 +2027,18 @@ class Learner:
         for sp in depth1_ranked:
             if sp.program.root not in depth1_scores:
                 depth1_scores[sp.program.root] = sp.prediction_error
+
+        def _pool_sort_key(name: str) -> float:
+            """Blended sort key: lower is better. ROI breaks ties among
+            similarly-scoring primitives."""
+            d1_err = depth1_scores.get(name, 1.0)
+            roi = prim_scores.get(name, 0.0)
+            return d1_err / (1.0 + roi)  # high ROI reduces effective error
+
+        # Re-sort depth1_ranked by blended key for pool construction
+        depth1_ranked = sorted(
+            depth1_ranked,
+            key=lambda s: _pool_sort_key(s.program.root))
 
         # Phase 1: top-scoring singles (up to 60% of pool)
         seen_names: set[str] = set()
@@ -1995,8 +2059,7 @@ class Learner:
             n for n in task_priority
             if n not in seen_names and n in prim_by_name
         ]
-        remaining_priority.sort(
-            key=lambda n: depth1_scores.get(n, 1.0))
+        remaining_priority.sort(key=_pool_sort_key)
         for name in remaining_priority:
             if len(pair_pool) >= pair_top_k:
                 break
@@ -2009,8 +2072,7 @@ class Learner:
             n for n in essential_names
             if n not in seen_names and n in prim_by_name
         ]
-        remaining_essentials.sort(
-            key=lambda n: depth1_scores.get(n, 1.0))
+        remaining_essentials.sort(key=_pool_sort_key)
         for name in remaining_essentials:
             if len(pair_pool) >= pair_top_k:
                 break
@@ -2379,15 +2441,18 @@ class Learner:
     def _evaluate_program(self, program: Program, task: Task) -> ScoredProgram:
         """Evaluate a program on all training examples, return scored result.
 
-        Uses max-error blending to penalize programs that match some examples
-        but fail on others.  A program that perfectly matches 2/3 examples
-        but fails on the third (avg=0.33, max=1.0) scores worse than one
-        that partially matches all three (avg=0.33, max=0.4).  This reduces
-        overfitting when tasks have few training examples.
+        3-level scoring hierarchy:
+          **Example**: drive.prediction_error per (input, output) pair
+          **Split**: Mean of example scores → prediction_error (0 iff all perfect)
+          **Task**: Train split during search; test split for validation
+
+        In -log space, Jensen's inequality means the mean already penalizes
+        inconsistency — explicit max-error blending is redundant.
         """
         total_error = 0.0
-        max_error = 0.0
         n = len(task.train_examples)
+        n_solved = 0
+        threshold = self.search_cfg.solve_threshold
 
         for inp, expected in task.train_examples:
             try:
@@ -2396,19 +2461,24 @@ class Learner:
             except Exception:
                 err = 1e6  # penalty for programs that crash
             total_error += err
-            max_error = max(max_error, err)
+            if err <= threshold:
+                n_solved += 1
 
         avg_error = total_error / n if n > 0 else total_error
-        # Blend average and max: penalizes inconsistent programs
-        effective_error = max(avg_error, max_error * 0.3)
         comp_cost = self.drive.complexity_cost(program)
-        energy = self.search_cfg.energy_alpha * effective_error + self.search_cfg.energy_beta * comp_cost
+        energy = self.search_cfg.energy_alpha * avg_error + self.search_cfg.energy_beta * comp_cost
+
+        # Per-example discrete solve score: (k/n)^exponent
+        # Non-linear ramp rewards programs that solve most examples
+        exponent = self.sleep_cfg.example_solve_exponent
+        solve_score = (n_solved / n) ** exponent if n > 0 else 0.0
 
         return ScoredProgram(
             program=program,
             energy=energy,
             prediction_error=avg_error,
             complexity_cost=comp_cost,
+            example_solve_score=solve_score,
         )
 
     def _simplify_program(self, prog: Program, task: Task) -> Program:

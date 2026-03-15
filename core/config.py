@@ -4,8 +4,69 @@ Configuration dataclasses for the Universal Learning Loop.
 Pure data — no dependencies on other core modules.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Optional
+
+
+# =============================================================================
+# Auto-derivation: compute budget → search parameters
+# =============================================================================
+
+def derive_search_params(eval_budget: int, n_prims: int = 48) -> dict:
+    """Derive search parameters from per-task eval budget.
+
+    Allocates budget to highest-ROI phases first:
+    1. Depth-1 exhaustive (always, ~n_prims evals)
+    2. Structural phases (always, ~1000 evals)
+    3. Near-miss refinement (~5 × n_prims evals)
+    4. Depth-2 pairs (pair_top_k² × 0.6 evals)
+    5. Depth-3 triples (triple_top_k³ evals)
+    6. Beam search (beam_width × max_gen × 4.3 evals)
+    """
+    # Fixed costs (always allocated)
+    fixed = n_prims + 1000 + 5 * n_prims  # depth-1 + structural + near-miss
+    remaining = max(0, eval_budget - fixed)
+
+    # Depth-2: pair_top_k scales with sqrt(remaining)
+    pair_top_k = min(n_prims, max(15, int(math.sqrt(remaining / 0.6))))
+    remaining -= int(pair_top_k ** 2 * 0.6)
+    remaining = max(0, remaining)
+
+    # Depth-3: triple_top_k scales with cube root
+    if remaining > 500:
+        triple_top_k = min(20, max(8, int(remaining ** (1 / 3))))
+        remaining -= triple_top_k ** 3
+        remaining = max(0, remaining)
+    else:
+        triple_top_k = 8
+
+    # Beam: fill remaining budget
+    if remaining > 200:
+        beam_width = min(30, max(1, int(math.sqrt(remaining / 4.3))))
+        max_gen = min(15, max(1, remaining // max(beam_width * 4, 1)))
+    else:
+        beam_width, max_gen = 1, 1
+
+    return {
+        "exhaustive_pair_top_k": pair_top_k,
+        "exhaustive_triple_top_k": triple_top_k,
+        "beam_width": beam_width,
+        "max_generations": max_gen,
+    }
+
+
+def derive_rounds(compute_cap: int) -> int:
+    """Auto-derive rounds from compute budget.
+
+    Round 2 gives +50% solves (huge ROI, always worth it).
+    Round 3 gives +15% solves (only worth it at high budget).
+    """
+    if compute_cap >= 20_000_000:
+        return 3
+    if compute_cap >= 200_000:
+        return 2
+    return 1
 
 
 @dataclass
@@ -61,6 +122,7 @@ class SleepConfig:
     usefulness_decay: float = 0.90  # decay old entries each sleep cycle
     reuse_bonus: float = 2.0       # scoring bonus per reuse for eviction ranking
     unsolved_weight: float = 0.5  # quality discount for unsolved vs solved programs
+    example_solve_exponent: float = 2.0  # exponent for (k/n)^e per-example scoring
 
 
 @dataclass

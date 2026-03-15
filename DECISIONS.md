@@ -2832,5 +2832,160 @@ vs session 14 baseline: 31 train (7.8%), 9-10 eval (2.2-2.5%).
 4. Overfit stable (4 train R3, 2 eval — same as baseline)
 5. 15 new tests added (64→79), all passing (434 total suite)
 
+### Decision 120: Per-Example Discrete Solve Scoring for Better Compounding
+
+**Date:** 2026-03-15
+**Context:** Compounding across rounds is limited because the scoring system doesn't distinguish a program that solves 2/3 training examples perfectly from one that's uniformly mediocre — both get the same library quality weight in sleep. Near-miss programs containing useful sub-programs don't get promoted with appropriate priority.
+
+**Change:** Added `example_solve_score` field to `ScoredProgram`: `(k/n)^exponent` where k = number of training examples solved perfectly (error ≤ threshold). Used in sleep phase library quality weighting via `_unsolved_quality()` helper that takes `max(base_quality, discrete_score * unsolved_weight)`. NOT used in energy (beam search needs continuous gradients).
+
+**Score table (exponent=2.0):**
+
+| k/n | Score |
+|-----|-------|
+| 0/3 | 0.000 |
+| 1/3 | 0.111 |
+| 2/3 | 0.444 |
+| 3/3 | 1.000 |
+
+**Sweet-spot analysis** (exponents 1.5, 2.0, 3.0 on 20-task quick):
+- All three exponents: 1/20 train, no regression from baseline
+- Chose exponent=2.0 as default: strong non-linear separation without being overly aggressive
+
+**Full quick benchmark (50 tasks, 2 rounds, exponent=2.0):**
+- R1: 3/50 train, 1/50 eval
+- R2: 4/50 train, 1/50 eval (+1 compounding)
+- No regression from baseline
+
+**Files changed:** `core/types.py`, `core/config.py`, `core/learner.py`, `core/results.py`, `common/benchmark.py`, `tests/test_learner.py` (+6 tests, 440→446 total)
+
+**Backward compatibility:** `example_solve_score` defaults to 0.0. When score=0, `_unsolved_quality` returns the original formula exactly. All 440 existing tests pass unchanged.
+
+### Decision 121: Reintroduce contest mode with higher compute cap and beam search
+
+**Date:** 2026-03-15
+**Hypothesis:** With atomic-only primitives (48), the search space is clean enough that more compute (wider top-K, beam search, higher cap) translates to more solves.
+
+**Experiment design:** Compare default (3M cap, beam off, 2 rounds) vs contest (50M cap, beam 30×15, pair_top_k=48, triple_top_k=20, 3 rounds). Measured on 20→50→400 task subsets per CLAUDE.md rapid iteration.
+
+**Contest preset:**
+
+| Parameter | Default | Contest |
+|-----------|---------|---------|
+| compute_cap | 3M | 50M |
+| beam_width | 1 (off) | 30 |
+| max_generations | 1 (off) | 15 |
+| exhaustive_pair_top_k | 40 | 48 (= all prims) |
+| exhaustive_triple_top_k | 15 | 20 |
+| rounds | 2 | 3 |
+
+**Results — 50 task subset:**
+
+| Mode | R1 Train | R2 Train | Wall (R1) |
+|------|----------|----------|-----------|
+| default | 3/50 | 4/50 | 5s |
+| contest | 4/50 | 6/50 | 29s |
+
+Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding (R3).
+
+**Results — full 400 tasks:**
+
+| Mode | R1 Train | R2 Train | R3 Train | R1 Eval | R2 Eval | R3 Eval | R2 Overfit |
+|------|----------|----------|----------|---------|---------|---------|------------|
+| default | 24/400 | 33/400 | — | 10/400 | 9/400 | — | 2 |
+| contest | 36/400 | 41/400 | 43/400 | 8/400 | 9/400 | 8/400 | 9 |
+
+**Key findings:**
+1. **R1 train: 24→36 (+12, +50%)** — wider search finds solutions exhaustive-only misses
+2. **R3 train: 33→43 (+10, +30%)** — compounding amplifies initial gains
+3. **Eval: 9-10 both modes** — extra training solves don't transfer yet (overfit)
+4. **Overfit: 2→9** — more compute finds more task-specific solutions that fail on test
+5. **Wall time: 40s → 230s** per round (~6× slower), acceptable for max-accuracy mode
+6. **Contest finds 12 new train tasks, loses only 2** — net +10 over default
+7. Both contest-only tasks on 50-task subset solved via library entries (compounding)
+
+**Files changed:** `common/benchmark.py` (PRESETS, resolve_from_preset, ExperimentConfig, run_experiment), `common/__main__.py` (forward beam/top-K from preset), `tests/test_learner.py` (+1 test for contest preset). Documentation updated throughout.
+
+### Decision 122: -log Scoring + Primitive ROI Tracking
+
+**Date:** 2026-03-15
+**Hypothesis:** Two changes compound together: (1) -log(similarity) scoring makes exact matches exponentially more rewarded while keeping continuous gradients, and (2) tracking per-primitive cross-task ROI lets search prioritize historically useful primitives.
+
+**Part A: -log scoring transform**
+- Applied `-log(similarity)` in ARCDrive (was `1-similarity`). For small errors, `-log(1-x) ≈ x`, so all 6 hardcoded thresholds remain valid without adjustment.
+- Removed max-error blending in `_evaluate_program` — in -log space, Jensen's inequality means the mean already penalizes inconsistency.
+- Changed `_unsolved_quality` from `(1-error)` to `exp(-error)`: maps `[0,∞)→(0,1]`, works for all domains.
+
+**Part B: Primitive ROI tracking**
+- Added `get_primitive_scores`/`update_primitive_score` to Memory interface (ABC defaults = no-op, backward compatible).
+- In sleep: credit all primitives in solved programs (weight=1.0) and unsolved programs (weight=quality). Decay scores at same rate as library (`usefulness_decay`).
+- In `_exhaustive_enumerate`: ROI-blended sort key `d1_error / (1 + roi)` for pair/triple pool construction. High-ROI primitives get tried first among equally-scoring candidates.
+- Primitive scores persist in culture JSON for cross-run transfer.
+
+**Results — default mode (400 tasks, 2 rounds):**
+
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| R1 train | 24/400 (6.0%) | 23/400 (5.8%) | -1 |
+| R2 train | 33/400 (8.2%) | 34/400 (8.5%) | +1 |
+| R1 eval | 10/400 (2.5%) | 9/400 (2.2%) | -1 |
+| R2 eval | 9/400 (2.2%) | 9/400 (2.2%) | 0 |
+| Overfit | 2 | 1 | -1 |
+
+**Results — contest mode (400 tasks, 3 rounds):**
+
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| R1 train | 36/400 (9.0%) | 35/400 (8.8%) | -1 |
+| R3 train | 43/400 (10.8%) | 40/400 (10.0%) | -3 |
+| R2 eval | 9/400 (2.2%) | 11/400 (2.8%) | +2 |
+| R3 eval | 8/400 (2.0%) | 9/400 (2.2%) | +1 |
+| Overfit R3 | 10 | 7 | -3 |
+
+**Key findings:**
+1. Default: net +1 train solve (33→34) with lower overfit (2→1)
+2. Contest: -3 train (43→40) but significantly less overfit (10→7) and better eval R2 (9→11)
+3. The -log transform reduces overfit in both modes — programs are ranked by quality rather than sharp cutoffs
+4. Eval improvement in contest R2 (+2) suggests -log scoring helps library promotion: partial matches contribute better signal for cross-task transfer
+5. Primitive ROI scores accumulate correctly (top prims: fill_enclosed, label_components, dilate) and persist in culture
+6. 6 new tests (447 total), all passing
+
+**Files changed:** `domains/arc/drive.py` (-log transform), `core/learner.py` (remove max-error blending, exp quality, _credit_primitives, ROI-ordered pool), `core/interfaces.py` (primitive score methods on Memory), `core/memory.py` (implement + culture persistence), `tests/test_arc.py` (+2 tests, 4 updated), `tests/test_learner.py` (+4 tests, 2 updated), documentation throughout.
+
+### Decision 123: Unified Compute Budget & ROI-Driven Search
+
+**Date:** 2026-03-15
+**Hypothesis:** Presets should differ only in compute budget, with all search parameters auto-derived. Library entries with high usefulness should get search priority via ROI seeding.
+
+**Part A: Auto-derive search params from compute budget**
+- Added `derive_search_params(eval_budget, n_prims)` to `core/config.py`: allocates budget to phases in ROI order (depth-1 → structural → near-miss → pairs → triples → beam).
+- Added `derive_rounds(compute_cap)`: 1 round if <200K, 2 if <20M, 3 if ≥20M.
+- Simplified PRESETS to compute_cap only (+max_tasks for quick). Removed rounds, beam_width, max_generations, pair_top_k, triple_top_k from presets.
+- Rewrote `resolve_from_preset()` to auto-derive all params from budget. CLI overrides (None=not set) win.
+
+**Auto-derived vs old hand-tuned:**
+
+| Mode | Param | Old | Auto | Match? |
+|------|-------|-----|------|--------|
+| contest | pair_top_k | 48 | 48 | exact |
+| contest | triple_top_k | 20 | 20 | exact |
+| contest | beam_width | 30 | 30 | exact |
+| contest | max_gen | 15 | 15 | exact |
+| contest | rounds | 3 | 3 | exact |
+| default | pair_top_k | 40 | 48 | wider (more budget for pairs) |
+| default | triple_top_k | 15 | 10 | narrower (budget reallocated) |
+| default | rounds | 2 | 2 | exact |
+| quick | pair_top_k | 40 | 15 | properly constrained by budget |
+| quick | triple_top_k | 15 | 8 | properly constrained by budget |
+| quick | rounds | 2 | 2 | exact |
+
+**Part B: Library usefulness → search priority**
+- In `sleep()`, when a library entry is accepted, seed its primitive_score: `update_primitive_score(entry.name, entry.usefulness * LIBRARY_ROI_SEED_SCALE)` where scale=0.1.
+- This closes the feedback loop: high-usefulness library entries get priority in `_pool_sort_key = d1_error / (1 + roi)`.
+
+**Tests:** 458 total (was 452), all passing. Added: `test_derive_search_params_{low,medium,high}_budget`, `test_derive_search_params_monotonic`, `test_derive_rounds_{low,medium,high}`, `test_resolve_auto_derives`, `test_resolve_cli_override_wins`, `test_preset_keys_minimal`, `test_library_roi_seeded_in_sleep`.
+
+**Files changed:** `core/config.py` (+derive_search_params, +derive_rounds), `common/benchmark.py` (simplified PRESETS, rewritten resolve_from_preset, updated CLI defaults), `common/__main__.py` (pass base_cell_size to resolve, simplified _make_config), `core/learner.py` (seed ROI in sleep), `tests/test_learner.py` (+11 tests), documentation throughout.
+
 ---
 *This document will be updated with each new session and major decision.*

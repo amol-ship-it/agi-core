@@ -8,6 +8,7 @@ and nonzero density similarity to create a smooth fitness landscape.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -16,36 +17,45 @@ from core import DriveSignal, Program
 from .primitives import to_np
 
 
+MAX_LOG_ERROR = 20.0  # cap for zero similarity (-log transform)
+
+
 class ARCDrive(DriveSignal):
     """
-    ARC drive signal: structural similarity + program complexity.
+    ARC drive signal: -log(structural_similarity) + program complexity.
 
-    prediction_error is a weighted composite:
-      0.60 × pixel_accuracy (inverted: 0 = perfect)
+    prediction_error uses a 3-level hierarchy:
+      **Example**: -log(structural_similarity) per (input, output) pair
+      **Split**: Mean of example scores → prediction_error (0 iff all perfect)
+      **Task**: Train split during search; test split for validation
+
+    The structural similarity is a weighted composite:
+      0.60 × pixel_accuracy
       0.15 × dimension_match (1 if same shape, 0 otherwise)
       0.15 × color_overlap (Jaccard on non-bg color palettes)
       0.10 × nonzero_similarity (ratio of nonzero pixel counts)
 
-    This creates a smoother fitness landscape than binary pixel match,
-    enabling beam search and evolution to make incremental progress.
+    The -log transform makes exact matches exponentially more rewarded
+    while keeping continuous gradients for search. For small errors,
+    -log(1-x) ≈ x, so existing thresholds remain valid.
     """
 
     def prediction_error(self, predicted: Any, expected: Any) -> float:
-        """Structural similarity distance: 0.0 = perfect match, 1.0 = nothing matches."""
+        """Structural similarity distance: 0.0 = perfect match, MAX_LOG_ERROR = worst."""
         if predicted is None or expected is None:
-            return 1.0
+            return MAX_LOG_ERROR
 
         try:
             pred = to_np(predicted)
             exp = to_np(expected)
         except (ValueError, TypeError):
-            return 1.0
+            return MAX_LOG_ERROR
 
         pred_h, pred_w = pred.shape
         exp_h, exp_w = exp.shape
 
         if pred_h == 0 or pred_w == 0 or exp_h == 0 or exp_w == 0:
-            return 1.0
+            return MAX_LOG_ERROR
 
         # --- Component 1: Pixel accuracy (weight 0.60) ---
         if pred.shape == exp.shape:
@@ -91,8 +101,10 @@ class ARCDrive(DriveSignal):
                       + 0.15 * color_overlap
                       + 0.10 * nz_sim)
 
-        # Invert: prediction_error = 0 means perfect, 1 means worst
-        return max(0.0, 1.0 - similarity)
+        # -log transform: 0 = perfect, higher = worse
+        if similarity <= 0.0:
+            return MAX_LOG_ERROR
+        return min(-math.log(similarity), MAX_LOG_ERROR)
 
     def complexity_cost(self, program: Program) -> float:
         """Program size as complexity measure."""

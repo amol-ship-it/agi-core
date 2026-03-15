@@ -39,6 +39,7 @@ class WakeResult:
     test_solved: Optional[bool] = None  # did the program solve the held-out test examples?
     n_train_perfect: int = 0            # how many distinct programs solved training
     solving_rank: Optional[int] = None  # which rank (0-indexed) solved test (None if not solved)
+    test_solve_score: Optional[float] = None   # (k/n)^exp for test examples
     train_predictions: Optional[list] = None  # predicted outputs for training inputs
     test_predictions: Optional[list] = None   # predicted outputs for test inputs
 

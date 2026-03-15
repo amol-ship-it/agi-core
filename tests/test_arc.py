@@ -8,12 +8,14 @@ Verifies:
 """
 
 import json
+import math
 import os
 import tempfile
 import unittest
 
 from core import Program, Task
 from domains.arc import ARCEnv, ARCGrammar, ARCDrive, to_np, from_np
+from domains.arc.drive import MAX_LOG_ERROR
 from domains.arc.dataset import load_arc_task, load_arc_dataset
 
 
@@ -31,8 +33,9 @@ class TestARCDrive(unittest.TestCase):
         pred = [[1, 1], [1, 1]]
         exp = [[2, 2], [2, 2]]
         error = drive.prediction_error(pred, exp)
-        self.assertGreater(error, 0.5)
-        self.assertLess(error, 1.0)
+        # -log of small similarity → large positive value
+        self.assertGreater(error, 1.0)
+        self.assertLess(error, MAX_LOG_ERROR)
 
     def test_shape_mismatch_penalty(self):
         drive = ARCDrive()
@@ -43,13 +46,37 @@ class TestARCDrive(unittest.TestCase):
 
     def test_none_inputs(self):
         drive = ARCDrive()
-        self.assertAlmostEqual(drive.prediction_error(None, [[1]]), 1.0)
-        self.assertAlmostEqual(drive.prediction_error([[1]], None), 1.0)
+        self.assertAlmostEqual(drive.prediction_error(None, [[1]]), MAX_LOG_ERROR)
+        self.assertAlmostEqual(drive.prediction_error([[1]], None), MAX_LOG_ERROR)
 
     def test_invalid_type(self):
         drive = ARCDrive()
         error = drive.prediction_error("not a grid", [[1]])
-        self.assertAlmostEqual(error, 1.0)
+        self.assertAlmostEqual(error, MAX_LOG_ERROR)
+
+    def test_log_scale_partial(self):
+        """Partial match gives intermediate -log error."""
+        drive = ARCDrive()
+        pred = [[1, 2], [3, 0]]
+        exp = [[1, 2], [3, 4]]  # 3/4 pixels match
+        error = drive.prediction_error(pred, exp)
+        self.assertGreater(error, 0.0)
+        self.assertLess(error, MAX_LOG_ERROR)
+
+    def test_log_scale_near_perfect(self):
+        """-log(similarity) is small for near-perfect matches."""
+        drive = ARCDrive()
+        # 3/4 pixels match → high similarity → small -log
+        pred = [[1, 2], [3, 0]]
+        exp = [[1, 2], [3, 4]]
+        error_partial = drive.prediction_error(pred, exp)
+        # 0/4 pixels match → low similarity → large -log
+        pred_bad = [[5, 6], [7, 8]]
+        error_bad = drive.prediction_error(pred_bad, exp)
+        # Near-perfect should have much smaller error than bad
+        self.assertLess(error_partial, error_bad)
+        # -log scale: ratio should be large (exponential separation)
+        self.assertGreater(error_bad / max(error_partial, 1e-10), 2.0)
 
     def test_complexity_cost(self):
         drive = ARCDrive()
