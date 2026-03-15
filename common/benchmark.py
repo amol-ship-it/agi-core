@@ -1188,74 +1188,68 @@ def print_pipeline_summary(
     eval_summary = eval_data.get("summary", {})
     train_meta = train_data.get("meta", {})
 
-    total_wall = (train_summary.get("wall_clock_seconds", 0)
-                  + eval_summary.get("wall_clock_seconds", 0))
-
     print()
     print("=" * 72)
     print(f"  {title}")
     print("=" * 72)
 
-    # Parameters
-    print()
-    print("  Parameters:")
-    print(f"    Mode:              {getattr(args, 'mode', '?')}")
-    print(f"    Rounds:            {train_meta.get('rounds', '?')}")
-    print(f"    Workers:           {train_meta.get('workers', '?')}")
-    print(f"    Seed:              {train_meta.get('seed', '?')}")
-    cap = train_meta.get("compute_cap", 0)
-    print(f"    Compute cap:       {cap:,} ops" if cap else "    Compute cap:       unlimited")
-    print(f"    Exhaustive depth:  {getattr(args, 'exhaustive_depth', '?')}")
-    print(f"    Pair top-K:        {getattr(args, 'exhaustive_pair_top_k', '?')}")
-    print(f"    Triple top-K:      {getattr(args, 'exhaustive_triple_top_k', '?')}")
-    print(f"    Primitives:        {train_meta.get('n_primitives', '?')}")
+    n_rounds = len(round_summaries) if round_summaries else 1
 
-    # Train + eval results
-    for label, summary in [("Training Results", train_summary),
-                           (eval_label, eval_summary)]:
-        solved = summary.get("last_round_solved", 0)
-        total = summary.get("n_tasks", 0)
-        rate = summary.get("last_round_solve_rate", 0)
-        train_solved = summary.get("last_round_train_solved", 0)
-        overfit = max(0, train_solved - solved)
-        wall = summary.get("wall_clock_seconds", 0)
-
-        print()
-        print(f"  {label}:")
-        print(f"    Tasks:             {total}")
-        print(f"    Solved:            {solved}/{total} ({rate:.1%})")
-        if overfit > 0:
-            print(f"    Overfit:           {overfit}")
-        print(f"    Evaluations:       {summary.get('total_evaluations', 0):,}")
-        print(f"    Wall time:         {fmt_duration(wall)}")
-        if label == "Training Results":
-            print(f"    Library learned:   {summary.get('library_size', 0)} abstractions")
-
-    print()
-    print(f"  Total wall time:     {fmt_duration(total_wall)}")
-
-    # Compounding curve across rounds (the key metric)
-    if round_summaries and len(round_summaries) > 1:
+    # Compounding curve (the key metric)
+    if round_summaries and len(round_summaries) >= 1:
         print()
         print("  COMPOUNDING CURVE (train / eval per round):")
-        print(f"  {'Round':>5}  {'Train':>12}  {'Overfit':>7}  {'Library':>7}  {'Eval':>12}  {'Overfit':>7}")
-        print(f"  {'─'*5}  {'─'*12}  {'─'*7}  {'─'*7}  {'─'*12}  {'─'*7}")
+        print(f"  {'Round':>5}  {'Train':>12}  {'Overfit':>7}  {'Library':>7}  "
+              f"{'Eval':>12}  {'Overfit':>7}  {'Train time':>10}  {'Eval time':>10}")
+        print(f"  {'─'*5}  {'─'*12}  {'─'*7}  {'─'*7}  "
+              f"{'─'*12}  {'─'*7}  {'─'*10}  {'─'*10}")
         for rs in round_summaries:
             t_total = rs["train_total"]
             e_total = rs["eval_total"]
             t_rate = rs["train_solved"] / max(t_total, 1)
             e_rate = rs["eval_solved"] / max(e_total, 1)
+            t_wall = fmt_duration(rs.get("train_wall", 0))
+            e_wall = fmt_duration(rs.get("eval_wall", 0))
             print(f"  {rs['round']:>5}  "
                   f"{rs['train_solved']:>4}/{t_total} ({t_rate:>5.1%})  "
                   f"{rs['train_overfit']:>7}  "
                   f"{rs['train_library']:>7}  "
                   f"{rs['eval_solved']:>4}/{e_total} ({e_rate:>5.1%})  "
-                  f"{rs['eval_overfit']:>7}")
-        # Highlight compounding
-        if round_summaries[-1]["eval_solved"] > round_summaries[0]["eval_solved"]:
-            r1 = round_summaries[0]["eval_solved"]
-            rn = round_summaries[-1]["eval_solved"]
-            print(f"\n  >>> EVAL COMPOUNDING: {r1} → {rn} eval solves across rounds")
+                  f"{rs['eval_overfit']:>7}  "
+                  f"{t_wall:>10}  {e_wall:>10}")
+        if len(round_summaries) > 1:
+            if round_summaries[-1]["eval_solved"] > round_summaries[0]["eval_solved"]:
+                r1 = round_summaries[0]["eval_solved"]
+                rn = round_summaries[-1]["eval_solved"]
+                print(f"\n  >>> EVAL COMPOUNDING: {r1} \u2192 {rn} eval solves across rounds")
+            if round_summaries[-1]["train_solved"] > round_summaries[0]["train_solved"]:
+                r1 = round_summaries[0]["train_solved"]
+                rn = round_summaries[-1]["train_solved"]
+                print(f"  >>> TRAIN COMPOUNDING: {r1} \u2192 {rn} train solves across rounds")
+
+    # Final results summary
+    print()
+    total_train_wall = sum(rs.get("train_wall", 0) for rs in (round_summaries or []))
+    total_eval_wall = sum(rs.get("eval_wall", 0) for rs in (round_summaries or []))
+    total_wall = total_train_wall + total_eval_wall
+
+    t_solved = train_summary.get("last_round_solved", 0)
+    t_total = train_summary.get("n_tasks", 0)
+    t_rate = train_summary.get("last_round_solve_rate", 0)
+    e_solved = eval_summary.get("last_round_solved", 0)
+    e_total = eval_summary.get("n_tasks", 0)
+    e_rate = eval_summary.get("last_round_solve_rate", 0)
+    lib_size = train_summary.get("library_size", 0)
+
+    print(f"  Final (round {n_rounds}):")
+    print(f"    Training:          {t_solved}/{t_total} ({t_rate:.1%})")
+    print(f"    Eval:              {e_solved}/{e_total} ({e_rate:.1%})")
+    print(f"    Library:           {lib_size} learned abstractions")
+    print()
+    print(f"  Wall time:")
+    print(f"    Training total:    {fmt_duration(total_train_wall)}")
+    print(f"    Eval total:        {fmt_duration(total_eval_wall)}")
+    print(f"    Pipeline total:    {fmt_duration(total_wall)}")
 
     print()
     print("  Pipeline artifacts:")
@@ -1383,8 +1377,10 @@ def run_pipeline(
                 "train_overfit": max(0, t_summary.get("last_round_train_solved", 0)
                                      - t_summary.get("last_round_solved", 0)),
                 "train_library": t_summary.get("library_size", 0),
+                "train_wall": t_summary.get("wall_clock_seconds", 0),
                 "eval_solved": e_summary.get("last_round_solved", 0),
                 "eval_total": e_summary.get("n_tasks", 0),
+                "eval_wall": e_summary.get("wall_clock_seconds", 0),
                 "eval_overfit": max(0, e_summary.get("last_round_train_solved", 0)
                                     - e_summary.get("last_round_solved", 0)),
             })
