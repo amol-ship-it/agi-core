@@ -19,7 +19,7 @@ from core import Primitive, Program
 from .primitives import (
     Grid, register_prim,
     # Geometric — reuse directly
-    identity, rotate_90_cw, rotate_90_ccw, rotate_180,
+    rotate_90_cw, rotate_90_ccw, rotate_180,
     mirror_horizontal, mirror_vertical, transpose,
     # Spatial — reuse directly
     crop_to_nonzero, get_top_half, get_bottom_half,
@@ -277,8 +277,7 @@ def build_atomic_primitives() -> list[Primitive]:
     Each performs exactly ONE visual concept. No embedded object detection.
     """
     unary_ops = [
-        # --- Geometric (7): reuse from primitives.py ---
-        ("identity",                    identity),
+        # --- Geometric (6): reuse from primitives.py ---
         ("rotate_90_clockwise",         rotate_90_cw),
         ("rotate_90_counterclockwise",  rotate_90_ccw),
         ("rotate_180",                  rotate_180),

@@ -22,7 +22,7 @@ from domains.arc.atomic_primitives import (
     ATOMIC_ESSENTIAL_PAIR_CONCEPTS,
     expand_with_combinators,
     # Re-exported from primitives
-    identity, rotate_90_cw, rotate_90_ccw, rotate_180,
+    rotate_90_cw, rotate_90_ccw, rotate_180,
     mirror_horizontal, mirror_vertical, transpose,
     crop_to_nonzero, scale_2x, scale_3x, downscale_2x,
     binarize, invert_colors, overlay, tile_2x2,
@@ -30,6 +30,7 @@ from domains.arc.atomic_primitives import (
 )
 from domains.arc.grammar import ARCGrammar
 from domains.arc.environment import ARCEnv
+from domains.arc.primitives import identity
 
 
 # =============================================================================
@@ -459,7 +460,7 @@ class TestGrammarIntegration:
         prims = g.base_primitives()
         assert len(prims) >= 20
         names = {p.name for p in prims}
-        assert "identity" in names
+        assert "identity" not in names  # identity removed — wastes search budget
         assert "dilate" in names
         assert "erode" in names
         assert "overlay" in names

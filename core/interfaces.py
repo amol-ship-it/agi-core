@@ -240,6 +240,16 @@ class Grammar(ABC):
         """
         return []
 
+    def allow_structural_phases(self) -> bool:
+        """Whether to run structural bypass phases (object decomposition,
+        cross-reference, conditional per-object, grammar decomposition).
+
+        When False (e.g. atomic vocabulary), these phases are skipped so the
+        system must discover structural patterns through composition.
+        Default: True.
+        """
+        return True
+
     def prepare_for_task(self, task: Task) -> None:
         """Called before the wake phase begins on a task.
 

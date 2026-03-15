@@ -83,6 +83,9 @@ class ARCGrammar(Grammar):
         self._task_prims: list[Primitive] = []
         self._vocabulary = vocabulary
 
+    def allow_structural_phases(self) -> bool:
+        return self._vocabulary != "atomic"
+
     def get_predicates(self) -> list[tuple[str, callable]]:
         return list(ARC_PREDICATES)
 

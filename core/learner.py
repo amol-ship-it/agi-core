@@ -296,7 +296,7 @@ class Learner:
 
     def _phase_object_decomposition(self, ctx: _WakeContext) -> Optional[str]:
         """Phase 1.1: Try per-object transforms via connected components."""
-        if ctx.solved:
+        if ctx.solved or not self.grammar.allow_structural_phases():
             return None
         t = time.time()
         result = self.env.try_object_decomposition(ctx.task, ctx.all_prims) if ctx.budget_ok() else None
@@ -312,7 +312,7 @@ class Learner:
 
     def _phase_for_each_object(self, ctx: _WakeContext) -> Optional[str]:
         """Phase 1.12: Apply top-K enumeration candidates per-object."""
-        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
+        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok() or not self.grammar.allow_structural_phases():
             return None
         t = time.time()
         result = self.env.try_for_each_object(ctx.task, ctx.enum_candidates, top_k=10)
@@ -328,7 +328,7 @@ class Learner:
 
     def _phase_conditional_per_object(self, ctx: _WakeContext) -> Optional[str]:
         """Phase 1.125: Try if(pred, A, B) per-object."""
-        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
+        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok() or not self.grammar.allow_structural_phases():
             return None
         predicates = self.grammar.get_predicates()
         if not predicates:
@@ -348,7 +348,7 @@ class Learner:
 
     def _phase_cross_reference(self, ctx: _WakeContext) -> Optional[str]:
         """Phase 1.13: Cross-reference (one grid part informs another)."""
-        if ctx.solved:
+        if ctx.solved or not self.grammar.allow_structural_phases():
             return None
         t = time.time()
         result = self.env.try_cross_reference(ctx.task, ctx.all_prims)
@@ -364,7 +364,7 @@ class Learner:
 
     def _phase_grammar_decomposition(self, ctx: _WakeContext) -> Optional[str]:
         """Phase 1.15: Generic decompose/recompose via Grammar."""
-        if ctx.solved or not ctx.budget_ok():
+        if ctx.solved or not ctx.budget_ok() or not self.grammar.allow_structural_phases():
             return None
         t = time.time()
         result = self._try_grammar_decomposition(ctx.all_prims, ctx.task)
