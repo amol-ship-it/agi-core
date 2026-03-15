@@ -42,9 +42,16 @@ These instructions apply to every session automatically.
 - Clear, descriptive commit messages.
 - Branch: develop on the designated feature branch per session.
 
+## Hyperparameter Optimization
+
+- **Always do sweet-spot optimization** for parameters and hyperparameters when making changes. Don't just pick a value — measure alternatives.
+- Key hyperparameters to keep tuned: `energy_beta` (complexity penalty), `near_miss_threshold`, `near_miss_weight`, `exhaustive_pair_top_k`, `exhaustive_triple_top_k`, `compute_cap` presets.
+- When adding new features with tunable parameters, run at least 3 values (low/mid/high) on a quick subset to find the sweet spot before committing.
+- Document measured results in DECISIONS.md so future sessions know what was tried.
+
 ## Core Architecture Invariant
 
 - The core loop (`core/`) must NEVER import anything domain-specific.
 - Each domain lives under `domains/<name>/` and provides a `DomainAdapter` plus all 4 interfaces (Environment, Grammar, DriveSignal, Memory).
 - `common/benchmark.py` provides the benchmark runner, pipeline, presets, and progress tracking. The unified CLI is `python -m common --domain <name>`.
-- Experiment scripts in `experiments/` are thin wrappers that wire domain adapters into the generic `common/benchmark.py` runner.
+- Three primitive kinds: `transform` (Grid→Grid), `perception` (Grid→Value), `parameterized` (Values→Grid→Grid factory). Perception feeds into parameterized actions for transferable compositions.

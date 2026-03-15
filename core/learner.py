@@ -1836,6 +1836,7 @@ class Learner:
                        if p.arity <= 1 and p.kind == "transform"]
         prim_by_name: dict[str, Primitive] = {p.name: p for p in unary_prims}
         depth1_solved = False
+        noop_prims: set[str] = set()  # prims that don't change the grid (pruned at depth 2+)
         for prim in unary_prims:
             prog = Program(root=prim.name)
             sp = self._evaluate_program(prog, task)
@@ -1843,6 +1844,16 @@ class Learner:
             n_evals += 1  # depth 1 = 1 op
             if sp.prediction_error <= solve_thresh:
                 depth1_solved = True
+            # Detect no-ops: output identical to input on all training examples
+            if sp.prediction_error > solve_thresh:
+                is_noop = True
+                for inp, _ in task.train_examples:
+                    out = self.env.execute(prog, inp)
+                    if out != inp:
+                        is_noop = False
+                        break
+                if is_noop:
+                    noop_prims.add(prim.name)
 
         # --- Parameterized prims with perception children ---
         # Try all combinations: parameterized(perception1, perception2, ...)
@@ -1945,13 +1956,14 @@ class Learner:
                 seen_names.add(name)
 
         # --- Smart pruning for depth-2: filter inner steps by quality ---
-        # Inner steps with very high error (>0.7) rarely help in composition.
-        # Keep the full pair_pool for outer steps (they transform results)
-        # but restrict inner steps to those that produce useful intermediate results.
+        # 1. No-op pruning: skip prims that don't change the grid (e.g. binarize
+        #    on already-binary grids). f(noop(x)) = f(x), already tried at depth 1.
+        # 2. Quality filter: inner steps with very high error (>0.7) rarely help.
         INNER_STEP_THRESHOLD = 0.70
         inner_pool = [
             name for name in pair_pool
-            if depth1_scores.get(name, 1.0) <= INNER_STEP_THRESHOLD
+            if name not in noop_prims
+            and depth1_scores.get(name, 1.0) <= INNER_STEP_THRESHOLD
         ]
         # Fallback: if too few pass threshold, use top half by score
         if len(inner_pool) < pair_top_k // 3:
@@ -1961,13 +1973,11 @@ class Learner:
         for outer_name in pair_pool:
             if not _budget_ok():
                 break
-            if outer_name == "identity":
-                continue  # identity(x) = x, already tested at depth 1
+            if outer_name in noop_prims:
+                continue  # noop(x) = x, already tested at depth 1
             for inner_name in inner_pool:
                 if not _budget_ok():
                     break
-                if inner_name == "identity":
-                    continue  # f(identity) = f, already tested at depth 1
                 prog = Program(root=outer_name, children=[
                     Program(root=inner_name)])
                 sp = self._evaluate_program(prog, task)
