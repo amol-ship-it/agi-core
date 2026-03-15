@@ -27,13 +27,13 @@ git clone https://github.com/fchollet/ARC-AGI.git data/ARC-AGI
 git clone https://github.com/arcprizeorg/ARC-AGI-2.git data/ARC-AGI-2
 
 # Reproduce our results — one command does train + eval with culture transfer
-python -m common --domain arc-agi-1 --run-mode pipeline --rounds 3
+python -m common --domain arc-agi-1 --rounds 3
 
 # Run the test suite (~4 seconds)
 python -m pytest tests/ -v
 ```
 
-The pipeline command runs interleaved train → eval rounds, saving the learned culture after each training round and evaluating with it. Results, logs, visualizations, and culture snapshots are auto-saved with timestamps.
+The default mode is pipeline: interleaved train → eval rounds, saving the learned culture after each training round and evaluating with it. Results, logs, visualizations, and culture snapshots are auto-saved with timestamps.
 
 **Requirements:** Python 3.10+, NumPy, SciPy, Numba. See `requirements.txt`.
 
@@ -51,8 +51,8 @@ git -C data/ARC-AGI-2 pull
 All domains run through a single CLI entry point:
 
 ```bash
-# Full pipeline: train → eval × N rounds (default, recommended)
-python -m common --domain arc-agi-1 --run-mode pipeline --rounds 3
+# Full pipeline: train → eval × N rounds (default)
+python -m common --domain arc-agi-1 --rounds 3
 
 # Quick subset for development (50 tasks, 500K compute cap, ~4s)
 python -m common --domain arc-agi-1 --mode quick
@@ -207,7 +207,7 @@ Quick mode (50 training tasks, ~4s): 4/50 (8%) with 3 rounds.
 |------|---------|-------------|
 | `--domain` | (required) | Domain: `arc-agi-1`, `arc-agi-2`, `zork`, or `list-ops` |
 | `--mode` | `default` | Preset: `quick` or `default` |
-| `--run-mode` | `single` | `single` (train or eval) or `pipeline` (train → eval per round) |
+| `--run-mode` | `pipeline` | `pipeline` (train → eval per round) or `single` (train or eval only) |
 | `--split` | `training` | Data split for single mode: `training` or `evaluation` |
 | `--rounds` | `1` | Wake-sleep rounds (use 3+ for compounding) |
 | `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
