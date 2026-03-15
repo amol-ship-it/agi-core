@@ -24,12 +24,10 @@ from .primitives import (
     # Spatial — reuse directly
     crop_to_nonzero, get_top_half, get_bottom_half,
     get_left_half, get_right_half,
-    # Scale — reuse directly
-    scale_2x, scale_3x, downscale_2x,
     # Color — reuse directly
     binarize, invert_colors,
-    # Placement — reuse directly
-    overlay, tile_2x2,
+    # Binary — reuse directly
+    overlay,
     # Perception — atomic perception primitives
     gravity_down, fill_enclosed,
     keep_largest_object_only, keep_smallest_object_only,
@@ -305,17 +303,9 @@ def build_atomic_primitives() -> list[Primitive]:
         ("crop_half_right",             get_right_half),
         ("pad_border",                  pad_border),
 
-        # --- Scale (3): reuse ---
-        ("scale_2x",                    scale_2x),
-        ("scale_3x",                    scale_3x),
-        ("downscale_2x",               downscale_2x),
-
         # --- Color (2): reuse ---
         ("binarize",                    binarize),
         ("invert_colors",              invert_colors),
-
-        # --- Placement (1 unary): tile ---
-        ("tile_2x2",                    tile_2x2),
 
         # --- Morphological (2): new ---
         ("dilate",                      dilate),
@@ -398,6 +388,58 @@ def _fill_bg_with_color_factory(color: int):
     return fill
 
 
+def _scale_factory(n: int):
+    """Factory: upscale each pixel to n×n block."""
+    if not isinstance(n, int) or n < 1 or n > 10:
+        return lambda grid: grid
+    def scale(grid: Grid) -> Grid:
+        if not grid or not grid[0]:
+            return grid
+        return [[grid[r // n][c // n]
+                 for c in range(len(grid[0]) * n)]
+                for r in range(len(grid) * n)]
+    return scale
+
+
+def _tile_factory(n: int):
+    """Factory: tile the grid n×n times."""
+    if not isinstance(n, int) or n < 1 or n > 10:
+        return lambda grid: grid
+    def tile(grid: Grid) -> Grid:
+        if not grid or not grid[0]:
+            return grid
+        h, w = len(grid), len(grid[0])
+        return [[grid[r % h][c % w]
+                 for c in range(w * n)]
+                for r in range(h * n)]
+    return tile
+
+
+def _downscale_factory(n: int):
+    """Factory: downscale by factor n (majority vote per block)."""
+    from collections import Counter as _Counter
+    if not isinstance(n, int) or n < 1 or n > 10:
+        return lambda grid: grid
+    def downscale(grid: Grid) -> Grid:
+        if not grid or not grid[0]:
+            return grid
+        h, w = len(grid), len(grid[0])
+        nh, nw = h // n, w // n
+        if nh == 0 or nw == 0:
+            return grid
+        result = []
+        for r in range(nh):
+            row = []
+            for c in range(nw):
+                block = [grid[r * n + dr][c * n + dc]
+                         for dr in range(n) for dc in range(n)
+                         if r * n + dr < h and c * n + dc < w]
+                row.append(_Counter(block).most_common(1)[0][0] if block else 0)
+            result.append(row)
+        return result
+    return downscale
+
+
 def build_parameterized_primitives() -> list[Primitive]:
     """Build parameterized action primitives (factory functions).
 
@@ -405,6 +447,7 @@ def build_parameterized_primitives() -> list[Primitive]:
     Children in the program tree are perception primitives.
     """
     return [
+        # Color parameterized
         Primitive(name="swap_colors", arity=2,
                   fn=_swap_colors_factory, domain="arc", kind="parameterized"),
         Primitive(name="replace_color", arity=2,
@@ -415,6 +458,13 @@ def build_parameterized_primitives() -> list[Primitive]:
                   fn=_erase_color_factory, domain="arc", kind="parameterized"),
         Primitive(name="fill_bg_with", arity=1,
                   fn=_fill_bg_with_color_factory, domain="arc", kind="parameterized"),
+        # Scale/tile parameterized (dimension comes from perception)
+        Primitive(name="scale", arity=1,
+                  fn=_scale_factory, domain="arc", kind="parameterized"),
+        Primitive(name="tile", arity=1,
+                  fn=_tile_factory, domain="arc", kind="parameterized"),
+        Primitive(name="downscale", arity=1,
+                  fn=_downscale_factory, domain="arc", kind="parameterized"),
     ]
 
 

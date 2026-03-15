@@ -24,8 +24,8 @@ from domains.arc.transformation_primitives import (
     # Re-exported from primitives
     rotate_90_cw, rotate_90_ccw, rotate_180,
     mirror_horizontal, mirror_vertical, transpose,
-    crop_to_nonzero, scale_2x, scale_3x, downscale_2x,
-    binarize, invert_colors, overlay, tile_2x2,
+    crop_to_nonzero,
+    binarize, invert_colors, overlay,
     get_top_half, get_bottom_half, get_left_half, get_right_half,
 )
 from domains.arc.grammar import ARCGrammar
@@ -160,19 +160,35 @@ class TestSpatialPrimitives:
 
 
 class TestScalePrimitives:
-    """Test the 3 scale atomics."""
+    """Test the parameterized scale/tile/downscale factories."""
 
-    def test_scale_2x(self):
-        result = scale_2x([[1]])
-        assert result == [[1, 1], [1, 1]]
+    def test_scale_factory(self):
+        from domains.arc.transformation_primitives import _scale_factory
+        scale_2 = _scale_factory(2)
+        assert scale_2([[1]]) == [[1, 1], [1, 1]]
 
-    def test_scale_3x(self):
-        result = scale_3x([[1]])
+    def test_scale_factory_3x(self):
+        from domains.arc.transformation_primitives import _scale_factory
+        scale_3 = _scale_factory(3)
+        result = scale_3([[1]])
         assert len(result) == 3 and len(result[0]) == 3
 
-    def test_downscale_2x(self):
-        result = downscale_2x([[1, 1], [1, 1]])
-        assert result == [[1]]
+    def test_tile_factory(self):
+        from domains.arc.transformation_primitives import _tile_factory
+        tile_2 = _tile_factory(2)
+        result = tile_2([[1]])
+        assert result == [[1, 1], [1, 1]]
+
+    def test_downscale_factory(self):
+        from domains.arc.transformation_primitives import _downscale_factory
+        down_2 = _downscale_factory(2)
+        assert down_2([[1, 1], [1, 1]]) == [[1]]
+
+    def test_scale_guards(self):
+        from domains.arc.transformation_primitives import _scale_factory
+        # n > 10 should return identity
+        scale_big = _scale_factory(100)
+        assert scale_big([[1]]) == [[1]]
 
 
 class TestColorPrimitives:
@@ -277,7 +293,7 @@ class TestRecolorErase:
 
 
 class TestPlacementPrimitives:
-    """Test overlay and tile_2x2."""
+    """Test overlay."""
 
     def test_overlay(self):
         base = [[0, 1], [0, 0]]
@@ -286,11 +302,6 @@ class TestPlacementPrimitives:
         assert result[0][0] == 2  # top overwrites
         assert result[0][1] == 1  # base preserved
         assert result[1][1] == 3
-
-    def test_tile_2x2(self):
-        result = tile_2x2([[1]])
-        assert len(result) == 2
-        assert len(result[0]) == 2
 
 
 # =============================================================================

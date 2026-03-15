@@ -96,6 +96,59 @@ def n_foreground_colors(grid: Grid) -> int:
 
 
 # =============================================================================
+# Dimension perception: detect grid geometry
+# =============================================================================
+
+def grid_height(grid: Grid) -> int:
+    """Return the height (number of rows) of the grid."""
+    return len(grid) if grid else 0
+
+
+def grid_width(grid: Grid) -> int:
+    """Return the width (number of columns) of the grid."""
+    return len(grid[0]) if grid and grid[0] else 0
+
+
+def grid_min_dim(grid: Grid) -> int:
+    """Return the smaller dimension (min of height, width)."""
+    h = len(grid) if grid else 0
+    w = len(grid[0]) if grid and grid[0] else 0
+    return min(h, w) if h and w else 0
+
+
+# =============================================================================
+# Object counting perception
+# =============================================================================
+
+def n_objects(grid: Grid) -> int:
+    """Return the number of connected foreground components."""
+    if not grid or not grid[0]:
+        return 0
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    bg = Counter(flat).most_common(1)[0][0]
+    h, w = len(grid), len(grid[0])
+    visited = set()
+    count = 0
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != bg and (r, c) not in visited:
+                count += 1
+                # BFS flood fill
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop()
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if (0 <= nr < h and 0 <= nc < w
+                                and (nr, nc) not in visited
+                                and grid[nr][nc] != bg):
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+    return count
+
+
+# =============================================================================
 # Build functions
 # =============================================================================
 
@@ -112,6 +165,10 @@ def build_perception_primitives() -> list[Primitive]:
         ("accent_color",         accent_color),
         ("n_colors",             n_colors),
         ("n_foreground_colors",  n_foreground_colors),
+        ("grid_height",          grid_height),
+        ("grid_width",           grid_width),
+        ("grid_min_dim",         grid_min_dim),
+        ("n_objects",            n_objects),
     ]
     return [
         Primitive(name=name, arity=0, fn=fn, domain="arc", kind="perception")
