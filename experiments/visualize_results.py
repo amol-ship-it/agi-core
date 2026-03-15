@@ -78,6 +78,14 @@ a:hover { text-decoration:underline; }
              padding:10px; background:#0f3460; border-radius:6px; }
 .step-stage { text-align:center; }
 .step-prim-name { color:#FF851B; font-size:0.8em; text-align:center; }
+.step-prim-name.perception { color:#7FDBFF; }
+.step-prim-name.parameterized { color:#F012BE; }
+.perception-value { background:#16213e; border:1px solid #333; border-radius:6px;
+                    padding:12px 18px; text-align:center; min-width:60px; }
+.perception-value .label { font-size:0.75em; color:#999; margin-bottom:4px; }
+.perception-value .value { font-size:1.4em; font-weight:bold; color:#7FDBFF; }
+.color-swatch { display:inline-block; width:16px; height:16px; border-radius:3px;
+                border:1px solid #555; vertical-align:middle; margin-left:4px; }
 """
 
 INDEX_CSS = """
@@ -213,20 +221,63 @@ def _graft_children(tree: Program, children: list[Program]) -> Program:
 
 def _execute_steps(prog: Program, grid, env: ARCEnv,
                    library_map: Optional[dict] = None,
-                   ) -> list[tuple[str, list]]:
-    """Execute program tree step-by-step. Returns [(prim_name, output), ...].
+                   ) -> list[dict]:
+    """Execute program tree step-by-step.
+
+    Returns list of step dicts:
+        {"name": str, "type": "grid"|"perception"|"parameterized",
+         "output": grid_or_value, "perception_args": [...]}
 
     If library_map is provided, learned entries are expanded inline so that
     every primitive in the expansion gets its own step.
     """
+    from domains.arc.primitives import _PRIM_MAP
+
     expanded = _expand_learned(prog, library_map or {})
-    steps: list[tuple[str, list]] = []
+    steps: list[dict] = []
+
+    def _get_kind(name: str) -> str:
+        prim = _PRIM_MAP.get(name)
+        return prim.kind if prim else "transform"
 
     def _eval(node: Program, inp):
+        kind = _get_kind(node.root)
+
+        if kind == "perception":
+            # Perception: extract value from grid, don't transform
+            prim = _PRIM_MAP.get(node.root)
+            value = prim.fn(inp) if prim else None
+            steps.append({"name": node.root, "type": "perception", "output": value})
+            return value
+
+        if kind == "parameterized":
+            # Parameterized: evaluate perception children, then apply factory
+            perception_args = []
+            for child in node.children:
+                val = _eval(child, inp)
+                perception_args.append(val)
+            prim = _PRIM_MAP.get(node.root)
+            try:
+                transform_fn = prim.fn(*perception_args)
+                result = transform_fn(inp) if callable(transform_fn) else inp
+                if not isinstance(result, list) or not result:
+                    result = inp
+            except Exception:
+                result = inp
+            steps.append({
+                "name": node.root, "type": "parameterized",
+                "output": result, "perception_args": perception_args,
+            })
+            return result
+
+        # Transform: evaluate children first, then apply
         child_result = inp
         if node.children:
             for child in node.children:
                 child_result = _eval(child, child_result)
+                # If child was perception, child_result is a value — use original grid
+                if not isinstance(child_result, list):
+                    child_result = inp
         leaf = Program(root=node.root)
         try:
             result = env.execute(leaf, child_result)
@@ -234,7 +285,7 @@ def _execute_steps(prog: Program, grid, env: ARCEnv,
                 result = child_result
         except Exception:
             result = child_result
-        steps.append((node.root, result))
+        steps.append({"name": node.root, "type": "grid", "output": result})
         return result
 
     try:
@@ -333,12 +384,31 @@ def _render_example_row(label, inp, expected, prediction, cell_size=0) -> str:
 # Render derivation: step-by-step from input → predicted
 # --------------------------------------------------------------------------
 
+_PERCEPTION_COLOR_PRIMS = {
+    "background_color", "dominant_color", "rarest_color", "accent_color",
+    "largest_object_color", "smallest_object_color",
+}
+
+
+def _render_perception_value(name: str, value) -> str:
+    """Render a perception value, with color swatch if it's a color."""
+    val_str = str(value)
+    swatch = ""
+    if name in _PERCEPTION_COLOR_PRIMS and isinstance(value, int) and 0 <= value <= 9:
+        color_hex = ARC_COLORS.get(value, "#000")
+        swatch = f' <span class="color-swatch" style="background:{color_hex}"></span>'
+    return (f'<div class="perception-value">'
+            f'<div class="label">{html.escape(name)}</div>'
+            f'<div class="value">{val_str}{swatch}</div></div>')
+
+
 def _render_derivation(inp, prog, env,
                        library_map: Optional[dict] = None) -> str:
     """Show step-by-step execution: input --prim→ ... --prim→ predicted.
 
-    If library_map is provided, learned entries are expanded inline so every
-    primitive in the expansion gets its own step in the derivation.
+    Shows perception values inline (with color swatches for color prims),
+    parameterized prims with their perception arguments, and grid transforms
+    with intermediate outputs.
     """
     has_steps = prog.children or prog.root != "identity"
     if not has_steps:
@@ -349,11 +419,34 @@ def _render_derivation(inp, prog, env,
         return ''
 
     parts = ['<div class="step-flow">', _grid_with_label(inp, "Input")]
-    for prim_name, step_grid in steps:
-        parts.append(f'<div class="step-stage">'
-                     f'<div class="step-prim-name">{html.escape(prim_name)}</div>'
-                     f'<div class="arrow">&rarr;</div></div>')
-        parts.append(_grid_with_label(step_grid, f"after {prim_name}"))
+    for step in steps:
+        name = step["name"]
+        step_type = step["type"]
+        output = step["output"]
+
+        if step_type == "perception":
+            css_class = "step-prim-name perception"
+            parts.append(f'<div class="step-stage">'
+                         f'<div class="{css_class}">{html.escape(name)}</div>'
+                         f'<div class="arrow">&rarr;</div></div>')
+            parts.append(_render_perception_value(name, output))
+
+        elif step_type == "parameterized":
+            css_class = "step-prim-name parameterized"
+            # Show perception args that fed into this prim
+            args_str = ", ".join(str(a) for a in step.get("perception_args", []))
+            label = f"{name}({args_str})"
+            parts.append(f'<div class="step-stage">'
+                         f'<div class="{css_class}">{html.escape(label)}</div>'
+                         f'<div class="arrow">&rarr;</div></div>')
+            parts.append(_grid_with_label(output, f"after {label}"))
+
+        else:  # grid transform
+            parts.append(f'<div class="step-stage">'
+                         f'<div class="step-prim-name">{html.escape(name)}</div>'
+                         f'<div class="arrow">&rarr;</div></div>')
+            parts.append(_grid_with_label(output, f"after {name}"))
+
     parts.append('</div>')
     return '\n'.join(parts)
 

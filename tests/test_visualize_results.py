@@ -253,8 +253,8 @@ class TestExecuteStepsWithLibrary(unittest.TestCase):
         grid = [[1, 2], [3, 4]]
         steps = _execute_steps(prog, grid, self.env)
         self.assertEqual(len(steps), 1)
-        self.assertEqual(steps[0][0], "identity")
-        self.assertEqual(steps[0][1], [[1, 2], [3, 4]])
+        self.assertEqual(steps[0]["name"], "identity")
+        self.assertEqual(steps[0]["output"], [[1, 2], [3, 4]])
 
     def test_steps_with_composition(self):
         """Composed program shows each step."""
@@ -265,8 +265,8 @@ class TestExecuteStepsWithLibrary(unittest.TestCase):
         grid = [[1, 2], [3, 4]]
         steps = _execute_steps(prog, grid, self.env)
         self.assertEqual(len(steps), 2)
-        self.assertEqual(steps[0][0], "identity")
-        self.assertEqual(steps[1][0], "mirror_horizontal")
+        self.assertEqual(steps[0]["name"], "identity")
+        self.assertEqual(steps[1]["name"], "mirror_horizontal")
 
     def test_steps_with_library_expansion(self):
         """Learned entry should be expanded into individual steps."""
@@ -291,14 +291,14 @@ class TestExecuteStepsWithLibrary(unittest.TestCase):
         grid = [[1, 2], [3, 4]]
         steps_opaque = _execute_steps(prog, grid, self.env, library_map=None)
         self.assertEqual(len(steps_opaque), 1)
-        self.assertEqual(steps_opaque[0][0], "learned_test_0")
+        self.assertEqual(steps_opaque[0]["name"], "learned_test_0")
 
         # With library_map: 2 steps (identity, then mirror_horizontal)
         steps_expanded = _execute_steps(prog, grid, self.env,
                                         library_map=library_map)
         self.assertEqual(len(steps_expanded), 2)
-        self.assertEqual(steps_expanded[0][0], "identity")
-        self.assertEqual(steps_expanded[1][0], "mirror_horizontal")
+        self.assertEqual(steps_expanded[0]["name"], "identity")
+        self.assertEqual(steps_expanded[1]["name"], "mirror_horizontal")
 
         # Clean up
         del _PRIM_MAP["learned_test_0"]
@@ -326,8 +326,8 @@ class TestExecuteStepsWithLibrary(unittest.TestCase):
         grid = [[1, 2], [3, 4]]
         steps = _execute_steps(prog, grid, self.env, library_map=library_map)
         self.assertEqual(len(steps), 2)
-        self.assertEqual(steps[0][0], "identity")
-        self.assertEqual(steps[1][0], "mirror_horizontal")
+        self.assertEqual(steps[0]["name"], "identity")
+        self.assertEqual(steps[1]["name"], "mirror_horizontal")
 
         # Clean up
         del _PRIM_MAP["learned_test_1"]
