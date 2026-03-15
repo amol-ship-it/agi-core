@@ -139,18 +139,21 @@ def _wake_worker(args: tuple) -> WakeResult:
     grammar._rng = random.Random(task_seed)
 
     # Log task start (flushes to help identify memory-hungry tasks)
-    import sys as _sys
-    import resource as _resource
-    rss_mb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss / 1024
-    print(f"    [worker pid={os.getpid()}] STARTING {task.task_id} (RSS={rss_mb:.0f}MB)",
-          flush=True)
+    # Suppressed in batch mode (verbose=False in SearchConfig).
+    if worker_cfg.verbose:
+        import resource as _resource
+        rss_mb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss / 1024
+        print(f"    [worker pid={os.getpid()}] STARTING {task.task_id} (RSS={rss_mb:.0f}MB)",
+              flush=True)
 
     # Solve — but skip memory recording (main process handles that)
     result = learner._wake_on_task_no_record(task)
 
-    rss_mb_after = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss / 1024
-    print(f"    [worker pid={os.getpid()}] FINISHED {task.task_id} (RSS={rss_mb_after:.0f}MB)",
-          flush=True)
+    if worker_cfg.verbose:
+        import resource as _resource
+        rss_mb_after = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss / 1024
+        print(f"    [worker pid={os.getpid()}] FINISHED {task.task_id} (RSS={rss_mb_after:.0f}MB)",
+              flush=True)
     return result
 
 
@@ -529,6 +532,8 @@ class Learner:
             ctx.best_so_far = top_sp
         if ts is None and ctx.best_so_far is not None:
             te, ts = self._evaluate_on_test(ctx.best_so_far, ctx.task)
+        # Simplify: remove identity steps before storing
+        ctx.best_so_far = self._try_simplify(ctx.best_so_far, ctx.task)
         ctx.best_so_far.task_id = ctx.task.task_id
         self._record_solve(ctx)
         front = self._extract_pareto_front(ctx.pareto)
@@ -549,6 +554,8 @@ class Learner:
     def _make_unsolved_result(self, ctx: _WakeContext) -> WakeResult:
         """Build WakeResult for an unsolved task."""
         if ctx.best_so_far:
+            # Simplify: remove identity steps before storing
+            ctx.best_so_far = self._try_simplify(ctx.best_so_far, ctx.task)
             ctx.best_so_far.task_id = ctx.task.task_id
             if ctx.record:
                 self.memory.record_episode(
@@ -570,6 +577,19 @@ class Learner:
             wall_time=wall, pareto_front=front,
             dedup_count=ctx.total_deduped,
             train_predictions=train_preds, test_predictions=test_preds)
+
+    def _try_simplify(self, sp: ScoredProgram, task: Task) -> ScoredProgram:
+        """Simplify program by removing identity steps; re-score if changed."""
+        simplified = self._simplify_program(sp.program, task)
+        if simplified is sp.program:
+            return sp  # no change
+        old_size = sp.program.size
+        new_size = simplified.size
+        logger.info(
+            f"    [simplify] Pruned identity steps: "
+            f"{repr(sp.program)} ({old_size} nodes) → "
+            f"{repr(simplified)} ({new_size} nodes)")
+        return self._evaluate_program(simplified, task)
 
     def _record_solve(self, ctx: _WakeContext) -> None:
         """Record solution in memory if record=True."""
@@ -2039,6 +2059,97 @@ class Learner:
                 if sp.prediction_error <= solve_thresh:
                     return scored, n_evals
 
+        # --- Depth 2.1: Mixed transform + parameterized compositions ---
+        # Try transform(parameterized(perception)(x)) and vice versa.
+        # These represent common ARC patterns like:
+        #   trim_rows(keep_color(dominant_color)(x)) — filter color, then crop
+        #   keep_color(rarest_color)(mirror_horizontal(x)) — mirror, then filter
+        # Cost: O(K_transform × K_param × 2) ≈ 400 evals for K=10.
+        if param_prims and percep_prims and _budget_ok():
+            # Collect best parameterized(perception) programs from depth-1
+            param_scored = [sp for sp in scored
+                            if sp.program.root in {p.name for p in param_prims}
+                            and sp.program.children]
+            param_scored.sort(key=lambda s: s.prediction_error)
+            MIXED_PARAM_K = 10
+            MIXED_TRANSFORM_K = 15
+            top_param_progs = param_scored[:MIXED_PARAM_K]
+
+            # Top transform prims from the pair pool
+            top_transform_names = [n for n in pair_pool[:MIXED_TRANSFORM_K]
+                                   if n not in noop_prims]
+
+            for param_sp in top_param_progs:
+                if not _budget_ok():
+                    break
+                param_prog = param_sp.program
+                for t_name in top_transform_names:
+                    if not _budget_ok():
+                        break
+                    # Pattern 1: transform(parameterized(perception)(x))
+                    prog_a = Program(root=t_name,
+                                     children=[copy.deepcopy(param_prog)])
+                    sp = self._evaluate_program(prog_a, task)
+                    scored.append(sp)
+                    n_evals += 2
+                    if sp.prediction_error <= solve_thresh:
+                        return scored, n_evals
+
+                    # Pattern 2: parameterized(perception)(transform(x))
+                    # Build: param(perc1, perc2, ...) with inner transform
+                    # This requires a different tree structure — the transform
+                    # feeds the grid, then parameterized uses perception on
+                    # the ORIGINAL grid. Use the existing tree structure:
+                    # param_root(perc_children...) wraps transform as outer.
+                    prog_b = Program(root=param_prog.root,
+                                     children=list(param_prog.children))
+                    # Wrap: make the param act on transform(x)
+                    # This is: outer_transform = identity, inner = param(percs)(transform(x))
+                    # Actually the cleaner way: transform feeds into param's grid
+                    # But perception nodes extract from the raw input, not the
+                    # transformed grid. So pattern 2 = param_result(transform_result)
+                    # which is overlay/mask territory. Skip if not useful.
+                    # Instead try: param applied to transform output by wrapping
+                    # as a depth-2 pipeline: param_prog -> t_name
+                    # Actually this IS already covered by depth-2 pairs if param
+                    # progs were in the pool. The missing pattern is #1 above.
+
+            # Also try: binary(transform, parameterized) and vice versa
+            binary_names = [p.name for p in primitives if p.arity == 2]
+            if binary_names and top_param_progs:
+                BINARY_PARAM_K = 8
+                for bp_name in binary_names:
+                    if not _budget_ok():
+                        break
+                    for param_sp in top_param_progs[:BINARY_PARAM_K]:
+                        if not _budget_ok():
+                            break
+                        param_prog = param_sp.program
+                        for t_name in top_transform_names[:BINARY_PARAM_K]:
+                            if not _budget_ok():
+                                break
+                            # overlay(transform(x), param(perc)(x))
+                            prog = Program(root=bp_name,
+                                           children=[
+                                               Program(root=t_name),
+                                               copy.deepcopy(param_prog)])
+                            sp = self._evaluate_program(prog, task)
+                            scored.append(sp)
+                            n_evals += 2
+                            if sp.prediction_error <= solve_thresh:
+                                return scored, n_evals
+
+                            # overlay(param(perc)(x), transform(x))
+                            prog2 = Program(root=bp_name,
+                                            children=[
+                                                copy.deepcopy(param_prog),
+                                                Program(root=t_name)])
+                            sp2 = self._evaluate_program(prog2, task)
+                            scored.append(sp2)
+                            n_evals += 2
+                            if sp2.prediction_error <= solve_thresh:
+                                return scored, n_evals
+
         # --- Depth 2.5: Overlay (binary) composition ---
         # Try overlay(prog_a, prog_b) for top-scoring depth-1 programs.
         # Many ARC tasks require combining two independent transforms
@@ -2078,7 +2189,9 @@ class Learner:
 
         # --- Adaptive depth skip: if depth-2 best is poor, skip depth-3 ---
         # Depth-3 rarely helps when depth-2 can't find anything close.
-        DEPTH3_SKIP_THRESHOLD = 0.50
+        # Lowered from 0.50 to 0.65: many depth-3 solutions have poor
+        # depth-2 intermediates (e.g. color operations that only partially match).
+        DEPTH3_SKIP_THRESHOLD = 0.65
         depth2_best = min(
             (s.prediction_error for s in scored if s.program.children),
             default=1.0)
@@ -2149,6 +2262,44 @@ class Learner:
                     n_evals += 3  # depth 3 = 3 primitive applications
                     if sp.prediction_error <= solve_thresh:
                         return scored, n_evals
+
+        # --- Depth 3.1: transform(transform(parameterized(perception)(x))) ---
+        # Key pattern: geometric ops wrapping a color/structural perception.
+        # E.g. trim_cols(trim_rows(keep_color(dominant_color)(x))) extracts
+        # a specific color's content. Not reachable by plain depth-3 triples
+        # because param(perc) is a multi-node tree, not a single primitive.
+        # Cost: O(K² × K_param) ≈ 10² × 8 = 800 evals.
+        if param_prims and percep_prims and _budget_ok():
+            # Reuse top param programs from depth-1 scoring
+            param_scored_d3 = [sp for sp in scored
+                               if sp.program.root in {p.name for p in param_prims}
+                               and sp.program.children]
+            param_scored_d3.sort(key=lambda s: s.prediction_error)
+            MIXED_D3_PARAM_K = 8
+            MIXED_D3_TRANSFORM_K = 10
+            top_param_d3 = param_scored_d3[:MIXED_D3_PARAM_K]
+            t_pool_d3 = [n for n in triple_pool[:MIXED_D3_TRANSFORM_K]
+                         if n not in noop_prims]
+
+            for t1 in t_pool_d3:
+                if not _budget_ok():
+                    break
+                for t2 in t_pool_d3:
+                    if not _budget_ok():
+                        break
+                    if t1 == t2 == "identity":
+                        continue
+                    for psp in top_param_d3:
+                        if not _budget_ok():
+                            break
+                        prog = Program(root=t1, children=[
+                            Program(root=t2, children=[
+                                copy.deepcopy(psp.program)])])
+                        sp = self._evaluate_program(prog, task)
+                        scored.append(sp)
+                        n_evals += 3
+                        if sp.prediction_error <= solve_thresh:
+                            return scored, n_evals
 
         return scored, n_evals
 
@@ -2259,6 +2410,63 @@ class Learner:
             prediction_error=avg_error,
             complexity_cost=comp_cost,
         )
+
+    def _simplify_program(self, prog: Program, task: Task) -> Program:
+        """Remove identity steps from a program tree (bottom-up).
+
+        A step is identity if removing it doesn't change the output on any
+        training example.  This prunes wasteful no-op steps that arise from
+        compositions or learned abstractions that happen to be identity for
+        a particular task.
+
+        Returns the simplified program (may be the same object if no
+        simplification was possible).
+        """
+        if not prog.children:
+            return prog  # leaf — nothing to simplify
+
+        # Recursively simplify children first (bottom-up)
+        new_children = [self._simplify_program(c, task) for c in prog.children]
+        changed = any(nc is not oc for nc, oc in zip(new_children, prog.children))
+        result = (Program(root=prog.root, children=new_children, params=prog.params)
+                  if changed else prog)
+
+        # --- Unary nodes: check outer and inner identity ---
+        if len(result.children) == 1:
+            child = result.children[0]
+
+            # Outer identity: node(child(x)) == child(x) → drop outer node
+            if self._outputs_equal(result, child, task):
+                return child
+
+            # Inner identity: node(child(x)) == node(x) → drop inner child
+            parent_only = Program(root=result.root, params=result.params)
+            if self._outputs_equal(result, parent_only, task):
+                return parent_only
+
+        # --- Binary nodes: check if one branch is redundant ---
+        if len(result.children) == 2:
+            # If result == left child output, right branch is useless
+            if self._outputs_equal(result, result.children[0], task):
+                return result.children[0]
+            # If result == right child output, left branch is useless
+            if self._outputs_equal(result, result.children[1], task):
+                return result.children[1]
+
+        return result
+
+    def _outputs_equal(self, prog_a: Program, prog_b: Program,
+                       task: Task) -> bool:
+        """Check if two programs produce identical output on all training examples."""
+        for inp, _ in task.train_examples:
+            try:
+                out_a = self.env.execute(prog_a, inp)
+                out_b = self.env.execute(prog_b, inp)
+                if out_a != out_b:
+                    return False
+            except Exception:
+                return False
+        return True
 
     def _semantic_hash(self, program: Program, task: Task) -> str:
         """Hash a program by its outputs on training inputs.

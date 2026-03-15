@@ -440,6 +440,38 @@ Results: All 4 experiments implemented. 631 tests pass (9 new). 50-task sequenti
 
 [Restored all 6 geometric transforms — each is one intuitive visual concept. Decomposed crop_to_content into trim_rows + trim_cols (each operates on one axis, truly atomic). Composition: trim_cols(trim_rows(x)) = crop_to_content. Commutative — both orders give same result. Each has independent utility. 42 primitives total. 408 tests pass.]
 
+### Prompt 66 (2026-03-14)
+
+> When doing hyperparameter type experiments, maybe pass a flag to turn off visualization as it just wastes disk space. Similarly, do you want to turn off verbose logging and live logging in such cases? By default, all these can be on, but there could be a flag corresponding to interactive mode vs batch mode?
+
+[Added `--batch` CLI flag. When set: skips visualization (no HTML files generated), suppresses per-task console output (no live task-by-task lines), suppresses verbose headers/footers, suppresses worker diagnostic prints, auto-suppresses log file. Data files (JSONL, JSON, CSV, culture) still written. Output reduced to one-line `[batch]` header + periodic scoreboards + one-line `[batch]` result summary. 419 tests pass (4 new batch mode tests).]
+
+## Session 14 — Structural Search + Solve Rate Recovery (2026-03-15)
+
+### Prompt 67 (2026-03-15)
+
+> The solve rate is currently really low, especially after removing the non-atomic primitives. Deeply understand, analyze, strategize and execute a plan to drastically improve the scores without compromising our principles. I am going to sleep now, so keep trying it out without getting interrupted or waiting for my input. Also, follow instructions in CLAUDE.md. Update all documentation including code/test comments, README.md, PROMPTS.md and DECISIONS.md.
+
+[Claude performed a deep analysis of the entire codebase and identified a critical issue: `allow_structural_phases()` was returning `False` for atomic vocabulary, which disabled ALL structural search phases (object decomposition, cross-reference, conditional per-object, color fix, conditional search). These are SEARCH STRATEGIES that compose existing atomic primitives in structurally different ways — they don't add new primitives, so disabling them was unnecessarily crippling the search.
+
+Key changes implemented:
+1. **Re-enabled structural phases** — `allow_structural_phases()` now returns True for all vocabularies
+2. **Wired up ARCEnv** — Implemented `try_object_decomposition`, `try_for_each_object`, `try_conditional_per_object`, `try_cross_reference`, and `infer_output_correction` on ARCEnv
+3. **Added 7 predicates** to grammar for conditional search (is_square, has_single_object, etc.)
+4. **Expanded perception**: 12 → 18 primitives (added second_color, corner_color, center_color, edge_color, interior_dominant_color, grid_max_dim)
+5. **Mixed compositions in exhaustive search**: transform(parameterized(perception)(x)) and t1(t2(parameterized(perception)(x))) patterns at depth 2.1 and 3.1
+6. **Library cap**: 100 → 200 for more diverse composition storage
+7. **Depth-3 skip threshold**: 0.50 → 0.65 (more tasks explored at depth 3)
+
+Results (measured, 400 tasks, 3 rounds):
+- Training: 18→24 (old) → 28→32 (new) = +33% improvement
+- Eval: 8/400 (old) → 8-10/400 (new) = maintained or improved
+- Per-object recolor: 9 solves (28% of training) — entirely new capability
+- Library entries: 12 solves (38% of training) — compounding working
+- Color remap: 2-3 solves — color fix on near-misses working
+- Zero overfit on per-object and color_remap strategies
+- All 419 tests pass. 48 primitives total.]
+
 ---
 
 *This document will be updated with each new session.*

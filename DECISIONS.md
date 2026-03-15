@@ -2614,4 +2614,130 @@ Composition: `trim_cols(trim_rows(x))` = `trim_rows(trim_cols(x))` = `crop_to_co
 ### Test count: 408 (all passing)
 
 ---
+
+## Session 12: Identity Step Pruning (2026-03-14)
+
+### Problem
+Pipeline runs produce programs with identity (no-op) steps — transformations or learned abstractions that produce output identical to their input for the given task. These waste computation and clutter visualization.
+
+### Solution: Post-evaluation program simplification
+Added `_simplify_program` (bottom-up tree simplification) and `_try_simplify` (wrapper with re-scoring and logging) to the Learner. Called in both `_make_solved_result` and `_make_unsolved_result` before programs are stored.
+
+**Simplification rules:**
+1. **Unary outer identity**: `A(B(x))` where `A` doesn't change `B`'s output → `B(x)`
+2. **Unary inner identity**: `A(B(x))` where `B` doesn't change input → `A(x)`
+3. **Binary branch redundancy**: `overlay(A, B)` where result equals one child → that child
+4. **Recursive**: bottom-up, so `A(B(C))` with B identity → first simplifies B(C) to C, then checks A(C)
+
+**Cost**: O(nodes × training_examples) extra executions — negligible vs thousands of search evaluations.
+
+### Test count: 415 (all passing, +7 new simplification tests)
+
+## Decision 102: Add --batch flag for hyperparameter sweeps (2026-03-14)
+
+### Context
+Hyperparameter experiments run many quick experiments in succession. Visualization HTML files waste disk space, and verbose per-task console output is noise when only the final metric matters.
+
+### Decision: `--batch` CLI flag (interactive by default)
+
+Added `--batch` flag that suppresses non-essential output while keeping all data files:
+
+**Suppressed in batch mode:**
+- HTML visualization (post_run_hooks skipped)
+- Per-task console lines (ProgressTracker quiet mode)
+- Verbose header/footer (config details, artifact listing, solved/overfit/close lists)
+- Worker diagnostic prints (pid/RSS — via `SearchConfig.verbose=False`)
+- Console log file (auto-suppresses TeeWriter)
+
+**Still produced in batch mode:**
+- JSONL per-task results (data file, needed for analysis)
+- JSON final results (data file)
+- CSV metrics (data file)
+- Culture file (needed for pipeline chaining)
+- Periodic scoreboards (every 10 tasks — useful progress for long runs)
+- One-line `[batch]` header and result summary
+
+### Implementation
+- `ExperimentConfig.batch: bool = False` — threaded through CLI → config → runner
+- `SearchConfig.verbose: bool = True` — controls worker prints (core stays domain-agnostic)
+- `ProgressTracker(quiet=True)` — suppresses per-task prints, keeps JSONL + record tracking
+- `__main__.py` — skips `post_run_hooks()` (visualization) when batch
+
+### Example output
+```
+  [batch] ARC-AGI-1 TRAINING  tasks=50  cap=500,000  depth=3
+  [batch] solved=4/50 (8.0%)  library=12  time=2.3s  throughput=21.7 tasks/s
+```
+
+### Test count: 419 (all passing, +4 new batch mode tests)
+
+---
+
+## Session 14 — Structural Search + Perception Expansion (2026-03-15)
+
+### Decision 107: Re-enable Structural Phases for Atomic Vocabulary
+
+**Context:** After removing compound primitives (Session 11), `allow_structural_phases()` was set to return `False` for atomic vocabulary. This disabled ALL structural search phases: object decomposition, cross-reference, conditional per-object, color fix, and conditional search. These are SEARCH STRATEGIES (different ways to compose the same atomic primitives), not vocabulary choices.
+
+**Critical finding:** The structural phases were the only way to do per-object transforms, cross-grid reasoning, and color correction. Disabling them removed ~50% of the system's problem-solving capability without affecting the vocabulary principle.
+
+**Changes:**
+1. Changed `ARCGrammar.allow_structural_phases()` to always return `True`
+2. Implemented `ARCEnv.try_object_decomposition()` — delegates to `objects.py`
+3. Implemented `ARCEnv.try_for_each_object()` — applies top-K candidates per-object
+4. Implemented `ARCEnv.try_conditional_per_object()` — if(pred, A, B) per object
+5. Implemented `ARCEnv.try_cross_reference()` — boolean halves + separator-based
+6. Implemented `ARCEnv.infer_output_correction()` — learns color remapping from near-misses
+7. Added 7 input predicates to `ARCGrammar.get_predicates()` for conditional search
+
+**Result:** Training 28/400 (7.0%) → 32/400 (8.0%) across 3 rounds, up from 18→24 (old atomic baseline). Per-object recolor alone contributes 9 solves (28% of training). Eval steady at 8/400.
+
+### Decision 108: Expand Perception Primitives (12 → 18)
+
+**Context:** The original 12 perception primitives covered basic color roles and geometry but missed structural properties. Many ARC tasks need perception of grid borders, centers, and secondary colors.
+
+**New perception primitives (6 added):**
+- `second_color` — second most common color overall
+- `corner_color` — top-left pixel color (reference marker)
+- `center_color` — center pixel color
+- `edge_color` — most common border color (frame detection)
+- `interior_dominant_color` — most common non-bg color in interior
+- `grid_max_dim` — max(height, width)
+
+**Total primitives:** 48 (27 transforms + 18 perception + 8 parameterized) — was 42.
+
+### Decision 109: Mixed Transform+Parameterized Compositions in Exhaustive Search
+
+**Context:** The depth-2 exhaustive search only tried transform(transform(x)) pairs. Parameterized(perception) combos were evaluated at depth-1 but not composed with transforms. Many ARC tasks need patterns like `trim_rows(keep_color(dominant_color)(x))`.
+
+**Changes:**
+1. **Depth 2.1:** Mixed compositions — `transform(parameterized(perception)(x))` and binary(`transform, parameterized`) combos. Cost: ~400 evals.
+2. **Depth 3.1:** Transform-transform-parameterized triples — `t1(t2(param(perc)(x)))`. Enables patterns like `trim_cols(trim_rows(keep_color(dominant_color)(x)))`. Cost: ~800 evals.
+3. **Depth-3 skip threshold** lowered from 0.50 to 0.65 — more tasks get depth-3 exploration.
+
+**Training solve attribution (32 total, 400 tasks, 3 rounds):**
+
+| Category | Count | % | Description |
+|----------|-------|---|-------------|
+| library_entry | 12 | 38% | Compounding via sleep-promoted abstractions |
+| depth-1 | 9 | 28% | Basic atomic primitives |
+| per_object_recolor | 9 | 28% | NEW: structural phase (object decomposition) |
+| color_remap | 2 | 6% | NEW: color fix on near-misses |
+
+**Eval solve programs (8/400):**
+- 6 library entries (compounding transfer from training)
+- 1 `scale(n_colors)` parameterized perception combo
+- 1 `dilate(dilate(pad_border))` depth-2 composition
+
+**Compounding curve (400 tasks, 3 rounds):**
+
+| Round | Training | Library | Eval |
+|-------|----------|---------|------|
+| 1 | 28/400 (7.0%) | 100 | 8/400 (2.0%) |
+| 2 | 32/400 (8.0%) | 100 | 8/400 (2.0%) |
+| 3 | 32/400 (8.0%) | 100 | 8/400 (2.0%) |
+
+vs old atomic baseline: 18→23→24 training, 8 eval.
+
+---
 *This document will be updated with each new session and major decision.*

@@ -399,9 +399,10 @@ class TestGrammarIntegration(unittest.TestCase):
         assert "swap_colors" in names
         assert "background_color" in names
 
-    def test_grammar_blocks_structural(self):
+    def test_grammar_enables_structural(self):
+        # Structural phases are search strategies, always enabled
         g = ARCGrammar(seed=42, vocabulary="atomic")
-        assert g.allow_structural_phases() is False
+        assert g.allow_structural_phases() is True
 
 
 # =============================================================================

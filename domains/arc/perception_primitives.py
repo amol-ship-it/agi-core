@@ -219,6 +219,95 @@ def smallest_object_color(grid: Grid) -> int:
 
 
 # =============================================================================
+# Spatial perception: detect grid spatial properties
+# =============================================================================
+
+def grid_max_dim(grid: Grid) -> int:
+    """Return the larger dimension (max of height, width)."""
+    h = len(grid) if grid else 0
+    w = len(grid[0]) if grid and grid[0] else 0
+    return max(h, w) if h and w else 0
+
+
+def second_color(grid: Grid) -> int:
+    """Return the second most common color overall.
+
+    Useful for tasks where the grid has two dominant colors and
+    you need to reference the non-majority one.
+    """
+    if not grid or not grid[0]:
+        return 0
+    flat = [grid[r][c] for r in range(len(grid)) for c in range(len(grid[0]))]
+    ranked = Counter(flat).most_common()
+    return ranked[1][0] if len(ranked) > 1 else ranked[0][0]
+
+
+def corner_color(grid: Grid) -> int:
+    """Return the color of the top-left corner pixel.
+
+    Many ARC tasks use corner pixels as reference colors.
+    """
+    if not grid or not grid[0]:
+        return 0
+    return grid[0][0]
+
+
+def center_color(grid: Grid) -> int:
+    """Return the color of the center pixel.
+
+    For odd-dimensioned grids, this is the exact center.
+    For even-dimensioned grids, uses floor(h/2), floor(w/2).
+    """
+    if not grid or not grid[0]:
+        return 0
+    return grid[len(grid) // 2][len(grid[0]) // 2]
+
+
+def edge_color(grid: Grid) -> int:
+    """Return the most common color on the grid border.
+
+    Border = first/last row + first/last column. Useful for
+    detecting frame colors in bordered grids.
+    """
+    if not grid or not grid[0]:
+        return 0
+    h, w = len(grid), len(grid[0])
+    border = []
+    for c in range(w):
+        border.append(grid[0][c])
+        if h > 1:
+            border.append(grid[h - 1][c])
+    for r in range(1, h - 1):
+        border.append(grid[r][0])
+        if w > 1:
+            border.append(grid[r][w - 1])
+    if not border:
+        return 0
+    return Counter(border).most_common(1)[0][0]
+
+
+def interior_dominant_color(grid: Grid) -> int:
+    """Return the most common non-background color in the interior.
+
+    Interior = excluding first/last row and column. Useful for
+    detecting the "content" color inside a bordered grid.
+    """
+    if not grid or not grid[0]:
+        return 0
+    h, w = len(grid), len(grid[0])
+    if h <= 2 or w <= 2:
+        return dominant_color(grid)
+    flat = [grid[r][c] for r in range(1, h - 1) for c in range(1, w - 1)]
+    if not flat:
+        return 0
+    bg = Counter(flat).most_common(1)[0][0]
+    non_bg = [c for c in flat if c != bg]
+    if not non_bg:
+        return bg
+    return Counter(non_bg).most_common(1)[0][0]
+
+
+# =============================================================================
 # Build functions
 # =============================================================================
 
@@ -227,20 +316,32 @@ def build_perception_primitives() -> list[Primitive]:
 
     Each is arity-0 in the composition sense — they have no program
     children. They receive the input grid through the execution context.
+
+    18 total: 6 color role + 2 counting + 4 geometry + 6 structural.
     """
     perceptions = [
-        ("background_color",     background_color),
-        ("dominant_color",       dominant_color),
-        ("rarest_color",         rarest_color),
-        ("accent_color",         accent_color),
-        ("n_colors",             n_colors),
-        ("n_foreground_colors",  n_foreground_colors),
-        ("grid_height",          grid_height),
-        ("grid_width",           grid_width),
-        ("grid_min_dim",         grid_min_dim),
-        ("n_objects",            n_objects),
-        ("largest_object_color", largest_object_color),
-        ("smallest_object_color", smallest_object_color),
+        # Color role detection (6)
+        ("background_color",        background_color),
+        ("dominant_color",          dominant_color),
+        ("rarest_color",            rarest_color),
+        ("accent_color",            accent_color),
+        ("second_color",            second_color),
+        ("corner_color",            corner_color),
+        # Counting (2)
+        ("n_colors",                n_colors),
+        ("n_foreground_colors",     n_foreground_colors),
+        # Geometry (4)
+        ("grid_height",             grid_height),
+        ("grid_width",              grid_width),
+        ("grid_min_dim",            grid_min_dim),
+        ("grid_max_dim",            grid_max_dim),
+        # Structural (6)
+        ("n_objects",               n_objects),
+        ("largest_object_color",    largest_object_color),
+        ("smallest_object_color",   smallest_object_color),
+        ("center_color",            center_color),
+        ("edge_color",              edge_color),
+        ("interior_dominant_color", interior_dominant_color),
     ]
     return [
         Primitive(name=name, arity=0, fn=fn, domain="arc", kind="perception")

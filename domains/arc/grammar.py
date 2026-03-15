@@ -40,10 +40,41 @@ class ARCGrammar(Grammar):
         self._vocabulary = vocabulary
 
     def allow_structural_phases(self) -> bool:
-        return self._vocabulary != "atomic"
+        # Structural phases are SEARCH STRATEGIES (per-object, cross-reference,
+        # conditional), not vocabulary choices. They compose existing atomic
+        # primitives in structurally different ways. Always enabled.
+        return True
 
     def get_predicates(self) -> list[tuple[str, callable]]:
-        return []
+        """Return input→bool predicates for conditional branching.
+
+        These enable if(pred, A, B) programs — a key composition pattern
+        for ARC tasks where different inputs need different transforms.
+        """
+        from .objects import (
+            _find_connected_components, _get_background_color,
+            find_foreground_shapes, _has_hole,
+        )
+
+        def _safe_components(grid):
+            try:
+                return _find_connected_components(grid)
+            except Exception:
+                return []
+
+        preds = [
+            ("has_single_object", lambda g: len(_safe_components(g)) == 1),
+            ("has_many_objects", lambda g: len(_safe_components(g)) > 3),
+            ("is_square", lambda g: len(g) == len(g[0]) if g and g[0] else False),
+            ("is_tall", lambda g: len(g) > len(g[0]) if g and g[0] else False),
+            ("is_wide", lambda g: len(g) < len(g[0]) if g and g[0] else False),
+            ("has_symmetry_h", lambda g: all(
+                g[r] == g[r][::-1] for r in range(len(g))) if g else False),
+            ("is_mostly_bg", lambda g: sum(
+                1 for row in g for c in row if c == 0) > len(g) * len(g[0]) * 0.7
+                if g and g[0] else False),
+        ]
+        return preds
 
     def essential_pair_concepts(self) -> frozenset[str]:
         from .transformation_primitives import ATOMIC_ESSENTIAL_PAIR_CONCEPTS

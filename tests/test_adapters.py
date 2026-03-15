@@ -39,7 +39,9 @@ class TestARCAdapter:
         adapter = self._make()
         _, grammar, _ = adapter.create_interfaces(seed=42)
         assert grammar._vocabulary == "atomic"
-        assert grammar.allow_structural_phases() is False
+        # Structural phases are search strategies (not vocabulary choices),
+        # so they're always enabled even with atomic vocabulary
+        assert grammar.allow_structural_phases() is True
 
     def test_config_defaults(self):
         adapter = self._make()

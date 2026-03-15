@@ -66,6 +66,9 @@ python -m common --domain arc-agi-1 --run-mode single --split evaluation --cultu
 
 # Single-process for debugging
 python -m common --domain arc-agi-1 --workers 1
+
+# Batch mode for hyperparameter sweeps (no visualization, minimal console output)
+python -m common --domain arc-agi-1 --mode quick --batch
 ```
 
 ### Running a subset of tasks
@@ -161,18 +164,18 @@ Two modes. Pick one. That's the only knob most users need.
 | `quick` | 50 | 2 | 500K | Fast dev loop (~5s) |
 | `default` | all (400) | 2 | 3M | Full benchmark (~2 min) |
 
-All runs use **atomic vocabulary** — 42 truly atomic primitives (22 transforms + 12 perception + 8 parameterized). Each primitive is one intuitive visual concept. Compositional operations like crop_to_content = trim_cols(trim_rows(x)) must be discovered through composition.
+All runs use **atomic vocabulary** — 48 truly atomic primitives (27 transforms + 18 perception + 8 parameterized). Each primitive is one intuitive visual concept. Compositional operations like crop_to_content = trim_cols(trim_rows(x)) must be discovered through composition. Structural search strategies (per-object, cross-reference, conditional) compose these same primitives in structurally different ways.
 
 Both presets default to **2 rounds** (the measured sweet spot — see below). Results are fully deterministic with **seed 42** (`PYTHONHASHSEED=0` is enforced automatically).
 
-**Rounds sweet spot** (measured 2026-03-14):
+**Rounds sweet spot** (measured 2026-03-15):
 
-| Mode | 1 round | 2 rounds | 3 rounds | 5 rounds |
-|------|---------|----------|----------|----------|
-| quick (50 tasks) | 3/50 (6%) 3s | **4/50 (8%) 5s** | 4/50 (8%) 6s | 4/50 (8%) 10s |
-| default (400 tasks) | 18/400 (4.5%) 43s | **23/400 (5.8%) 97s** | 24/400 (6%) 171s | — |
+| Mode | 1 round | 2 rounds | 3 rounds |
+|------|---------|----------|----------|
+| quick (50 tasks) | 3/50 (6%) 3s | **4/50 (8%) 5s** | 6/50 (12%) 10s |
+| default (400 tasks) | 22/400 (5.5%) 30s | **30/400 (7.5%) 80s** | 31/400 (7.8%) 150s |
 
-Round 2 gives +28-33% solves. Round 3+ adds <5% for 2× more time.
+Round 2 gives +36% solves. Round 3 adds +3% for 2× more time.
 
 **Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
@@ -182,17 +185,17 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 ### Expected performance
 
-**ARC-AGI-1** (measured 2026-03-14, 3 rounds with compounding):
+**ARC-AGI-1** (measured 2026-03-15, 3 rounds with compounding):
 
 | Round | Training (400 tasks) | Library entries | Eval (400 tasks) |
 |-------|---------------------|-----------------|-----------------|
-| 1 | 18/400 (4.5%) | 107 | 8/400 (2.0%) |
-| 2 | 23/400 (5.8%) | 170 | 8/400 (2.0%) |
-| 3 | 24/400 (6.0%) | 204 | 8/400 (2.0%) |
+| 1 | 22/400 (5.5%) | 200 | 10/400 (2.5%) |
+| 2 | 30/400 (7.5%) | 200 | 9/400 (2.2%) |
+| 3 | 31/400 (7.8%) | 200 | 9/400 (2.2%) |
 
-Training compounds (+6 from library across rounds). Eval solves include depth-3-4 compositions using learned abstractions transferred via culture file.
+Training compounds (+9 from library across rounds). Eval solves include library-transferred compositions (75% of eval solves use library entries). Per-object recolor contributes 9 training solves (28%).
 
-Quick mode (50 training tasks, ~5s): 4/50 (8%) with 2 rounds (default).
+Quick mode (50 training tasks, ~5s): 6/50 (12%) with 3 rounds.
 
 **Other domains:**
 
@@ -233,6 +236,7 @@ Quick mode (50 training tasks, ~5s): 4/50 (8%) with 2 rounds (default).
 | `--data-dir` | auto-detect | Path to data directory |
 | `--runs-dir` | `runs` | Directory for all run artifacts |
 | `--no-log` | off | Disable log file (console only) |
+| `--batch` | off | Batch mode: skip visualization + per-task output (for hyperparameter sweeps) |
 
 ## How It Works
 
@@ -277,25 +281,30 @@ The core loop (`core/learner.py`) depends **only** on these interfaces. It never
 COMPOUNDING CURVE (train / eval per round):
 Round         Train  Overfit  Library          Eval  Overfit
 ─────  ────────────  ───────  ───────  ────────────  ───────
-    1    18/400 (4.5%)        1      107     8/400 (2.0%)        1
-    2    23/400 (5.8%)        1      170     8/400 (2.0%)        1
-    3    24/400 (6.0%)        1      204     8/400 (2.0%)        1
+    1   22/400 (5.5%)        1      200    10/400 (2.5%)        2
+    2   30/400 (7.5%)        2      200     9/400 (2.2%)        2
+    3   31/400 (7.8%)        4      200     9/400 (2.2%)        2
 ```
 
 If solve rate increases across rounds without new hand-coded primitives, the framework is working.
 
 ### Current status
 
-**Compounding demonstrated on ARC with atomic vocabulary.** Training compounds: 18→24 (+6) across 3 rounds. Unsolved programs promoted to library and reused. Eval solves include depth-3-4 compositions using learned abstractions transferred via culture file.
+**Compounding demonstrated on ARC with atomic vocabulary + structural search.** Training compounds: 22→31 (+9) across 3 rounds. Per-object recolor contributes 9 solves (28% of training). Library entries are 38% of training solves and 75% of eval solves. Color fix on near-misses adds 2-3 more. Eval R1 reaches 10/400 (2.5%).
+
+**Four search strategies** compose the same atomic primitives differently:
+1. **Exhaustive enumeration** — depth 1-3 sequential pipelines + mixed parameterized/transform compositions
+2. **Object decomposition** — per-object transforms, conditional recolor by properties (size, shape, hole)
+3. **Cross-reference** — boolean ops on grid halves, separator-based cell extraction
+4. **Color fix** — learn color remapping from near-miss program outputs
 
 **Three primitive kinds:** transforms (Grid→Grid), perception (Grid→Value), and parameterized ((Value,...) → Grid→Grid factory). All compositions are fully transferable across tasks.
 
-**Verified:** compound operations like `extract_largest_object` CAN be expressed as depth-4 composition of atomics: `crop_to_content(mask_by(input, keep_color(largest_object_color)(label_components(input))))`. The challenge is discovering these through search + compounding.
-
 ### Current limitations
 
-- **Composition depth bottleneck.** Depth-4+ compositions are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds can build up to depth-4+ but saturates quickly on small task sets.
-- **Library transfer.** 204 library entries learned from training but most are task-specific depth-2 compositions. Structural patterns transfer but don't yet unlock many eval tasks.
+- **Composition depth bottleneck.** Depth-4+ compositions are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds builds up to depth-4+ but saturates quickly.
+- **Library diversity.** 200 library entries learned from training. 75% of eval solves use library entries, but most entries are task-specific. Cross-task transfer remains the key challenge.
+- **Eval-train gap.** Training 7.8% vs eval 2.2% — structural strategies (per-object recolor) don't transfer to eval because the learned rules are task-specific.
 
 ## Structure
 
@@ -321,7 +330,7 @@ agi-core/
 │   └── visualize_results.py # HTML visualization generator (expands learned abstractions)
 │
 ├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
-│   ├── arc/                 # ARC-AGI grid transformations (42 atomic primitives)
+│   ├── arc/                 # ARC-AGI grid transformations (48 atomic primitives)
 │   │   ├── transformation_primitives.py # Atomic transforms + parameterized factories (self-contained)
 │   │   ├── perception_primitives.py     # Atomic perception Grid→Value (self-contained)
 │   │   ├── primitives.py    # Registry (_PRIM_MAP) + utilities (to_np, from_np)
@@ -359,7 +368,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**408 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization.
+**419 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization, batch mode.
 
 ## Documentation
 

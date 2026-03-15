@@ -648,7 +648,7 @@ class TestConfigDefaults(unittest.TestCase):
     def test_sleep_config_defaults(self):
         cfg = SleepConfig()
         self.assertEqual(cfg.min_occurrences, 1)
-        self.assertEqual(cfg.max_library_size, 100)
+        self.assertEqual(cfg.max_library_size, 200)
         self.assertAlmostEqual(cfg.usefulness_decay, 0.90)
         self.assertAlmostEqual(cfg.reuse_bonus, 2.0)
 
@@ -1115,6 +1115,79 @@ class TestRunnerHelpers(unittest.TestCase):
         from common.benchmark import PRESETS
         self.assertEqual(PRESETS["quick"]["compute_cap"], 500_000)
         self.assertEqual(PRESETS["default"]["compute_cap"], 3_000_000)
+
+
+class TestSimplifyProgram(unittest.TestCase):
+    """Tests for identity step pruning in _simplify_program."""
+
+    def setUp(self):
+        self.env = StubEnv()
+        self.grammar = StubGrammar()
+        self.drive = StubDrive()
+        self.memory = InMemoryStore()
+        self.learner = Learner(self.env, self.grammar, self.drive, self.memory)
+
+    def _task(self, pairs):
+        return Task(task_id="test", train_examples=pairs, test_inputs=[])
+
+    def test_leaf_unchanged(self):
+        """Leaf programs can't be simplified."""
+        prog = Program(root="double")
+        task = self._task([(3, 6)])
+        result = self.learner._simplify_program(prog, task)
+        self.assertIs(result, prog)
+
+    def test_outer_identity_removed(self):
+        """identity(double(x)) → double(x)."""
+        prog = Program(root="identity", children=[Program(root="double")])
+        task = self._task([(3, 6)])
+        result = self.learner._simplify_program(prog, task)
+        self.assertEqual(result.root, "double")
+        self.assertEqual(result.children, [])
+
+    def test_inner_identity_removed(self):
+        """double(identity(x)) → double(x)."""
+        prog = Program(root="double", children=[Program(root="identity")])
+        task = self._task([(3, 6)])
+        result = self.learner._simplify_program(prog, task)
+        self.assertEqual(result.root, "double")
+        self.assertEqual(result.children, [])
+
+    def test_middle_identity_removed(self):
+        """double(identity(double(x))) → double(double(x))."""
+        prog = Program(root="double", children=[
+            Program(root="identity", children=[Program(root="double")])])
+        task = self._task([(3, 12)])
+        result = self.learner._simplify_program(prog, task)
+        self.assertEqual(result.root, "double")
+        self.assertEqual(len(result.children), 1)
+        self.assertEqual(result.children[0].root, "double")
+
+    def test_non_identity_preserved(self):
+        """double(double(x)) stays: both steps change the output."""
+        prog = Program(root="double", children=[Program(root="double")])
+        task = self._task([(3, 12)])
+        result = self.learner._simplify_program(prog, task)
+        self.assertEqual(result.root, "double")
+        self.assertEqual(len(result.children), 1)
+        self.assertEqual(result.children[0].root, "double")
+
+    def test_try_simplify_rescores(self):
+        """_try_simplify returns a re-scored program with lower complexity."""
+        prog = Program(root="identity", children=[Program(root="double")])
+        task = self._task([(3, 6)])
+        original = self.learner._evaluate_program(prog, task)
+        simplified = self.learner._try_simplify(original, task)
+        self.assertEqual(simplified.program.root, "double")
+        self.assertLessEqual(simplified.complexity_cost, original.complexity_cost)
+
+    def test_try_simplify_noop_when_no_identity(self):
+        """_try_simplify returns the same object when nothing to prune."""
+        prog = Program(root="double")
+        task = self._task([(3, 6)])
+        original = self.learner._evaluate_program(prog, task)
+        result = self.learner._try_simplify(original, task)
+        self.assertIs(result, original)
 
 
 if __name__ == "__main__":

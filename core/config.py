@@ -48,13 +48,16 @@ class SearchConfig:
     # 800 = median ARC grid size. Domains with different scale should override.
     eval_budget_base_cells: int = 800
 
+    # Verbose worker output (per-task diagnostic prints). Set False in batch mode.
+    verbose: bool = True
+
 
 @dataclass
 class SleepConfig:
     """Knobs for the sleep/consolidation phase."""
     min_occurrences: int = 1      # sub-tree must appear in >= N programs
     min_size: int = 2             # sub-tree must have >= N nodes
-    max_library_size: int = 100   # cap on total library entries
+    max_library_size: int = 200   # cap on total library entries
     usefulness_decay: float = 0.90  # decay old entries each sleep cycle
     reuse_bonus: float = 2.0       # scoring bonus per reuse for eviction ranking
     unsolved_weight: float = 0.5  # quality discount for unsolved vs solved programs
