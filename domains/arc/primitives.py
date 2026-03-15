@@ -5372,8 +5372,8 @@ def register_prim(p: Primitive) -> None:
 
 def register_atomic_primitives() -> None:
     """Register atomic, perception, and parameterized primitives in _PRIM_MAP."""
-    from .atomic_primitives import build_atomic_primitives, build_parameterized_primitives
-    from .perception import build_perception_primitives
+    from .transformation_primitives import build_atomic_primitives, build_parameterized_primitives
+    from .perception_primitives import build_perception_primitives
     for p in build_atomic_primitives():
         if p.name not in _PRIM_MAP:
             _PRIM_MAP[p.name] = p

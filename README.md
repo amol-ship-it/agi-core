@@ -344,7 +344,7 @@ agi-core/
 ├── domains/                 # Domain implementations (4 interfaces + DomainAdapter)
 │   ├── arc/                 # ARC-AGI grid transformations (60 minimal / 180 full / 27 atomic)
 │   │   ├── primitives.py    # Grid→Grid transform functions + registry
-│   │   ├── atomic_primitives.py # ~27 atomic ops + combinators for composition thesis
+│   │   ├── transformation_primitives.py # ~27 atomic ops + combinators for composition thesis
 │   │   ├── objects.py       # Connected component detection
 │   │   ├── environment.py   # ARCEnv
 │   │   ├── grammar.py       # ARCGrammar

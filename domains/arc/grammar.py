@@ -94,7 +94,7 @@ class ARCGrammar(Grammar):
             # With minimal vocab, all primitives are essential for composition
             return frozenset()
         if self._vocabulary == "atomic":
-            from .atomic_primitives import ATOMIC_ESSENTIAL_PAIR_CONCEPTS
+            from .transformation_primitives import ATOMIC_ESSENTIAL_PAIR_CONCEPTS
             return ATOMIC_ESSENTIAL_PAIR_CONCEPTS
         return _ARC_ESSENTIAL_PAIR_CONCEPTS
 
@@ -167,8 +167,8 @@ class ARCGrammar(Grammar):
 
     def base_primitives(self) -> list[Primitive]:
         if self._vocabulary == "atomic":
-            from .atomic_primitives import build_atomic_primitives, build_parameterized_primitives
-            from .perception import build_perception_primitives
+            from .transformation_primitives import build_atomic_primitives, build_parameterized_primitives
+            from .perception_primitives import build_perception_primitives
             from .primitives import register_atomic_primitives
             register_atomic_primitives()
             return (build_atomic_primitives()

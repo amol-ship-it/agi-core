@@ -10,7 +10,7 @@ Covers:
 import pytest
 from core import Primitive, Program, Task
 
-from domains.arc.atomic_primitives import (
+from domains.arc.transformation_primitives import (
     # New atomic ops
     fill_region, copy_region, clear_region,
     pad_border, recolor, erase_color,
