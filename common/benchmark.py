@@ -1330,30 +1330,49 @@ def run_pipeline(
     log_path = os.path.join(args.runs_dir, f"{prefix}.log")
     os.makedirs(args.runs_dir, exist_ok=True)
 
+    total_rounds = resolved["rounds"]
+
     with pipeline_tee(log_path):
         print("=" * 72)
-        print(f"  PIPELINE MODE: Train \u2192 Save Culture \u2192 Evaluate")
+        print(f"  PIPELINE MODE: Train \u2192 Eval \u00d7 {total_rounds} rounds (compounding)")
         print("=" * 72)
         print()
 
-        # Step 1: Train
-        print("  STEP 1/2: Training...")
-        print()
         train_tasks = load_train_tasks(max_tasks)
-        train_cfg = make_train_config(args, resolved, max_tasks, train_tasks, shared_ts)
-        train_result = run_experiment(train_cfg)
-        print(f"\n  Culture file: {train_result.culture_path}")
-
-        # Step 2: Evaluate
-        print()
-        print("  STEP 2/2: Evaluating with learned culture...")
-        print()
         eval_tasks = load_eval_tasks(max_tasks)
-        eval_cfg = make_eval_config(args, resolved, max_tasks, eval_tasks,
-                                    train_result.culture_path, shared_ts)
-        eval_result = run_experiment(eval_cfg)
 
-        # Save combined pipeline artifacts
+        # Override rounds to 1 per step — we handle rounds manually
+        round_resolved = dict(resolved)
+        round_resolved["rounds"] = 1
+
+        culture_path = ""
+        train_result = None
+        eval_result = None
+
+        for round_num in range(1, total_rounds + 1):
+            # Train round N (loading culture from previous round)
+            print(f"  ROUND {round_num}/{total_rounds}: Training...")
+            print()
+            train_cfg = make_train_config(
+                args, round_resolved, max_tasks, train_tasks, shared_ts)
+            # Load culture from previous round for compounding
+            if culture_path:
+                train_cfg.culture_path = culture_path
+            train_result = run_experiment(train_cfg)
+            culture_path = train_result.culture_path
+            print(f"\n  Culture saved: {culture_path}")
+
+            # Eval round N (using culture from this training round)
+            print()
+            print(f"  ROUND {round_num}/{total_rounds}: Evaluating with learned culture...")
+            print()
+            eval_cfg = make_eval_config(
+                args, round_resolved, max_tasks, eval_tasks,
+                culture_path, shared_ts)
+            eval_result = run_experiment(eval_cfg)
+            print()
+
+        # Save combined pipeline artifacts (uses last train + eval results)
         json_path, jsonl_path = save_pipeline_results(
             train_result, eval_result,
             prefix=prefix, runs_dir=args.runs_dir,
