@@ -881,11 +881,26 @@ class Learner:
         #     next round: depth-1 search over library entries effectively
         #     reaches depth-2+ without exponential cost. Each round
         #     compounds: round N's near-misses become round N+1's primitives.
+        #
+        #     Only promote programs built from base-vocabulary primitives
+        #     (not task-specific color prims), so entries transfer across tasks.
         #     Skip depth-1 programs (already in base vocabulary).
+        base_names = {p.name for p in self.grammar.base_primitives()}
+        # Also allow library-entry names (for chaining across rounds)
+        base_names.update(e.name for e in self.memory.get_library())
+
+        def _all_nodes_transferable(prog: Program) -> bool:
+            """Check all nodes use base-vocabulary or library primitives."""
+            if prog.root not in base_names:
+                return False
+            return all(_all_nodes_transferable(c) for c in prog.children)
+
         for task_id, scored in near_misses.items():
             prog = scored.program
             if prog.size < 2:
                 continue  # depth-1: already in base vocabulary
+            if not _all_nodes_transferable(prog):
+                continue  # skip task-specific programs (color swaps etc.)
             key = repr(prog)
             if key in existing_reprs:
                 continue
