@@ -414,4 +414,12 @@ Results: All 4 experiments implemented. 631 tests pass (9 new). 50-task sequenti
 
 ---
 
+### Prompt 62 (2026-03-14)
+
+> Default rounds, pipeline output fixes, remove obsolete flags, compounding improvements
+
+[User asked for data-driven default rounds, correct pipeline output, removal of vocabulary/beam/contest flags, compounding curve in terminal, and cleanup. Measured sweet spot: 2 rounds for both quick and default (round 2 gives +28-33% solves, round 3 adds <5%). Changed preset defaults to 2 rounds. Fixed pipeline output: correct R1/R2/R3 numbering, brief per-round summaries, wall time breakdown, aligned compounding curve table. Removed --vocabulary, --beam-width, --max-generations, --adaptive-realloc flags and contest preset. Default --run-mode changed to pipeline. Added binary near-miss refinement. Compounding results on 400 tasks: train 18→23→24 across 3 rounds, eval 8/400.]
+
+---
+
 *This document will be updated with each new session.*

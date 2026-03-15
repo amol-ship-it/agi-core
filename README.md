@@ -156,14 +156,23 @@ The console output ends with a **SOLVED TASKS** section listing every solved tas
 
 Two modes. Pick one. That's the only knob most users need.
 
-| Mode | Tasks | Compute Cap | Use case |
-|------|-------|-------------|----------|
-| `quick` | 50 | 500K | Fast dev loop (~4s) |
-| `default` | all (400) | 3M | Full benchmark (~5 min) |
+| Mode | Tasks | Rounds | Compute Cap | Use case |
+|------|-------|--------|-------------|----------|
+| `quick` | 50 | 2 | 500K | Fast dev loop (~5s) |
+| `default` | all (400) | 2 | 3M | Full benchmark (~2 min) |
 
 All runs use **atomic vocabulary** — 41 truly atomic primitives (21 transforms + 12 perception + 8 parameterized). No compound operations; everything must be discovered through composition and compounding.
 
-All presets run **1 round** with **seed 42** by default. Use `--rounds 3` for compounding. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
+Both presets default to **2 rounds** (the measured sweet spot — see below). Results are fully deterministic with **seed 42** (`PYTHONHASHSEED=0` is enforced automatically).
+
+**Rounds sweet spot** (measured 2026-03-14):
+
+| Mode | 1 round | 2 rounds | 3 rounds | 5 rounds |
+|------|---------|----------|----------|----------|
+| quick (50 tasks) | 3/50 (6%) 3s | **4/50 (8%) 5s** | 4/50 (8%) 6s | 4/50 (8%) 10s |
+| default (400 tasks) | 18/400 (4.5%) 43s | **23/400 (5.8%) 97s** | 24/400 (6%) 171s | — |
+
+Round 2 gives +28-33% solves. Round 3+ adds <5% for 2× more time.
 
 **Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
@@ -183,7 +192,7 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 Training compounds (+6 from library across rounds). Eval solves include depth-3-4 compositions using learned abstractions transferred via culture file.
 
-Quick mode (50 training tasks, ~4s): 4/50 (8%) with 3 rounds.
+Quick mode (50 training tasks, ~5s): 4/50 (8%) with 2 rounds (default).
 
 **Other domains:**
 

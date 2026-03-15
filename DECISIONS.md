@@ -2438,4 +2438,28 @@ Removed `--vocabulary`, `--beam-width`, `--max-generations`, `--adaptive-realloc
 Training compounds (+6 from library), eval stable at 8. Library entries are mostly task-specific compositions; structural patterns transfer but don't unlock new eval tasks yet.
 
 ---
+
+### Decision 108: Default rounds = 2 (measured sweet spot), pipeline output fixes
+
+**Date:** 2026-03-14
+
+**Rounds sweet-spot analysis** (measured on quick/default/full datasets):
+
+| Mode | 1 round | 2 rounds | 3 rounds | 5 rounds |
+|------|---------|----------|----------|----------|
+| quick (50) | 3/50 (6%) 3s | **4/50 (8%) 5s** | 4/50 (8%) 6s | 4/50 (8%) 10s |
+| default (100) | 6/100 (6%) 13s | **7/100 (7%) 26s** | 7/100 (7%) 45s | 7/100 (7%) 91s |
+| default (400) | 18/400 (4.5%) 43s | **23/400 (5.8%) 97s** | 24/400 (6%) 171s | — |
+
+Round 2 gives +28-33% solves. Round 3 adds <5% for 2× more time. Changed both preset defaults to 2 rounds.
+
+**Other changes:**
+- Default `--run-mode` changed to `pipeline` (was `single`)
+- Fixed pipeline round numbering (R1→R2→R3 not always R1)
+- Fixed "Running N tasks × 1 rounds" → "Running N tasks on K workers" in pipeline
+- Brief per-round summary in pipeline mode instead of verbose FINAL RESULTS
+- Compounding table shown after every train/eval run for live feedback
+- Wall time breakdown (train/eval/total) in pipeline summary
+
+---
 *This document will be updated with each new session and major decision.*

@@ -82,15 +82,16 @@ def _safe_dumps(obj, **kwargs):
 # =============================================================================
 
 PRESETS = {
-    # Quick: fast dev loop. 50 tasks, aggressive compute cap.
+    # Quick: fast dev loop. 50 tasks, 2 rounds (sweet spot: +33% solves).
     "quick": {
-        "rounds": 1,
+        "rounds": 2,
         "max_tasks": 50,
         "compute_cap": 500_000,
     },
-    # Default: full dataset, higher compute cap.
+    # Default: full dataset, 2 rounds (sweet spot: +28% solves, 18→23/400).
+    # Round 3 adds only 1 more solve for 75s more — not worth it.
     "default": {
-        "rounds": 1,
+        "rounds": 2,
         "max_tasks": 0,
         "compute_cap": 3_000_000,
     },
@@ -820,11 +821,9 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     metrics = extract_metrics(results)
     total_evals = sum(wr.evaluations for rr in results for wr in rr.wake_results)
 
-    if not in_pipeline:
+    # Always show compounding table (live feedback during pipeline runs too)
+    if len(metrics) >= 1:
         print()
-        hline("\u2550")
-        print("  COMPOUNDING CURVE \u2014 THE KEY METRIC")
-        hline("\u2550")
         print_compounding_table(metrics)
         print()
 

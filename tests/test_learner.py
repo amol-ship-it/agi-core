@@ -1038,7 +1038,7 @@ class TestRunnerHelpers(unittest.TestCase):
             rounds=None, max_tasks=None, workers=0, compute_cap=0,
         )
         resolved = resolve_from_preset(args, PRESETS["quick"])
-        self.assertEqual(resolved["rounds"], 1)
+        self.assertEqual(resolved["rounds"], 2)
         self.assertEqual(resolved["compute_cap"], 500_000)
 
     def test_resolve_from_preset_overrides(self):
