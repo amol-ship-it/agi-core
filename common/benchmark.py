@@ -39,6 +39,24 @@ from core.memory import InMemoryStore
 from core.metrics import extract_metrics, print_compounding_table, save_metrics_json, save_metrics_csv
 
 
+def expand_program(prog, library_map=None) -> str:
+    """Format a Program with learned entries expanded inline.
+
+    learned_14 → learned_14=crop_half_top(crop_to_content)
+    Recursive: if learned_14 contains learned_3, that gets expanded too.
+    """
+    if library_map is None:
+        library_map = {}
+    root = prog.root
+    if root.startswith(("learned_", "promoted_")) and root in library_map:
+        inner = expand_program(library_map[root], library_map)
+        root = f"{prog.root}={inner}"
+    if not prog.children:
+        return root
+    args = ", ".join(expand_program(c, library_map) for c in prog.children)
+    return f"{root}({args})"
+
+
 class _SafeEncoder(json.JSONEncoder):
     """JSON encoder that handles non-serializable objects gracefully.
 
@@ -307,10 +325,12 @@ class ProgressTracker:
 
     SCOREBOARD_INTERVAL = 10
 
-    def __init__(self, jsonl_path: str, t0: float, split_label: str = ""):
+    def __init__(self, jsonl_path: str, t0: float, split_label: str = "",
+                 library_map: dict = None):
         self._file = open(jsonl_path, "w")
         self._t0 = t0
         self._split_label = split_label  # e.g. "TRAIN" or "EVAL"
+        self.library_map = library_map or {}  # name → Program for expansion
 
         # Cumulative (across all rounds)
         self.done = 0
@@ -356,7 +376,7 @@ class ProgressTracker:
         elapsed = time.time() - self._t0
         icon = "\u2713" if wr.solved else "\u2717"
         energy_str = f"{wr.best.energy:.4f}" if wr.best else "    N/A"
-        program_str = repr(wr.best.program) if wr.best else ""
+        program_str = expand_program(wr.best.program, self.library_map) if wr.best else ""
 
         # Overfit tag: matched training but failed test
         overfit_tag = ""
@@ -397,11 +417,12 @@ class ProgressTracker:
             "test_solved": wr.test_solved,
             "test_error": round(wr.test_error, 6) if wr.test_error is not None else None,
             "energy": wr.best.energy if wr.best else None,
+            "_program_obj": wr.best.program if wr.best else None,  # for re-expansion
             "prediction_error": wr.best.prediction_error if wr.best else None,
             "generations": wr.generations_used,
             "evaluations": wr.evaluations,
             "wall_time": round(wr.wall_time, 3),
-            "program": repr(wr.best.program) if wr.best else None,
+            "program": expand_program(wr.best.program, self.library_map) if wr.best else None,
             "n_train_perfect": wr.n_train_perfect,
             "solving_rank": wr.solving_rank,
             "elapsed": round(elapsed, 1),
@@ -412,7 +433,7 @@ class ProgressTracker:
 
         # Exclude predictions from JSONL (large grids bloat streaming output)
         jsonl_record = {k: v for k, v in record.items()
-                        if k not in ("train_predictions", "test_predictions")}
+                        if k not in ("train_predictions", "test_predictions", "_program_obj")}
         self._file.write(json.dumps(jsonl_record) + "\n")
         self._file.flush()
 
@@ -856,9 +877,11 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             print(f"\n  >>> REGRESSION: {first_rate:.1%} \u2192 {last_rate:.1%}")
 
     library = memory.get_library()
+    lib_map = {e.name: e.program for e in library}
     print(f"\n  Library: {len(library)} learned abstractions")
     for entry in library[:20]:
-        print(f"    {entry.name}: {entry.program} "
+        expanded = expand_program(entry.program, lib_map)
+        print(f"    {entry.name}: {expanded} "
               f"(useful={entry.usefulness:.1f}, reused={entry.reuse_count}x, "
               f"from {len(entry.source_tasks)} tasks)")
     if len(library) > 20:
@@ -873,6 +896,16 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
                   f"evals={r['evaluations']:,}  E={r['energy']}")
 
     # --- Solved tasks summary (for verification) ---
+    # Re-expand program strings with the final library map (entries
+    # may have been added during the run after programs were recorded).
+    def _re_expand(record):
+        """Re-expand program string using final library map."""
+        from core.types import Program
+        prog = record.get("_program_obj")
+        if prog and isinstance(prog, Program):
+            return expand_program(prog, lib_map)
+        return record.get("program", "")
+
     solved_records = [r for r in tracker.all_records if r["solved"]]
     overfit_records = [r for r in tracker.all_records
                        if r.get("train_solved") and not r["solved"]]
@@ -882,7 +915,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         print(f"  SOLVED TASKS ({len(solved_records)} total)")
         hline("\u2500")
         for r in sorted(solved_records, key=lambda r: r["task_id"]):
-            print(f"    \u2713 {r['task_id']:<24s} program: {r['program']}")
+            print(f"    \u2713 {r['task_id']:<24s} program: {_re_expand(r)}")
     if overfit_records:
         print()
         hline("\u2500")
@@ -890,7 +923,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         hline("\u2500")
         for r in sorted(overfit_records, key=lambda r: r["task_id"]):
             err_str = f" err={r.get('test_error', '?')}" if r.get("test_error") else ""
-            print(f"    ~ {r['task_id']:<24s} program: {r['program']}{err_str}")
+            print(f"    ~ {r['task_id']:<24s} program: {_re_expand(r)}{err_str}")
 
     # --- Near misses (for debugging unsolved tasks) ---
     near_misses = [r for r in tracker.all_records

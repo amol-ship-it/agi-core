@@ -378,6 +378,8 @@ class Learner:
 
     def _phase_conditional_search(self, ctx: _WakeContext) -> Optional[str]:
         """Phase 1.25: Try if(predicate, A, B) programs."""
+        if not self.grammar.allow_structural_phases():
+            return None
         predicates = self.grammar.get_predicates()
         if not predicates or not ctx.enum_candidates or not ctx.budget_ok():
             return None
@@ -413,7 +415,7 @@ class Learner:
 
     def _phase_color_fix(self, ctx: _WakeContext) -> Optional[str]:
         """Phase 1.75: Learn color remapping from near-miss programs."""
-        if ctx.solved or not ctx.enum_candidates:
+        if ctx.solved or not ctx.enum_candidates or not self.grammar.allow_structural_phases():
             return None
         t = time.time()
         result = self._try_color_fix(ctx.enum_candidates, ctx.task)
@@ -494,7 +496,7 @@ class Learner:
 
     def _phase_post_beam_color_fix(self, ctx: _WakeContext) -> Optional[str]:
         """Phase 3: Color remapping on beam + enumeration results."""
-        if ctx.solved:
+        if ctx.solved or not self.grammar.allow_structural_phases():
             return None
         if not ctx.best_so_far or ctx.best_so_far.prediction_error <= ctx.cfg.solve_threshold:
             return None
