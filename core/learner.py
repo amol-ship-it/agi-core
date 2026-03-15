@@ -976,6 +976,7 @@ class Learner:
         tasks: list[Task],
         config: CurriculumConfig | None = None,
         on_task_done: "Optional[callable]" = None,
+        on_round_done: "Optional[callable]" = None,
     ) -> list[RoundResult]:
         """
         Run multiple wake-sleep rounds over a task set.
@@ -990,7 +991,9 @@ class Learner:
         Args:
             on_task_done: Optional callback(round_num, task_index, total_tasks,
                           wake_result) called after each task completes.
-                          Used for live progress streaming.
+            on_round_done: Optional callback(round_num, round_result, memory)
+                           called after each round (wake + sleep) completes.
+                           Used for live culture streaming.
         """
         cfg = config or CurriculumConfig()
 
@@ -1042,6 +1045,9 @@ class Learner:
                 cumulative_library_size=len(self.memory.get_library()),
             )
             results.append(rr)
+
+            if on_round_done:
+                on_round_done(round_num + 1, rr, self.memory)
 
             logger.info(
                 f"=== Round {round_num + 1} summary: "

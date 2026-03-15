@@ -641,6 +641,7 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
 
     culture_path = (cfg.save_culture if cfg.save_culture
                      else os.path.join(runs_dir, f"{prefix}_culture.json"))
+    culture_jsonl_path = culture_path.replace(".json", ".jsonl")
 
     tee = None
     if not cfg.no_log and not cfg.suppress_files:
@@ -652,7 +653,7 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
         results_data = _run_experiment(cfg, run_timestamp, log_path, jsonl_path,
                                        results_path,
                                        metrics_json_path, metrics_csv_path,
-                                       culture_path)
+                                       culture_path, culture_jsonl_path)
     except KeyboardInterrupt:
         print("\n\nAborted by user \u2014 partial results above.\n")
         raise  # propagate so pipeline mode stops too
@@ -670,7 +671,8 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
 
 
 def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
-                    metrics_json_path, metrics_csv_path, culture_path):
+                    metrics_json_path, metrics_csv_path, culture_path,
+                    culture_jsonl_path=None):
     """Core run logic, separated so tee cleanup always happens."""
     machine = detect_machine()
     workers = cfg.workers if cfg.workers > 0 else Learner.performance_core_count()
@@ -807,6 +809,37 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     hline("\u2500")
     print()
 
+    # Culture JSONL: log learning events after each round (tail -f friendly)
+    _culture_jsonl_file = open(culture_jsonl_path, "w") if culture_jsonl_path else None
+
+    def _on_round_done(round_num, round_result, memory):
+        """Write culture snapshot after each round for live observation."""
+        if not _culture_jsonl_file:
+            return
+        from datetime import datetime
+        ts = datetime.now().isoformat()
+        for entry in memory.get_library():
+            _culture_jsonl_file.write(_safe_dumps({
+                "event": "library", "round": round_num, "timestamp": ts,
+                "name": entry.name, "program": repr(entry.program),
+                "usefulness": round(entry.usefulness, 3),
+                "reuse_count": entry.reuse_count,
+                "source_tasks": entry.source_tasks,
+            }) + "\n")
+        for tid, sp in memory.get_solutions().items():
+            _culture_jsonl_file.write(_safe_dumps({
+                "event": "solution", "round": round_num, "timestamp": ts,
+                "task_id": tid, "program": repr(sp.program),
+                "prediction_error": round(sp.prediction_error, 6),
+            }) + "\n")
+        for tid, sp in memory.get_near_misses().items():
+            _culture_jsonl_file.write(_safe_dumps({
+                "event": "near_miss", "round": round_num, "timestamp": ts,
+                "task_id": tid, "program": repr(sp.program),
+                "prediction_error": round(sp.prediction_error, 6),
+            }) + "\n")
+        _culture_jsonl_file.flush()
+
     t0 = time.time()
     results = learner.run_curriculum(
         tasks,
@@ -818,9 +851,12 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             adaptive_realloc=cfg.adaptive_realloc,
         ),
         on_task_done=tracker.on_task_done,
+        on_round_done=_on_round_done,
     )
     total_time = time.time() - t0
     tracker.close()
+    if _culture_jsonl_file:
+        _culture_jsonl_file.close()
 
     # --- Final results ---
     metrics = extract_metrics(results)
@@ -1055,6 +1091,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         print(f"  Metrics JSON:     {metrics_json_path}")
         print(f"  Metrics CSV:      {metrics_csv_path}")
     print(f"  Culture:          {culture_path}")
+    print(f"  Culture (live):   {culture_jsonl_path}")
     if not cfg.no_log:
         print(f"  Console log:      {log_path}")
 
