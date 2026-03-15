@@ -422,4 +422,12 @@ Results: All 4 experiments implemented. 631 tests pass (9 new). 50-task sequenti
 
 ---
 
+### Prompt 63 (2026-03-14)
+
+> Implement bounded library with eviction. Then: remove near-miss threshold, store all unsolved programs. Make the change cleanly — rewrite from scratch, not a hack. Update all documentation.
+
+[User provided a detailed plan for bounded library with eviction (cap=100, reuse immunity, eviction score). Implemented and swept capacity 50/100/150/200 — all equivalent at current library sizes, cap=5 confirms eviction works. Then user identified that the old near-miss threshold (error ≤ 0.15) was too restrictive with eviction in place. Removed threshold: near-misses stored 21→46 (+119%), library entries 14→32 (+129%), solved extra task. User then requested a clean rewrite instead of patching — renamed entire concept from "near-miss" (implied threshold) to "best attempt" (stores everything). Cleaned API: `store_near_miss`→`store_best_attempt`, `get_near_misses(max_error)`→`get_best_attempts()`, `near_miss_weight`→`unsolved_weight`. Deleted dead `SleepConfig.near_miss_threshold`. Wake refinement (`_near_miss_refine`, `SearchConfig.near_miss_threshold`) unchanged — separate concept. Updated all docs. 402 tests pass.]
+
+---
+
 *This document will be updated with each new session.*

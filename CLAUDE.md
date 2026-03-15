@@ -45,7 +45,7 @@ These instructions apply to every session automatically.
 ## Hyperparameter Optimization
 
 - **Always do sweet-spot optimization** for parameters and hyperparameters when making changes. Don't just pick a value — measure alternatives.
-- Key hyperparameters to keep tuned: `energy_beta` (complexity penalty), `near_miss_threshold`, `near_miss_weight`, `exhaustive_pair_top_k`, `exhaustive_triple_top_k`, `compute_cap` presets.
+- Key hyperparameters to keep tuned: `energy_beta` (complexity penalty), `unsolved_weight` (quality discount for unsolved programs in sleep), `exhaustive_pair_top_k`, `exhaustive_triple_top_k`, `compute_cap` presets, `max_library_size`, `usefulness_decay`, `reuse_bonus`.
 - When adding new features with tunable parameters, run at least 3 values (low/mid/high) on a quick subset to find the sweet spot before committing.
 - Document measured results in DECISIONS.md so future sessions know what was tried.
 

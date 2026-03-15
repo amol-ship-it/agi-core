@@ -2514,5 +2514,36 @@ With 2 rounds on 50 tasks, only ~11 library entries are generated, so caps 50-20
 
 ### Test count: 402 (all passing)
 
+## Session — Remove Near-Miss Threshold, Rewrite as Best Attempts (2026-03-14)
+
+### Problem
+The "near-miss" concept was designed around a threshold filter (`SleepConfig.near_miss_threshold = 0.15`) that only stored programs with ≤15% error — effectively requiring ~85% accuracy before sleep could learn from a program. This discarded 25 of 46 unsolved programs (54%) that contained useful compositional subtrees. With eviction now handling quality control, the threshold was unnecessary.
+
+### Decision: Store all unsolved programs, rename concept
+1. **Remove threshold entirely.** Every unsolved task's best program is stored for sleep learning. No quality gate — eviction handles curation.
+2. **Quality weighting handles ranking.** Solved programs contribute subtrees at weight 1.0. Unsolved programs at `(1 - prediction_error) * unsolved_weight`. A 10% error program contributes 9× more than a 90% error one.
+3. **Rename "near-miss" → "best attempt"** throughout the storage/sleep layer. The old name implied a threshold filter that no longer exists.
+
+### Measured impact (50 tasks, 2 rounds, controlled A/B)
+
+|                    | OLD (threshold=0.15) | NEW (no threshold) |
+|--------------------|---------------------|--------------------|
+| Programs stored    | 21                  | **46** (+119%)     |
+| R1 library entries | 14                  | **32** (+129%)     |
+| R1 solved          | 4                   | **5** (+1 task)    |
+| R2 library size    | 21                  | **67** (+219%)     |
+
+### API renames
+- `store_near_miss()` → `store_best_attempt()`
+- `get_near_misses(max_error)` → `get_best_attempts()` (no filtering parameter)
+- `SleepConfig.near_miss_weight` → `SleepConfig.unsolved_weight`
+- `SleepConfig.near_miss_threshold` — deleted (dead field)
+- Memory internal: `_near_misses` → `_best_attempts`
+- Culture file key: `near_misses` → `best_attempts`
+
+Note: `SearchConfig.near_miss_threshold` (wake refinement) and `_near_miss_refine()` are unchanged — those are about giving close-to-solving programs extra search compute during wake, a separate concept.
+
+### Test count: 402 (all passing)
+
 ---
 *This document will be updated with each new session and major decision.*

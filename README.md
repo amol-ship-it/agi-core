@@ -206,7 +206,7 @@ Quick mode (50 training tasks, ~5s): 4/50 (8%) with 2 rounds (default).
 
 **Depth-3 exhaustive enumeration** with no-op pruning and binary near-miss refinement.
 
-**Near-miss sleep** promotes near-miss programs to the library for compounding across rounds. Only transferable (base-vocabulary) compositions are promoted.
+**Sleep learning** extracts subtrees from ALL programs (solved + unsolved), quality-weighted by accuracy. Promotes transferable compositions to a bounded library with eviction — reused entries are immune, weak entries displaced by better ones.
 
 **Interleaved pipeline** runs train → eval per round, so each eval shows the value of compounding so far. The compounding curve (train/eval per round) is printed at the end and saved in the pipeline JSON.
 
@@ -242,12 +242,13 @@ Quick mode (50 training tasks, ~5s): 4/50 (8%) with 2 rounds (default).
    - **Exhaustive enumeration** (depth 1-3): tries all single primitives, top-K pairs, and top-K triples. Parameterized prims are tried with all perception children.
    - **Near-miss refinement**: takes programs with error < 20% and tries appending, prepending, or wrapping with binary ops (overlay, mask_by).
    - No-op pruning: primitives that don't change the grid are skipped at depth 2+.
-2. **SLEEP**: Analyze all solved and near-miss programs (error < 15%).
-   Promote near-miss programs (depth 2+) directly as library entries for the next round.
-   Extract recurring sub-programs, quality-weighted by accuracy.
-   Train composition priors (transition matrix) on both solved and near-miss programs.
+2. **SLEEP**: Analyze all solved programs and best unsolved attempts.
+   Extract recurring sub-programs, quality-weighted by accuracy (solved=1.0, unsolved=(1-error)×0.5).
+   Promote transferable compositions (depth 2+) directly as library entries.
+   Train composition priors (transition matrix) on all programs.
+   Bounded library with eviction: reused entries are immune, weak entries displaced by better ones.
 3. **REPEAT**: The grown library expands the effective vocabulary.
-   Depth-1 search over a promoted depth-2 near-miss reaches depth-3 effectively.
+   Depth-1 search over a promoted depth-2 composition reaches depth-3 effectively.
    This is the compounding mechanism — each round builds on the last.
 
 ### The 4 interfaces
@@ -285,7 +286,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 ### Current status
 
-**Compounding demonstrated on ARC with atomic vocabulary.** Training compounds: 18→24 (+6) across 3 rounds. Near-miss programs promoted to library and reused. Eval solves include depth-3-4 compositions using learned abstractions transferred via culture file.
+**Compounding demonstrated on ARC with atomic vocabulary.** Training compounds: 18→24 (+6) across 3 rounds. Unsolved programs promoted to library and reused. Eval solves include depth-3-4 compositions using learned abstractions transferred via culture file.
 
 **Three primitive kinds:** transforms (Grid→Grid), perception (Grid→Value), and parameterized ((Value,...) → Grid→Grid factory). All compositions are fully transferable across tasks.
 
@@ -339,7 +340,7 @@ agi-core/
 │       ├── __init__.py      # Game engine + all 4 interfaces
 │       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (393 tests)
+├── tests/                   # Test suite (402 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -358,7 +359,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**393 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization.
+**402 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive. Integration: pipeline, compounding, visualization.
 
 ## Documentation
 
@@ -376,7 +377,7 @@ These documents allow anyone to reproduce the exact trajectory of this project.
 - **Phase 3** ✅ Additional domains (Zork 20 tasks, list_ops), same core — compounding demonstrated
 - **Phase 4** ✅ Compounding infrastructure: Zork 10/20, list_ops 20/28 with library reuse 2-6x
 - **Phase 5-8** ✅ Cleanup, minimal vocabulary, composition rules, eval 36/400
-- **Phase 9** ✅ Atomic vocabulary, near-miss sleep, first library entries on ARC
+- **Phase 9** ✅ Atomic vocabulary, sleep learning from all programs, first library entries on ARC
 - **Phase 10** ✅ Perception + parameterized architecture, truly atomic (41 prims), interleaved pipeline
 - **Phase 11** 🔧 Deeper composition discovery, expressiveness gap (atomic → compound ops)
 - **Phase 12** Cross-domain library transfer
