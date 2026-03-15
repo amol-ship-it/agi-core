@@ -691,7 +691,11 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         sys.exit(1)
 
     # --- Create Learner ---
-    memory = InMemoryStore()
+    _sleep_defaults = SleepConfig()
+    memory = InMemoryStore(
+        capacity=_sleep_defaults.max_library_size,
+        reuse_bonus=_sleep_defaults.reuse_bonus,
+    )
 
     evals_per_task = 1  # exhaustive enumeration only (no beam search)
     total_budget = evals_per_task * len(tasks) * rounds

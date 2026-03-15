@@ -45,13 +45,19 @@ class InMemoryStore(Memory):
 
     Good enough for prototyping. Replace with persistent storage
     (SQLite, filesystem) for larger experiments.
+
+    Args:
+        capacity: max library entries (0 = unbounded, for worker snapshots).
+        reuse_bonus: scoring bonus per reuse_count for eviction ranking.
     """
 
-    def __init__(self):
+    def __init__(self, capacity: int = 0, reuse_bonus: float = 2.0):
         self._episodes: list[dict] = []
         self._library: list[LibraryEntry] = []
         self._solutions: dict[str, ScoredProgram] = {}
         self._near_misses: dict[str, ScoredProgram] = {}
+        self._capacity = capacity
+        self._reuse_bonus = reuse_bonus
 
     # --- Episodic ---
 
@@ -71,9 +77,49 @@ class InMemoryStore(Memory):
     def get_library(self) -> list[LibraryEntry]:
         return list(self._library)
 
-    def add_to_library(self, entry: LibraryEntry) -> None:
-        self._library.append(entry)
-        logger.debug(f"Library += {entry.name} (size={entry.program.size}, useful={entry.usefulness:.1f})")
+    def _eviction_score(self, entry: LibraryEntry) -> float:
+        """Score for eviction ranking: higher = harder to evict."""
+        return entry.usefulness + self._reuse_bonus * entry.reuse_count
+
+    def add_to_library(self, entry: LibraryEntry) -> bool:
+        """Add entry, evicting the weakest non-reused entry if at capacity.
+
+        Returns True if accepted, False if rejected (too weak).
+        """
+        # Unbounded or under capacity: always accept
+        if self._capacity <= 0 or len(self._library) < self._capacity:
+            self._library.append(entry)
+            logger.debug(f"Library += {entry.name} (size={entry.program.size}, useful={entry.usefulness:.1f})")
+            return True
+
+        # At capacity: find worst evictable entry (reuse_count == 0)
+        new_score = self._eviction_score(entry)
+        worst_idx = -1
+        worst_score = float('inf')
+        for i, e in enumerate(self._library):
+            if e.reuse_count > 0:
+                continue  # immune to eviction
+            s = self._eviction_score(e)
+            if s < worst_score:
+                worst_score = s
+                worst_idx = i
+
+        if worst_idx < 0:
+            # All entries have been reused — no evictable slot
+            logger.debug(f"Library FULL (all reused), rejected {entry.name}")
+            return False
+
+        if new_score > worst_score:
+            evicted = self._library[worst_idx]
+            self._library[worst_idx] = entry
+            logger.debug(
+                f"Library evicted {evicted.name} (score={worst_score:.2f}) "
+                f"for {entry.name} (score={new_score:.2f})"
+            )
+            return True
+
+        logger.debug(f"Library rejected {entry.name} (score={new_score:.2f} <= worst={worst_score:.2f})")
+        return False
 
     def update_usefulness(self, name: str, delta: float) -> None:
         for entry in self._library:
@@ -216,6 +262,13 @@ class InMemoryStore(Memory):
                 task_id=task_id,
             )
             self._near_misses[task_id] = sp
+
+        # Post-load truncation: if loaded library exceeds capacity, keep top-N
+        if self._capacity > 0 and len(self._library) > self._capacity:
+            before = len(self._library)
+            self._library.sort(key=self._eviction_score, reverse=True)
+            self._library = self._library[:self._capacity]
+            logger.info(f"Culture truncated library {before} → {self._capacity}")
 
         logger.info(
             f"Culture loaded from {path} "

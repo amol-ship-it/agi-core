@@ -492,13 +492,19 @@ class TestLearnerSleepEdgeCases(unittest.TestCase):
         lib_names = [e.name for e in learner.memory.get_library()]
         self.assertIn("existing", lib_names)
 
-    def test_sleep_respects_max_library_size(self):
+    def test_sleep_respects_max_library_size_via_eviction(self):
+        """Library stays bounded: eviction replaces weak entries, rejects if too weak."""
         learner = _make_learner()
-        learner.sleep_cfg.max_library_size = 1
+        learner.sleep_cfg.max_library_size = 2
+        # Wire capacity into the memory store
+        learner.memory = InMemoryStore(capacity=2)
 
-        # Pre-fill library to max
-        entry = LibraryEntry(name="full", program=Program(root="x"), usefulness=1.0)
-        learner.memory.add_to_library(entry)
+        # Pre-fill with a high-usefulness reused entry (immune) + a weak one
+        immune = LibraryEntry(name="immune", program=Program(root="x"), usefulness=100.0)
+        immune.reuse_count = 1
+        learner.memory.add_to_library(immune)
+        weak = LibraryEntry(name="weak", program=Program(root="y"), usefulness=0.01)
+        learner.memory.add_to_library(weak)
 
         # Store solutions that would generate new entries
         for i in range(3):
@@ -509,7 +515,11 @@ class TestLearnerSleepEdgeCases(unittest.TestCase):
             learner.memory.store_solution(f"t{i}", sol)
 
         result = learner.sleep()
-        self.assertEqual(len(result.new_entries), 0)
+        lib = learner.memory.get_library()
+        # Library stays bounded at capacity
+        self.assertLessEqual(len(lib), 2)
+        # Immune entry survived
+        self.assertIn("immune", [e.name for e in lib])
 
     def test_sleep_decays_old_entries(self):
         learner = _make_learner()
@@ -638,7 +648,9 @@ class TestConfigDefaults(unittest.TestCase):
     def test_sleep_config_defaults(self):
         cfg = SleepConfig()
         self.assertEqual(cfg.min_occurrences, 1)
-        self.assertEqual(cfg.max_library_size, 500)
+        self.assertEqual(cfg.max_library_size, 100)
+        self.assertAlmostEqual(cfg.usefulness_decay, 0.90)
+        self.assertAlmostEqual(cfg.reuse_bonus, 2.0)
 
     def test_curriculum_config_defaults(self):
         cfg = CurriculumConfig()

@@ -397,8 +397,12 @@ class Memory(ABC):
         ...
 
     @abstractmethod
-    def add_to_library(self, entry: LibraryEntry) -> None:
-        """Add a new learned abstraction."""
+    def add_to_library(self, entry: LibraryEntry) -> bool:
+        """Add a new learned abstraction.
+
+        Returns True if the entry was accepted (added or replaced a weaker entry).
+        Returns False if the library is full and the entry was too weak to displace anything.
+        """
         ...
 
     @abstractmethod

@@ -54,8 +54,9 @@ class SleepConfig:
     """Knobs for the sleep/consolidation phase."""
     min_occurrences: int = 1      # sub-tree must appear in >= N solutions/near-misses
     min_size: int = 2             # sub-tree must have >= N nodes
-    max_library_size: int = 500   # cap on total library entries
-    usefulness_decay: float = 0.95  # decay old entries each sleep cycle
+    max_library_size: int = 100   # cap on total library entries
+    usefulness_decay: float = 0.90  # decay old entries each sleep cycle
+    reuse_bonus: float = 2.0       # scoring bonus per reuse for eviction ranking
     # Near-miss programs: not perfectly solved but close. Used by sleep
     # to extract subtrees from richer compositional programs.
     near_miss_threshold: float = 0.15  # max prediction_error to store

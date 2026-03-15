@@ -2475,5 +2475,44 @@ Round 2 gives +28-33% solves. Round 3 adds <5% for 2× more time. Changed both p
 
 **Test count**: 654 → 393 (261 tests removed, all testing deleted full/minimal features).
 
+## Session — Bounded Library with Eviction (2026-03-14)
+
+### Problem
+Library had a generous cap (500 entries), gentle decay (0.95/round), and no eviction — when full, new entries were simply dropped. Low-quality abstractions waste search compute since each becomes a 0-arity primitive in enumeration.
+
+### Decision: Eviction-based bounded library
+- **Eviction score**: `usefulness + reuse_bonus * reuse_count` (higher = harder to evict)
+- **Reuse immunity**: entries with `reuse_count > 0` are fully immune to eviction
+- **When at capacity**: new entry replaces weakest evictable entry if its score is higher; otherwise rejected
+- **Post-load truncation**: culture files loaded into bounded stores are sorted by eviction score and truncated
+
+### Config changes
+- `max_library_size`: 500 → **100** (tighter cap)
+- `usefulness_decay`: 0.95 → **0.90** (faster decay)
+- Added `reuse_bonus: float = 2.0` (scoring bonus per reuse for eviction ranking)
+
+### Capacity sweep results (50 tasks, 2 rounds, quick mode)
+
+| cap | Train    | Library | Wall  |
+|-----|----------|---------|-------|
+| 5   | 3/50 (6%)| 5       | 1.5s  |
+| 50  | 4/50 (8%)| 11      | 1.5s  |
+| 100 | 4/50 (8%)| 11      | 1.5s  |
+| 150 | 4/50 (8%)| 11      | 1.5s  |
+| 200 | 4/50 (8%)| 11      | 1.5s  |
+
+With 2 rounds on 50 tasks, only ~11 library entries are generated, so caps 50-200 all perform identically. Cap=5 confirms eviction works (library bounded, solve rate drops). Cap=100 chosen as default: tight enough to trigger eviction as library grows with more rounds/tasks, without impeding current performance.
+
+### Files modified
+- `core/config.py` — defaults + `reuse_bonus` field
+- `core/interfaces.py` — `add_to_library` return type `None` → `bool`
+- `core/memory.py` — eviction logic in `InMemoryStore` (capacity, eviction score, reuse immunity, post-load truncation)
+- `core/learner.py` — removed 3 caller-side cap checks, track accepted entries via bool return
+- `common/benchmark.py` — wire capacity/reuse_bonus into `InMemoryStore`
+- `tests/test_memory.py` — 10 new eviction tests
+- `tests/test_learner.py` — updated cap test for eviction behavior, updated default assertions
+
+### Test count: 402 (all passing)
+
 ---
 *This document will be updated with each new session and major decision.*

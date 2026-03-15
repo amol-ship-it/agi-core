@@ -862,8 +862,6 @@ class Learner:
         for subtree, task_ids, usefulness in candidates:
             if repr(subtree) in existing_reprs:
                 continue
-            if len(self.memory.get_library()) + len(new_entries) >= cfg.max_library_size:
-                break
 
             entry_name = f"learned_{lib_before + len(new_entries)}"
             entry = LibraryEntry(
@@ -906,8 +904,6 @@ class Learner:
             key = repr(prog)
             if key in existing_reprs:
                 continue
-            if len(self.memory.get_library()) + len(new_entries) >= cfg.max_library_size:
-                break
             quality = (1.0 - scored.prediction_error) * cfg.near_miss_weight
             entry_name = f"learned_{lib_before + len(new_entries)}"
             entry = LibraryEntry(
@@ -921,13 +917,15 @@ class Learner:
             new_entries.append(entry)
             existing_reprs.add(key)
 
-        # 5. Add to memory
+        # 5. Add to memory (eviction handles capacity)
+        accepted = []
         for entry in new_entries:
-            self.memory.add_to_library(entry)
+            if self.memory.add_to_library(entry):
+                accepted.append(entry)
 
         # 6. Decay old entries
         for entry in self.memory.get_library():
-            if entry not in new_entries:
+            if entry not in accepted:
                 self.memory.update_usefulness(
                     entry.name,
                     entry.usefulness * (cfg.usefulness_decay - 1),  # negative delta
@@ -941,14 +939,16 @@ class Learner:
         lib_after = len(self.memory.get_library())
         wall = time.time() - t0
 
+        rejected = len(new_entries) - len(accepted)
         logger.info(
-            f"  [sleep] Extracted {len(new_entries)} new abstractions "
+            f"  [sleep] Extracted {len(accepted)} new abstractions "
+            f"({rejected} rejected by eviction) "
             f"(from {len(solutions)} solved + {len(near_misses)} near-misses), "
             f"pruned {pruned} dead entries. "
             f"Library: {lib_before} → {lib_after}. Time: {wall:.1f}s"
         )
         return SleepResult(
-            new_entries=new_entries,
+            new_entries=accepted,
             library_size_before=lib_before,
             library_size_after=lib_after,
             wall_time=wall,
@@ -1309,8 +1309,6 @@ class Learner:
             key = repr(subtree)
             if key in existing_reprs:
                 continue
-            if len(self.memory.get_library()) >= self.sleep_cfg.max_library_size:
-                break
 
             entry = LibraryEntry(
                 name=f"promoted_{len(self.memory.get_library())}",
