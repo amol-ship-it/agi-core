@@ -875,6 +875,35 @@ class Learner:
             new_entries.append(entry)
             existing_reprs.add(repr(subtree))
 
+        # 4b. Promote full near-miss programs as library entries.
+        #     Near-misses are programs that almost solved a task. Promoting
+        #     them directly makes them available as building blocks in the
+        #     next round: depth-1 search over library entries effectively
+        #     reaches depth-2+ without exponential cost. Each round
+        #     compounds: round N's near-misses become round N+1's primitives.
+        #     Skip depth-1 programs (already in base vocabulary).
+        for task_id, scored in near_misses.items():
+            prog = scored.program
+            if prog.size < 2:
+                continue  # depth-1: already in base vocabulary
+            key = repr(prog)
+            if key in existing_reprs:
+                continue
+            if len(self.memory.get_library()) + len(new_entries) >= cfg.max_library_size:
+                break
+            quality = (1.0 - scored.prediction_error) * cfg.near_miss_weight
+            entry_name = f"learned_{lib_before + len(new_entries)}"
+            entry = LibraryEntry(
+                name=entry_name,
+                program=prog,
+                usefulness=quality,
+                reuse_count=0,
+                source_tasks=[task_id],
+                domain="",
+            )
+            new_entries.append(entry)
+            existing_reprs.add(key)
+
         # 5. Add to memory
         for entry in new_entries:
             self.memory.add_to_library(entry)
