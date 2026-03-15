@@ -35,11 +35,11 @@ class TestARCAdapter:
         assert isinstance(grammar, Grammar)
         assert isinstance(drive, DriveSignal)
 
-    def test_create_interfaces_vocabulary(self):
+    def test_create_interfaces_uses_atomic(self):
         adapter = self._make()
-        _, grammar_full, _ = adapter.create_interfaces(seed=42, vocabulary="full")
-        _, grammar_min, _ = adapter.create_interfaces(seed=42, vocabulary="minimal")
-        assert len(grammar_full.base_primitives()) > len(grammar_min.base_primitives())
+        _, grammar, _ = adapter.create_interfaces(seed=42)
+        assert grammar._vocabulary == "atomic"
+        assert grammar.allow_structural_phases() is False
 
     def test_config_defaults(self):
         adapter = self._make()

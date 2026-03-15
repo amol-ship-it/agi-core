@@ -169,18 +169,14 @@ Each task record includes: `task_id`, `solved` (test-verified), `train_solved`, 
 
 ## Presets
 
-Three modes. Pick one. That's the only knob most users need.
+Two modes. Pick one. That's the only knob most users need.
 
-| Mode | Tasks | Beam | Compute Cap | Vocabulary | Use case |
-|------|-------|------|-------------|------------|----------|
-| `quick` | 50 | off | 500K | full/minimal/atomic | Fast dev loop (~4s) |
-| `default` | all (400) | off | 3M | full/minimal/atomic | Full benchmark (~1.5 min) |
-| `contest` | all (400) | 30×15 | 100M | full/minimal/atomic | Maximum accuracy |
+| Mode | Tasks | Compute Cap | Use case |
+|------|-------|-------------|----------|
+| `quick` | 50 | 500K | Fast dev loop (~4s) |
+| `default` | all (400) | 3M | Full benchmark (~5 min) |
 
-Three vocabulary modes (`--vocabulary`):
-- `full`: 180 hand-crafted primitives (max single-round coverage)
-- `minimal`: 60 fundamental primitives (action + perception + composition rules — cleaner, less overfit, designed for compounding)
-- `atomic`: ~27 atomic operations + combinators (forces deeper compositions, validates composition thesis)
+All runs use **atomic vocabulary** (41 truly atomic primitives: 21 transforms + 12 perception + 8 parameterized). Compound operations must be discovered through composition.
 
 All presets run **1 round** with **seed 42** by default. Results are fully deterministic (`PYTHONHASHSEED=0` is enforced automatically).
 
@@ -218,7 +214,7 @@ Atomic vocabulary (21 transforms + 12 perception + 8 parameterized = 41 truly at
 | Zork | 20 | 10 | 50% | 5 library entries, reuse 2-6x (5 rounds) |
 | List Ops | 28 | 20 | 71.4% | 8 library entries, reuse 2-6x (3 rounds) |
 
-**Three vocabulary modes:** `full` (180 hand-crafted), `minimal` (60 fundamental), or `atomic` (41 truly atomic: transforms + perception + parameterized). Atomic mode uses parameterized color operations with perception-derived parameters — no task-specific color prims.
+**Atomic vocabulary** (41 primitives): transforms + perception + parameterized. Uses parameterized color operations with perception-derived parameters — no task-specific color prims. All compositions are transferable.
 **Depth-3 exhaustive enumeration** with smart pool selection and no-op pruning finds 1-4 step programs efficiently.
 **Near-miss sleep** promotes near-miss programs to the library for compounding across rounds. Only transferable (base-vocabulary) compositions are promoted.
 **Interleaved pipeline** runs train → eval per round, so each eval shows the value of compounding so far.
@@ -228,17 +224,14 @@ Atomic vocabulary (21 transforms + 12 perception + 8 parameterized = 41 truly at
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--domain` | (required) | Domain: `arc-agi-1`, `arc-agi-2`, `zork`, or `list-ops` |
-| `--mode` | `default` | Preset: `quick`, `default`, or `contest` |
+| `--mode` | `default` | Preset: `quick` or `default` |
 | `--run-mode` | `single` | `single` (train or eval) or `pipeline` (train → eval) |
 | `--split` | `training` | Data split for single mode: `training` or `evaluation` |
-| `--vocabulary` | `full` | Primitive vocabulary: `full`, `minimal`, or `atomic` |
 | `--culture` | none | Culture file to load (cross-run knowledge transfer) |
 | `--save-culture` | auto | Override auto culture save path |
 | `--max-tasks` | from preset | Limit tasks (0 = all). Quick: `50`, default/contest: all |
 | `--rounds` | `1` | Wake-sleep rounds |
 | `--sequential-compounding` | off | Process tasks sequentially with immediate concept promotion |
-| `--beam-width` | from preset | Beam search width. Quick/default: `1` (off), contest: `30` |
-| `--max-generations` | from preset | Beam generations. Quick/default: `1` (off), contest: `15` |
 | `--workers` | `0` (perf cores) | Parallel workers. `0` = auto-detect performance cores |
 | `--seed` | `42` | Random seed for deterministic, reproducible runs |
 | `--compute-cap` | from preset | Per-task eval budget (cell-normalized). `0` = unlimited |

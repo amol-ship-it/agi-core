@@ -1035,24 +1035,20 @@ class TestRunnerHelpers(unittest.TestCase):
         from common.benchmark import resolve_from_preset, PRESETS
         import argparse
         args = argparse.Namespace(
-            rounds=None, beam_width=None, max_generations=None,
-            max_tasks=None, workers=0, compute_cap=0,
+            rounds=None, max_tasks=None, workers=0, compute_cap=0,
         )
         resolved = resolve_from_preset(args, PRESETS["quick"])
         self.assertEqual(resolved["rounds"], 1)
-        self.assertEqual(resolved["beam_width"], 1)
         self.assertEqual(resolved["compute_cap"], 500_000)
 
     def test_resolve_from_preset_overrides(self):
         from common.benchmark import resolve_from_preset, PRESETS
         import argparse
         args = argparse.Namespace(
-            rounds=5, beam_width=200, max_generations=None,
-            max_tasks=10, workers=4, compute_cap=0,
+            rounds=5, max_tasks=10, workers=4, compute_cap=0,
         )
         resolved = resolve_from_preset(args, PRESETS["quick"])
         self.assertEqual(resolved["rounds"], 5)
-        self.assertEqual(resolved["beam_width"], 200)
         self.assertEqual(resolved["max_tasks"], 10)
         self.assertEqual(resolved["workers"], 4)
 
@@ -1107,7 +1103,6 @@ class TestRunnerHelpers(unittest.TestCase):
         from common.benchmark import PRESETS
         self.assertEqual(PRESETS["quick"]["compute_cap"], 500_000)
         self.assertEqual(PRESETS["default"]["compute_cap"], 3_000_000)
-        self.assertEqual(PRESETS["contest"]["compute_cap"], 100_000_000)
 
 
 if __name__ == "__main__":

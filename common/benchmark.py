@@ -82,39 +82,17 @@ def _safe_dumps(obj, **kwargs):
 # =============================================================================
 
 PRESETS = {
-    # Quick: fast dev loop. Aggressive cap for speed.
-    # Experiments on 400-task training set (this machine, 2 workers):
-    #   - cap=100:  76/400 (19.0%) in 72s  — 89% of all possible solves
-    #   - cap=3M:   85/400 (21.2%) in 379s — all solves, 5.3x slower
-    #   - Solves are bimodal: 76 "fast" (<500 evals, depth 1-2) vs 9 "slow"
-    #     (per_object_recolor, 12-14K evals, need cap >= 2.8M).
-    #   - The 500-eval floor means caps below 400K all give identical results.
-    #   - Philosophy: quick mode optimizes for iteration speed, not max solves.
+    # Quick: fast dev loop. 50 tasks, aggressive compute cap.
     "quick": {
         "rounds": 1,
-        "beam_width": 1,
-        "max_generations": 1,
         "max_tasks": 50,
-        "compute_cap": 500_000,   # 500K: same solves as 100, small headroom, ~5x faster than 3M
+        "compute_cap": 500_000,
     },
-    # Default: full dataset. Higher cap to capture per_object_recolor solves.
-    # 3M cap (3750 base evals/task, up to 15K for small grids) catches all
-    # current solves including per_object_recolor tasks.
+    # Default: full dataset, higher compute cap.
     "default": {
         "rounds": 1,
-        "beam_width": 1,
-        "max_generations": 1,
         "max_tasks": 0,
-        "compute_cap": 3_000_000,   # 3M: captures all 85 solves on 400 tasks
-    },
-    # Contest: maximum effort. Keeps modest beam in case deeper search
-    # helps on the hardest tasks. Still mainly exhaustive.
-    "contest": {
-        "rounds": 1,
-        "beam_width": 30,
-        "max_generations": 15,
-        "max_tasks": 0,
-        "compute_cap": 100_000_000,  # 100M ops — beam search safety net
+        "compute_cap": 3_000_000,
     },
 }
 
@@ -272,10 +250,6 @@ Examples:
                         help="Limit number of tasks (0 = all, default: from preset)")
     parser.add_argument("--rounds", type=int, default=None,
                         help="Wake-sleep rounds (default: 1)")
-    parser.add_argument("--beam-width", type=int, default=None,
-                        help="Beam width (default: from preset)")
-    parser.add_argument("--max-generations", type=int, default=None,
-                        help="Max generations per task (default: from preset)")
     parser.add_argument("--workers", type=int, default=0,
                         help=f"Parallel workers (0 = performance cores = {perf_cores})")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED,
@@ -302,13 +276,6 @@ Examples:
     parser.add_argument("--task-ids", type=str, default="",
                         help="Comma-separated task IDs to run (e.g. '0dfd9992,1190e5a7'). "
                              "Overrides --max-tasks. Prefix match supported.")
-    parser.add_argument("--adaptive-realloc", action="store_true",
-                        help="Re-run near-miss tasks with boosted compute budget "
-                             "(3x budget, wider search breadth)")
-    parser.add_argument("--vocabulary", type=str, default="full",
-                        choices=["full", "minimal", "atomic"],
-                        help="Primitive vocabulary: 'full' (180 prims), 'minimal' (~26 "
-                             "fundamentals), or 'atomic' (~27 atomic ops + combinators)")
     return parser
 
 
@@ -500,23 +467,14 @@ class ExperimentConfig:
 
     # Search parameters (resolved from preset + overrides)
     rounds: int = 1
-    beam_width: int = 150
-    max_generations: int = 80
     workers: int = 0
     seed: int = DEFAULT_SEED
     compute_cap: int = 0
 
     # Search tuning
-    mutations_per_candidate: int = 2
-    crossover_fraction: float = 0.3
     energy_alpha: float = 1.0
     energy_beta: float = 0.001
     solve_threshold: float = 0.001
-
-    # Sleep tuning
-    min_occurrences: int = 2
-    min_size: int = 2
-    max_library_size: int = 500
 
     # Exhaustive enumeration
     exhaustive_depth: int = 3
@@ -525,9 +483,6 @@ class ExperimentConfig:
 
     # Sequential compounding
     sequential_compounding: bool = False
-
-    # Adaptive compute reallocation for near-miss tasks
-    adaptive_realloc: bool = False
 
     # Culture file (load pre-trained library)
     culture_path: str = ""
@@ -565,8 +520,6 @@ def resolve_from_preset(args, preset: dict) -> dict:
     explicit_cap = args_cap if args_cap > 0 else preset_cap
     return {
         "rounds": args.rounds if args.rounds is not None else preset["rounds"],
-        "beam_width": args.beam_width if args.beam_width is not None else preset["beam_width"],
-        "max_generations": args.max_generations if args.max_generations is not None else preset["max_generations"],
         "max_tasks": args.max_tasks if args.max_tasks is not None else preset["max_tasks"],
         "workers": args.workers if args.workers > 0 else Learner.performance_core_count(),
         "compute_cap": explicit_cap,
@@ -681,8 +634,6 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     machine = detect_machine()
     workers = cfg.workers if cfg.workers > 0 else Learner.performance_core_count()
     rounds = cfg.rounds
-    beam_width = cfg.beam_width
-    max_gens = cfg.max_generations
     tasks = cfg.tasks
     compute_cap = cfg.compute_cap
 
@@ -701,12 +652,9 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     hline("\u2550")
 
-    vocabulary = getattr(cfg.grammar, '_vocabulary', 'unknown')
     print(f"\n  Mode:       {cfg.mode}")
-    print(f"  Vocabulary: {vocabulary} ({len(cfg.grammar.base_primitives())} base primitives)")
+    print(f"  Primitives: {len(cfg.grammar.base_primitives())}")
     print(f"  Rounds:     {rounds}")
-    print(f"  Beam:       {beam_width}")
-    print(f"  Gens:       {max_gens}")
     print(f"  Workers:    {workers} / {machine['cpu_count']} cores "
           f"({machine.get('chip', machine['arch'])})")
     print(f"  Seed:       {cfg.seed}")
@@ -739,7 +687,7 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
     # --- Create Learner ---
     memory = InMemoryStore()
 
-    evals_per_task = beam_width * max_gens
+    evals_per_task = 1  # exhaustive enumeration only (no beam search)
     total_budget = evals_per_task * len(tasks) * rounds
 
     # Cell-normalized compute cap.
@@ -770,10 +718,8 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
         drive=cfg.drive,
         memory=memory,
         search_config=SearchConfig(
-            beam_width=beam_width,
-            max_generations=max_gens,
-            mutations_per_candidate=cfg.mutations_per_candidate,
-            crossover_fraction=cfg.crossover_fraction,
+            beam_width=1,
+            max_generations=1,
             energy_alpha=cfg.energy_alpha,
             energy_beta=cfg.energy_beta,
             solve_threshold=cfg.solve_threshold,
@@ -782,11 +728,6 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             exhaustive_pair_top_k=cfg.exhaustive_pair_top_k,
             exhaustive_triple_top_k=cfg.exhaustive_triple_top_k,
             eval_budget=eval_budget,
-        ),
-        sleep_config=SleepConfig(
-            min_occurrences=cfg.min_occurrences,
-            min_size=cfg.min_size,
-            max_library_size=cfg.max_library_size,
         ),
     )
 
@@ -857,7 +798,6 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             wake_sleep_rounds=rounds,
             workers=workers,
             sequential_compounding=cfg.sequential_compounding,
-            adaptive_realloc=cfg.adaptive_realloc,
         ),
         on_task_done=tracker.on_task_done,
         on_round_done=_on_round_done,
@@ -996,13 +936,10 @@ def _run_experiment(cfg, run_timestamp, log_path, jsonl_path, results_path,
             "domain": cfg.domain_tag,
             "mode": cfg.mode,
             "rounds": rounds,
-            "beam_width": beam_width,
-            "max_generations": max_gens,
             "evals_per_task": evals_per_task,
             "workers": workers,
             "seed": cfg.seed,
             "n_tasks": len(tasks),
-            "vocabulary": getattr(cfg.grammar, '_vocabulary', 'unknown'),
             "n_primitives": len(cfg.grammar.base_primitives()),
             "compute_cap": compute_cap,
             "exhaustive_depth": cfg.exhaustive_depth,
@@ -1169,8 +1106,6 @@ def save_pipeline_results(
         "domain": domain,
         "mode": train_meta.get("mode", getattr(args, "mode", "?")),
         "rounds": train_meta.get("rounds", resolved.get("rounds")),
-        "beam_width": train_meta.get("beam_width", resolved.get("beam_width")),
-        "max_generations": train_meta.get("max_generations", resolved.get("max_generations")),
         "workers": train_meta.get("workers", resolved.get("workers")),
         "seed": train_meta.get("seed", getattr(args, "seed", None)),
         "compute_cap": train_meta.get("compute_cap", resolved.get("compute_cap")),
@@ -1245,8 +1180,6 @@ def print_pipeline_summary(
     print("  Parameters:")
     print(f"    Mode:              {getattr(args, 'mode', '?')}")
     print(f"    Rounds:            {train_meta.get('rounds', '?')}")
-    print(f"    Beam:              {train_meta.get('beam_width', '?')}")
-    print(f"    Generations:       {train_meta.get('max_generations', '?')}")
     print(f"    Workers:           {train_meta.get('workers', '?')}")
     print(f"    Seed:              {train_meta.get('seed', '?')}")
     cap = train_meta.get("compute_cap", 0)
@@ -1254,7 +1187,6 @@ def print_pipeline_summary(
     print(f"    Exhaustive depth:  {getattr(args, 'exhaustive_depth', '?')}")
     print(f"    Pair top-K:        {getattr(args, 'exhaustive_pair_top_k', '?')}")
     print(f"    Triple top-K:      {getattr(args, 'exhaustive_triple_top_k', '?')}")
-    print(f"    Vocabulary:        {train_meta.get('vocabulary', '?')}")
     print(f"    Primitives:        {train_meta.get('n_primitives', '?')}")
 
     # Train + eval results

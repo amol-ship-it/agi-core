@@ -35,10 +35,7 @@ class ARCAdapter(DomainAdapter):
         return self.benchmark
 
     def create_interfaces(self, seed: int = 42, **kwargs) -> tuple[Environment, Grammar, DriveSignal]:
-        vocabulary = kwargs.get("vocabulary", "full")
-        if vocabulary not in ("full", "minimal", "atomic"):
-            raise ValueError(f"Unknown vocabulary: {vocabulary!r}")
-        return ARCEnv(), ARCGrammar(seed=seed, vocabulary=vocabulary), ARCDrive()
+        return ARCEnv(), ARCGrammar(seed=seed, vocabulary="atomic"), ARCDrive()
 
     def load_tasks(self, split: str, data_dir: Optional[str] = None,
                    max_tasks: int = 0) -> list[Task]:

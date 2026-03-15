@@ -95,8 +95,7 @@ def main():
 
     def _make_config(args, resolved, max_tasks, tasks, timestamp,
                      *, culture_path="", suppress_files=False, split_label=""):
-        env, grammar, drive = adapter.create_interfaces(
-            seed=args.seed, vocabulary=getattr(args, "vocabulary", "full"))
+        env, grammar, drive = adapter.create_interfaces(seed=args.seed)
         # Merge domain defaults with resolved values
         return ExperimentConfig(
             title=f"{adapter.name().upper()} {split_label}".strip(),
@@ -104,8 +103,6 @@ def main():
             tasks=tasks,
             environment=env, grammar=grammar, drive=drive,
             rounds=resolved["rounds"],
-            beam_width=resolved["beam_width"],
-            max_generations=resolved["max_generations"],
             workers=defaults.get("workers", resolved["workers"]),
             seed=args.seed,
             compute_cap=resolved["compute_cap"] or defaults.get("compute_cap", 0),
@@ -115,7 +112,6 @@ def main():
             exhaustive_pair_top_k=defaults.get("exhaustive_pair_top_k", args.exhaustive_pair_top_k),
             exhaustive_triple_top_k=defaults.get("exhaustive_triple_top_k", args.exhaustive_triple_top_k),
             sequential_compounding=defaults.get("sequential_compounding", args.sequential_compounding),
-            adaptive_realloc=getattr(args, "adaptive_realloc", False),
             culture_path=culture_path,
             runs_dir=args.runs_dir,
             no_log=args.no_log,
