@@ -9,11 +9,10 @@ Composition model:
   - Parameterized nodes: evaluate perception children as values, build transform
   - Perception nodes (arity 0): extract a value from the input grid
 
-This allows natural composition of perception + transformation:
-  keep_color(dominant_color(grid))(grid) — perception feeds parameterized action
-  crop_to_content(keep_color(dominant_color(grid))(grid)) — chain with transform
-
 Search operators: mutate (point/grow/shrink) and crossover (subtree swap).
+
+STRIPPED TO CORE: Empty base primitives. Predicates, task priority, and
+analysis integration removed. Will be added back when justified by tasks.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from __future__ import annotations
 import copy
 import random
 
-from collections import Counter
 from typing import Any
 
 from core import Grammar, Primitive, Program, Task
@@ -41,84 +39,20 @@ class ARCGrammar(Grammar):
         self._vocabulary = vocabulary
 
     def allow_structural_phases(self) -> bool:
-        # Structural phases are SEARCH STRATEGIES (per-object, cross-reference,
-        # conditional), not vocabulary choices. They compose existing atomic
-        # primitives in structurally different ways. Always enabled.
-        return True
+        """Structural phases disabled until justified by specific tasks."""
+        return False
 
     def get_predicates(self) -> list[tuple[str, callable]]:
-        """Return input→bool predicates for conditional branching.
-
-        These enable if(pred, A, B) programs — a key composition pattern
-        for ARC tasks where different inputs need different transforms.
-        """
-        from .objects import (
-            _find_connected_components, _get_background_color,
-            find_foreground_shapes, _has_hole,
-        )
-
-        def _safe_components(grid):
-            try:
-                return _find_connected_components(grid)
-            except Exception:
-                return []
-
-        def _n_foreground_colors(g):
-            if not g or not g[0]:
-                return 0
-            bg = Counter(c for row in g for c in row).most_common(1)[0][0]
-            return len({c for row in g for c in row if c != bg})
-
-        preds = [
-            ("has_single_object", lambda g: len(_safe_components(g)) == 1),
-            ("has_many_objects", lambda g: len(_safe_components(g)) > 3),
-            ("is_square", lambda g: len(g) == len(g[0]) if g and g[0] else False),
-            ("is_tall", lambda g: len(g) > len(g[0]) if g and g[0] else False),
-            ("is_wide", lambda g: len(g) < len(g[0]) if g and g[0] else False),
-            ("has_symmetry_h", lambda g: all(
-                g[r] == g[r][::-1] for r in range(len(g))) if g else False),
-            ("is_mostly_bg", lambda g: sum(
-                1 for row in g for c in row if c == 0) > len(g) * len(g[0]) * 0.7
-                if g and g[0] else False),
-            # New predicates for richer conditional branching
-            ("has_symmetry_v", lambda g: all(
-                g[r][c] == g[len(g) - 1 - r][c]
-                for r in range(len(g)) for c in range(len(g[0])))
-                if g and g[0] else False),
-            ("is_small_grid", lambda g: len(g) * len(g[0]) < 100
-                if g and g[0] else True),
-            ("has_few_colors", lambda g: _n_foreground_colors(g) <= 2),
-            ("has_many_colors", lambda g: _n_foreground_colors(g) > 4),
-            ("all_objects_same_size", lambda g: len(set(
-                comp["size"] for comp in _safe_components(g))) <= 1),
-        ]
-        return preds
+        """Return input→bool predicates. Currently empty."""
+        return []
 
     def essential_pair_concepts(self) -> frozenset[str]:
         from .transformation_primitives import ATOMIC_ESSENTIAL_PAIR_CONCEPTS
         return ATOMIC_ESSENTIAL_PAIR_CONCEPTS
 
     def task_priority_primitives(self, task: Task) -> list[str]:
-        """Return primitives likely relevant for this task based on structure."""
-        if not task.train_examples:
-            return []
-        first_inp = task.train_examples[0][0]
-        first_out = task.train_examples[0][1]
-        if not first_inp or not first_inp[0] or not first_out:
-            return []
-
-        hints: list[str] = []
-        h, w = len(first_inp), len(first_inp[0])
-        oh, ow = len(first_out), len(first_out[0]) if first_out[0] else 0
-
-        if oh < h or ow < w:
-            hints.extend(["trim_rows", "trim_cols", "crop_half_top", "crop_half_left"])
-        if oh > h or ow > w:
-            hints.append("pad_border")
-        if oh == h and ow == w:
-            hints.extend(["fill_enclosed", "gravity_down", "label_components"])
-
-        return hints
+        """Return primitives likely relevant for this task. Currently empty."""
+        return []
 
     def base_primitives(self) -> list[Primitive]:
         from .transformation_primitives import build_atomic_primitives, build_parameterized_primitives
@@ -131,8 +65,7 @@ class ARCGrammar(Grammar):
                 + self._task_prims)
 
     def prepare_for_task(self, task: Task) -> None:
-        """Reset task-specific state. Atomic mode uses parameterized prims
-        + perception for colors — no task-specific primitives needed."""
+        """Reset task-specific state."""
         self._task_prims = []
 
     def compose(self, outer: Primitive, inner_programs: list[Program]) -> Program:
@@ -147,15 +80,7 @@ class ARCGrammar(Grammar):
 
     def mutate(self, program: Program, primitives: list[Primitive],
                transition_matrix=None) -> Program:
-        """Mutate a program: point (swap label), grow (leaf→subtree), or shrink (subtree→leaf).
-
-        Point-only mutations can never change tree structure, so grow/shrink
-        are essential for discovering programs that require different depths
-        than the initial random beam provides.
-
-        When transition_matrix is provided, primitive choices are biased toward
-        known-good compositions from the DreamCoder-style prior.
-        """
+        """Mutate a program: point (swap label), grow (leaf→subtree), or shrink (subtree→leaf)."""
         prog = copy.deepcopy(program)
         nodes = self._collect_nodes(prog)
         if not nodes:
@@ -163,7 +88,7 @@ class ARCGrammar(Grammar):
 
         r = self._rng.random()
         if r < 0.20:
-            # GROW: replace a leaf with a small subtree (adds depth)
+            # GROW: replace a leaf with a small subtree
             leaves = [n for n in nodes if not n.children]
             if leaves:
                 target = self._rng.choice(leaves)
@@ -182,7 +107,7 @@ class ARCGrammar(Grammar):
                     target.params = {}
             return prog
         elif r < 0.30:
-            # SHRINK: replace a non-leaf subtree with a leaf (removes depth)
+            # SHRINK: replace a non-leaf subtree with a leaf
             internals = [n for n in nodes if n.children]
             if internals:
                 target = self._rng.choice(internals)
@@ -194,7 +119,7 @@ class ARCGrammar(Grammar):
                     target.params = {}
             return prog
         else:
-            # POINT: swap label with same-arity primitive (preserves structure)
+            # POINT: swap label with same-arity primitive
             target = self._rng.choice(nodes)
             prim = _PRIM_MAP.get(target.root)
             current_arity = prim.arity if prim else 1

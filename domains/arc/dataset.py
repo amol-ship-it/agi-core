@@ -9,10 +9,6 @@ import os
 import sys
 
 from core import Task
-from .transformation_primitives import (
-    rotate_90_cw, mirror_horizontal, mirror_vertical, transpose,
-    trim_rows, trim_cols, invert_colors, gravity_down,
-)
 
 
 def load_arc_task(path: str) -> Task:
@@ -72,6 +68,66 @@ def load_arc_dataset(directory: str, max_tasks: int = 0) -> list[Task]:
 # Built-in sample tasks for testing without ARC data files
 # =============================================================================
 
+# Inline helper functions for sample task generation (no dependency on primitives)
+
+def _rotate_90_cw(grid):
+    if not grid:
+        return grid
+    return [list(row) for row in zip(*grid[::-1])]
+
+def _mirror_horizontal(grid):
+    if not grid:
+        return grid
+    return [row[::-1] for row in grid]
+
+def _mirror_vertical(grid):
+    if not grid:
+        return grid
+    return list(reversed([row[:] for row in grid]))
+
+def _trim_rows(grid):
+    if not grid or not grid[0]:
+        return grid
+    h = len(grid)
+    top = 0
+    while top < h and all(c == 0 for c in grid[top]):
+        top += 1
+    bot = h - 1
+    while bot >= top and all(c == 0 for c in grid[bot]):
+        bot -= 1
+    if top > bot:
+        return grid
+    return [row[:] for row in grid[top:bot + 1]]
+
+def _trim_cols(grid):
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    left = 0
+    while left < w and all(grid[r][left] == 0 for r in range(h)):
+        left += 1
+    right = w - 1
+    while right >= left and all(grid[r][right] == 0 for r in range(h)):
+        right -= 1
+    if left > right:
+        return grid
+    return [row[left:right + 1] for row in grid]
+
+def _invert_colors(grid):
+    return [[9 - c for c in row] for row in grid]
+
+def _gravity_down(grid):
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+    for c in range(w):
+        non_zero = [grid[r][c] for r in range(h) if grid[r][c] != 0]
+        for i, val in enumerate(non_zero):
+            result[h - len(non_zero) + i][c] = val
+    return result
+
+
 def make_sample_tasks() -> list[Task]:
     """
     Create a small set of hand-crafted ARC-like tasks for testing.
@@ -81,35 +137,33 @@ def make_sample_tasks() -> list[Task]:
 
     # Task 1: Rotate 90 CW (easy)
     grid1_in = [[1, 0], [0, 2]]
-    grid1_out = rotate_90_cw(grid1_in)
+    grid1_out = _rotate_90_cw(grid1_in)
     tasks.append(Task(
         task_id="sample_rot90",
         train_examples=[
             (grid1_in, grid1_out),
-            ([[3, 0, 0], [0, 4, 0], [0, 0, 5]], rotate_90_cw([[3, 0, 0], [0, 4, 0], [0, 0, 5]])),
+            ([[3, 0, 0], [0, 4, 0], [0, 0, 5]], _rotate_90_cw([[3, 0, 0], [0, 4, 0], [0, 0, 5]])),
         ],
         test_inputs=[[[1, 2], [3, 4]]],
-        test_outputs=[rotate_90_cw([[1, 2], [3, 4]])],
+        test_outputs=[_rotate_90_cw([[1, 2], [3, 4]])],
         difficulty=1.0,
     ))
 
     # Task 2: Mirror horizontal (easy)
     grid2_in = [[1, 2, 3], [4, 5, 6]]
-    grid2_out = mirror_horizontal(grid2_in)
+    grid2_out = _mirror_horizontal(grid2_in)
     tasks.append(Task(
         task_id="sample_mirror_h",
         train_examples=[
             (grid2_in, grid2_out),
-            ([[7, 0, 8]], mirror_horizontal([[7, 0, 8]])),
+            ([[7, 0, 8]], _mirror_horizontal([[7, 0, 8]])),
         ],
         test_inputs=[[[1, 0], [0, 2]]],
-        test_outputs=[mirror_horizontal([[1, 0], [0, 2]])],
+        test_outputs=[_mirror_horizontal([[1, 0], [0, 2]])],
         difficulty=1.0,
     ))
 
     # Task 3: Crop to content (medium — needs depth-2: trim_cols(trim_rows(x)))
-    def crop_to_content(g):
-        return trim_cols(trim_rows(g))
     grid3_in = [[0, 0, 0, 0], [0, 1, 2, 0], [0, 3, 4, 0], [0, 0, 0, 0]]
     grid3_out = [[1, 2], [3, 4]]
     tasks.append(Task(
@@ -125,29 +179,29 @@ def make_sample_tasks() -> list[Task]:
 
     # Task 4: Mirror vertical (easy)
     grid4_in = [[1, 2], [3, 4], [5, 6]]
-    grid4_out = mirror_vertical(grid4_in)
+    grid4_out = _mirror_vertical(grid4_in)
     tasks.append(Task(
         task_id="sample_mirror_v",
         train_examples=[
             (grid4_in, grid4_out),
-            ([[9, 8], [7, 6]], mirror_vertical([[9, 8], [7, 6]])),
+            ([[9, 8], [7, 6]], _mirror_vertical([[9, 8], [7, 6]])),
         ],
         test_inputs=[[[1, 0, 2], [0, 3, 0]]],
-        test_outputs=[mirror_vertical([[1, 0, 2], [0, 3, 0]])],
+        test_outputs=[_mirror_vertical([[1, 0, 2], [0, 3, 0]])],
         difficulty=1.0,
     ))
 
     # Task 5: Gravity down (medium)
     grid5_in = [[1, 0, 2], [0, 3, 0], [0, 0, 0]]
-    grid5_out = gravity_down(grid5_in)
+    grid5_out = _gravity_down(grid5_in)
     tasks.append(Task(
         task_id="sample_gravity_down",
         train_examples=[
             (grid5_in, grid5_out),
-            ([[0, 4, 0], [5, 0, 6], [0, 0, 0]], gravity_down([[0, 4, 0], [5, 0, 6], [0, 0, 0]])),
+            ([[0, 4, 0], [5, 0, 6], [0, 0, 0]], _gravity_down([[0, 4, 0], [5, 0, 6], [0, 0, 0]])),
         ],
         test_inputs=[[[7, 0, 0], [0, 0, 8], [0, 9, 0]]],
-        test_outputs=[gravity_down([[7, 0, 0], [0, 0, 8], [0, 9, 0]])],
+        test_outputs=[_gravity_down([[7, 0, 0], [0, 0, 8], [0, 9, 0]])],
         difficulty=2.5,
     ))
 
@@ -167,7 +221,7 @@ def make_sample_tasks() -> list[Task]:
 
     # Task 7: Compose rot90 + mirror_h (harder — needs depth-2 program)
     def rot_then_mirror(g):
-        return mirror_horizontal(rotate_90_cw(g))
+        return _mirror_horizontal(_rotate_90_cw(g))
     tasks.append(Task(
         task_id="sample_rot_mirror",
         train_examples=[
@@ -181,7 +235,7 @@ def make_sample_tasks() -> list[Task]:
 
     # Task 8: Invert + trim (harder — needs depth-2)
     def invert_trim(g):
-        return trim_cols(invert_colors(g))
+        return _trim_cols(_invert_colors(g))
     tasks.append(Task(
         task_id="sample_invert_trim",
         train_examples=[
@@ -216,19 +270,10 @@ ARC2_DATA_SEARCH_PATHS = [
 
 
 def find_arc_data(split: str = "training", benchmark: str = "arc-agi-1") -> str | None:
-    """Auto-detect ARC data directory.
-
-    Args:
-        split: 'training' or 'evaluation'
-        benchmark: 'arc-agi-1' or 'arc-agi-2'
-
-    Returns:
-        Path to data directory, or None if not found.
-    """
+    """Auto-detect ARC data directory."""
     paths = ARC2_DATA_SEARCH_PATHS if benchmark == "arc-agi-2" else ARC1_DATA_SEARCH_PATHS
     for pattern in paths:
         path = pattern.format(split=split)
         if os.path.isdir(path):
             return path
     return None
-

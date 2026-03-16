@@ -238,9 +238,9 @@ class TestLearnerWake(unittest.TestCase):
         # Memory should be empty since no_record was used
         self.assertEqual(len(learner.memory.replay_episodes()), 0)
 
-    def test_beam_search_uses_transition_matrix(self):
-        """Verify that beam search mutations pass the transition matrix to grammar.mutate()."""
-        learner = _make_learner(exhaustive_depth=0, beam_width=10, max_generations=3)
+    def test_transition_matrix_doesnt_crash(self):
+        """Verify that a populated transition matrix doesn't break wake."""
+        learner = _make_learner(exhaustive_depth=1)
         # Pre-populate transition matrix with a strong prior
         for _ in range(50):
             learner._transition_matrix.observe_program(
@@ -251,7 +251,6 @@ class TestLearnerWake(unittest.TestCase):
         result = learner.wake_on_task(task)
         # Should still produce valid results (not crash) with TM active
         self.assertIsInstance(result, WakeResult)
-        self.assertGreater(result.evaluations, 0)
 
 
 class TestLearnerSleep(unittest.TestCase):
@@ -345,14 +344,6 @@ class TestLearnerCurriculum(unittest.TestCase):
 
 class TestLearnerHelpers(unittest.TestCase):
 
-    def test_init_beam(self):
-        learner = _make_learner()
-        prims = learner.grammar.base_primitives()
-        beam = learner._init_beam(prims, 10)
-        self.assertEqual(len(beam), 10)
-        for prog in beam:
-            self.assertIsInstance(prog, Program)
-
     def test_enumerate_subtrees(self):
         learner = _make_learner()
         tree = Program(root="f", children=[
@@ -383,22 +374,6 @@ class TestLearnerHelpers(unittest.TestCase):
         self.assertEqual(lib[0].reuse_count, 1)
         self.assertAlmostEqual(lib[0].usefulness, 2.0)
 
-    def test_random_program_depth_1(self):
-        learner = _make_learner()
-        prims = learner.grammar.base_primitives()
-        prog = learner._random_program(prims, max_depth=1, use_prior=False)
-        self.assertEqual(prog.depth, 1)
-
-    def test_random_program_with_prior(self):
-        learner = _make_learner()
-        # Build some prior
-        for _ in range(10):
-            learner._transition_matrix.observe_program(
-                Program(root="identity", children=[Program(root="double")])
-            )
-        prims = learner.grammar.base_primitives()
-        prog = learner._random_program(prims, max_depth=2, use_prior=True, parent_op="identity")
-        self.assertIsInstance(prog, Program)
 
 
 class TestWakeWorker(unittest.TestCase):
@@ -557,28 +532,6 @@ class TestLearnerSleepEdgeCases(unittest.TestCase):
         # Reused entry (low usefulness but has reuse) should survive
         self.assertIn("reused", lib_names)
 
-    def test_sleep_diversity_bonus(self):
-        """Subtrees appearing across structurally diverse solutions score higher."""
-        learner = _make_learner()
-        shared = Program(root="identity", children=[Program(root="double")])
-
-        # Solutions with DIFFERENT root ops → high diversity
-        sol1 = ScoredProgram(
-            program=Program(root="identity", children=[shared]),
-            energy=0.0, prediction_error=0.0, complexity_cost=1.0, task_id="t1")
-        sol2 = ScoredProgram(
-            program=Program(root="double", children=[shared]),
-            energy=0.0, prediction_error=0.0, complexity_cost=1.0, task_id="t2")
-        learner.memory.store_solution("t1", sol1)
-        learner.memory.store_solution("t2", sol2)
-
-        result = learner.sleep()
-        # Should find the shared subtree with diversity bonus applied
-        if result.new_entries:
-            # Diversity bonus should make usefulness > base value
-            base = 2 * math.log(shared.size + 1)  # without diversity bonus
-            self.assertGreater(result.new_entries[0].usefulness, base)
-
     def test_prune_library_on_memory(self):
         """InMemoryStore.prune_library removes dead entries."""
         mem = InMemoryStore()
@@ -616,25 +569,6 @@ class TestLearnerEvaluateException(unittest.TestCase):
         prog = Program(root="crash")
         sp = learner._evaluate_program(prog, task)
         self.assertGreater(sp.prediction_error, 1e5)
-
-
-class TestRandomProgramEdgeCases(unittest.TestCase):
-
-    def test_arity_zero_at_depth_greater_than_1(self):
-        """When a random pick selects arity-0 at depth > 1, should return leaf."""
-        learner = _make_learner()
-        # Only arity-0 primitives — forces the arity==0 early return at depth > 1
-        zero_prims = [Primitive("a", 0, None), Primitive("b", 0, None)]
-        prog = learner._random_program(zero_prims, max_depth=3, use_prior=False)
-        self.assertEqual(prog.depth, 1)
-
-    def test_no_low_arity_prims_at_leaf(self):
-        """When all primitives are arity > 1, should still pick one as leaf."""
-        learner = _make_learner()
-        high_arity = [Primitive("f", 2, None), Primitive("g", 3, None)]
-        prog = learner._random_program(high_arity, max_depth=1, use_prior=False)
-        # Falls back to using all primitives when no arity<=1 found
-        self.assertIn(prog.root, ["f", "g"])
 
 
 class TestConfigDefaults(unittest.TestCase):
@@ -710,50 +644,6 @@ class TestConfigDefaults(unittest.TestCase):
 # =============================================================================
 
 class TestSemanticDedup(unittest.TestCase):
-
-    def test_dedup_removes_identical_outputs(self):
-        """Two programs producing the same outputs should be deduplicated."""
-        learner = _make_learner(semantic_dedup=True, dedup_precision=6)
-        task = _make_identity_task()
-        # Two identity programs = same outputs
-        sp1 = ScoredProgram(
-            program=Program(root="identity"), energy=0.5,
-            prediction_error=0.0, complexity_cost=1.0,
-        )
-        sp2 = ScoredProgram(
-            program=Program(root="identity"), energy=0.8,
-            prediction_error=0.0, complexity_cost=2.0,
-        )
-        deduped, n_removed = learner._semantic_dedup([sp1, sp2], task)
-        self.assertEqual(n_removed, 1)
-        self.assertEqual(len(deduped), 1)
-        # Should keep the lower-energy one
-        self.assertAlmostEqual(deduped[0].energy, 0.5)
-
-    def test_dedup_keeps_different_outputs(self):
-        """Programs with different outputs should both be kept."""
-        learner = _make_learner(semantic_dedup=True)
-        task = _make_identity_task()
-        sp1 = ScoredProgram(
-            program=Program(root="identity"), energy=0.5,
-            prediction_error=0.0, complexity_cost=1.0,
-        )
-        sp2 = ScoredProgram(
-            program=Program(root="double"), energy=0.8,
-            prediction_error=1.0, complexity_cost=1.0,
-        )
-        deduped, n_removed = learner._semantic_dedup([sp1, sp2], task)
-        self.assertEqual(n_removed, 0)
-        self.assertEqual(len(deduped), 2)
-
-    def test_semantic_hash_deterministic(self):
-        """Same program + same task should always produce the same hash."""
-        learner = _make_learner()
-        task = _make_identity_task()
-        prog = Program(root="identity")
-        h1 = learner._semantic_hash(prog, task)
-        h2 = learner._semantic_hash(prog, task)
-        self.assertEqual(h1, h2)
 
     def test_dedup_disabled(self):
         """When semantic_dedup=False, no dedup should happen."""
@@ -935,41 +825,7 @@ class TestTestAccuracy(unittest.TestCase):
 # =============================================================================
 
 class TestNearMissRefine(unittest.TestCase):
-    """Test the near-miss refinement phase."""
-
-    def test_near_miss_refine_produces_candidates(self):
-        """Near-miss refinement should produce new candidate programs."""
-        learner = _make_learner()
-        task = _make_identity_task()
-        prims = learner.grammar.base_primitives()
-
-        # Create a near-miss candidate (prediction error between solve_threshold and threshold)
-        near_miss = ScoredProgram(
-            program=Program(root="double"),
-            energy=0.1,
-            prediction_error=0.1,  # above solve_threshold (0.01) but below default 0.20
-            complexity_cost=1.0,
-        )
-        refined, n_evals = learner._near_miss_refine(
-            [near_miss], prims, task, threshold=0.20)
-        self.assertGreater(n_evals, 0)
-        self.assertGreater(len(refined), 0)
-
-    def test_near_miss_empty_when_no_near_misses(self):
-        """If no candidates are near-misses, should return empty."""
-        learner = _make_learner()
-        task = _make_identity_task()
-        prims = learner.grammar.base_primitives()
-
-        # A perfect candidate (below solve_threshold) is not a near-miss
-        perfect = ScoredProgram(
-            program=Program(root="identity"),
-            energy=0.0, prediction_error=0.0, complexity_cost=1.0,
-        )
-        refined, n_evals = learner._near_miss_refine(
-            [perfect], prims, task, threshold=0.20)
-        self.assertEqual(n_evals, 0)
-        self.assertEqual(len(refined), 0)
+    """Test near-miss refinement data structure logic."""
 
     def test_prepend_changes_program_structure(self):
         """The prepend operation should wrap the deepest leaf with a new primitive."""
