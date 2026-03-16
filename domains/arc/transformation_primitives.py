@@ -23,12 +23,25 @@ Grid = list[list[int]]
 
 
 # =============================================================================
-# Build functions — empty, will be populated one primitive at a time
+# Primitives — added one at a time, justified by specific tasks
+# =============================================================================
+
+def transpose(grid: Grid) -> Grid:
+    """Transpose (swap rows and columns). Justifying task: 9dfd6313."""
+    if not grid:
+        return grid
+    return [list(row) for row in zip(*grid)]
+
+
+# =============================================================================
+# Build functions
 # =============================================================================
 
 def build_atomic_primitives() -> list[Primitive]:
-    """Build atomic transformation primitives. Currently empty — rebuilding."""
-    return []
+    """Build atomic transformation primitives."""
+    return [
+        Primitive(name="transpose", arity=1, fn=transpose, domain="arc"),
+    ]
 
 
 def build_parameterized_primitives() -> list[Primitive]:
