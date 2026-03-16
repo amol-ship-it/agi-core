@@ -175,13 +175,13 @@ class TestDimMismatchCap(unittest.TestCase):
         self.assertGreater(err_full, 1.0)
 
 
-class TestEmptyVocabulary(unittest.TestCase):
-    """Test that the system works with zero primitives."""
+class TestVocabulary(unittest.TestCase):
+    """Test that the system loads primitives correctly."""
 
-    def test_empty_base_primitives(self):
+    def test_base_primitives_loaded(self):
         grammar = ARCGrammar()
         prims = grammar.base_primitives()
-        self.assertEqual(len(prims), 0)
+        self.assertGreater(len(prims), 0)
 
     def test_env_execute_unknown_primitive(self):
         """Unknown primitive should return input unchanged."""
