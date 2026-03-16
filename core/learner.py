@@ -55,7 +55,7 @@ class _WakeContext:
     __slots__ = (
         "task", "all_prims", "cfg", "eval_budget", "record", "t0",
         "best_so_far", "n_evals", "total_deduped", "gens_used",
-        "pareto", "enum_candidates", "beam_scored",
+        "pareto", "enum_candidates", "beam_scored", "task_analysis",
     )
 
     def __init__(self, task, all_prims, cfg, eval_budget, record):
@@ -73,6 +73,7 @@ class _WakeContext:
         self.pareto: dict[int, ParetoEntry] = {}
         self.enum_candidates: list[ScoredProgram] = []
         self.beam_scored: list[ScoredProgram] = []
+        self.task_analysis: Optional[dict] = None
 
     def budget_ok(self) -> bool:
         return self.eval_budget <= 0 or self.n_evals < self.eval_budget
@@ -248,6 +249,9 @@ class Learner:
 
         ctx = _WakeContext(task, all_prims, cfg, eval_budget, record)
 
+        # Deterministic task analysis for phase ordering (cheap, O(pixels))
+        ctx.task_analysis = self.env.analyze_task(task)
+
         # Run each phase in order; stop on first solve.
         for phase_fn in self._wake_phases():
             solved_by = phase_fn(ctx)
@@ -309,7 +313,7 @@ class Learner:
             ctx.task, ctx.all_prims) if ctx.budget_ok() else None
         if result is not None:
             name, fn = result
-            sp = self._evaluate_program(Program(root=name), ctx.task)
+            sp = self._evaluate_program(Program(root=name, structural=True), ctx.task)
             ctx.n_evals += 1
             self._update_pareto_front(ctx.pareto, sp)
             ctx.update_best(sp)
@@ -321,11 +325,16 @@ class Learner:
         """Phase 1.1: Try per-object transforms via connected components."""
         if ctx.solved or not self.grammar.allow_structural_phases():
             return None
+        # Analysis hint: skip per-object when output is much smaller (extraction, not transformation)
+        ana = ctx.task_analysis
+        if ana and ana.get("skip_per_object") and ctx.budget_ok():
+            logger.debug("  [wake] Phase 1.1 skipped (analysis: output shrinks, no per-object)")
+            return None
         t = time.time()
         result = self.env.try_object_decomposition(ctx.task, ctx.all_prims) if ctx.budget_ok() else None
         if result is not None:
             name, fn = result
-            sp = self._evaluate_program(Program(root=name), ctx.task)
+            sp = self._evaluate_program(Program(root=name, structural=True), ctx.task)
             ctx.n_evals += 1
             self._update_pareto_front(ctx.pareto, sp)
             ctx.update_best(sp)
@@ -341,7 +350,7 @@ class Learner:
         result = self.env.try_for_each_object(ctx.task, ctx.enum_candidates, top_k=10)
         if result is not None:
             name, fn = result
-            sp = self._evaluate_program(Program(root=name), ctx.task)
+            sp = self._evaluate_program(Program(root=name, structural=True), ctx.task)
             ctx.n_evals += 1
             self._update_pareto_front(ctx.pareto, sp)
             ctx.update_best(sp)
@@ -361,7 +370,7 @@ class Learner:
             ctx.task, ctx.enum_candidates, predicates, top_k=8)
         if result is not None:
             name, fn = result
-            sp = self._evaluate_program(Program(root=name), ctx.task)
+            sp = self._evaluate_program(Program(root=name, structural=True), ctx.task)
             ctx.n_evals += 1
             self._update_pareto_front(ctx.pareto, sp)
             ctx.update_best(sp)
@@ -377,7 +386,7 @@ class Learner:
         result = self.env.try_cross_reference(ctx.task, ctx.all_prims)
         if result is not None:
             name, fn = result
-            sp = self._evaluate_program(Program(root=name), ctx.task)
+            sp = self._evaluate_program(Program(root=name, structural=True), ctx.task)
             ctx.n_evals += 1
             self._update_pareto_front(ctx.pareto, sp)
             ctx.update_best(sp)
@@ -426,8 +435,13 @@ class Learner:
         if ctx.cfg.near_miss_threshold <= 0:
             return None
         t = time.time()
+        # Adaptive threshold: min(configured, 2/n_examples) so tasks with
+        # many examples require matching at least 2 perfectly. Tasks with
+        # 2-3 examples get the full configured threshold.
+        n_examples = max(len(ctx.task.train_examples), 1)
+        threshold = min(ctx.cfg.near_miss_threshold, 2.0 / n_examples)
         refined, n_evals = self._near_miss_refine(
-            ctx.enum_candidates, ctx.all_prims, ctx.task, ctx.cfg.near_miss_threshold)
+            ctx.enum_candidates, ctx.all_prims, ctx.task, threshold)
         ctx.n_evals += n_evals
         for sp in refined:
             self._update_pareto_front(ctx.pareto, sp)
@@ -871,12 +885,14 @@ class Learner:
         lib_before = len(self.memory.get_library())
 
         # 1. Build transition matrix from all programs (solved + unsolved).
-        #    Unsolved attempts often outnumber solutions 10-50x, providing
-        #    much richer training data for composition priors.
+        #    Quality-weighted: solved programs contribute weight 1.0, unsolved
+        #    contribute exp(-error) * 0.1, so the 10-50x more failures don't
+        #    dilute the composition signal from successful programs.
         for scored in solutions.values():
-            self._transition_matrix.observe_program(scored.program)
+            self._transition_matrix.observe_program(scored.program, weight=1.0)
         for scored in unsolved.values():
-            self._transition_matrix.observe_program(scored.program)
+            quality = self._unsolved_quality(scored, cfg)
+            self._transition_matrix.observe_program(scored.program, weight=quality)
 
         logger.info(
             f"  [sleep] Transition matrix: {self._transition_matrix.size} transitions "
@@ -884,9 +900,12 @@ class Learner:
         )
 
         # 2. Credit primitives with quality-weighted ROI scores.
-        #    Solved programs contribute 1.0, unsolved contribute exp(-error)*weight.
+        #    Solved programs use example_solve_score (k/n)^2 so programs solving
+        #    7/8 examples get more credit than 4/8. This provides finer
+        #    signal than the binary solved/unsolved distinction.
         for scored in solutions.values():
-            self._credit_primitives(scored.program, 1.0)
+            quality = max(scored.example_solve_score, 0.5)  # solved → at least 0.5
+            self._credit_primitives(scored.program, quality)
         for scored in unsolved.values():
             quality = self._unsolved_quality(scored, cfg)
             self._credit_primitives(scored.program, quality)
@@ -991,6 +1010,31 @@ class Learner:
                 name=entry_name,
                 program=prog,
                 usefulness=quality,
+                reuse_count=0,
+                source_tasks=[task_id],
+                domain="",
+            )
+            new_entries.append(entry)
+            existing_reprs.add(key)
+
+        # 5d. Promote solved structural programs as library entries.
+        #      Structural solutions (per-object, conditional, cross-reference) are
+        #      marked with structural=True. They can't be discovered by regular
+        #      composition, so promoting them enables compounding on structural
+        #      patterns across tasks. Only promote if the structural program
+        #      solves multiple tasks or if it's a pattern seen across examples.
+        for task_id, scored in solutions.items():
+            prog = scored.program
+            if not getattr(prog, 'structural', False):
+                continue
+            key = repr(prog)
+            if key in existing_reprs:
+                continue
+            entry_name = f"learned_{lib_before + len(new_entries)}"
+            entry = LibraryEntry(
+                name=entry_name,
+                program=prog,
+                usefulness=1.0,  # solved → full quality
                 reuse_count=0,
                 source_tasks=[task_id],
                 domain="",
@@ -1996,6 +2040,7 @@ class Learner:
         prim_by_name: dict[str, Primitive] = {p.name: p for p in unary_prims}
         depth1_solved = False
         noop_prims: set[str] = set()  # prims that don't change the grid (pruned at depth 2+)
+        crash_prims: set[str] = set()  # prims that crash on this task (penalized in pool)
         for prim in unary_prims:
             prog = Program(root=prim.name)
             sp = self._evaluate_program(prog, task)
@@ -2003,6 +2048,10 @@ class Learner:
             n_evals += 1  # depth 1 = 1 op
             if sp.prediction_error <= solve_thresh:
                 depth1_solved = True
+            # Detect crashes: programs with 1e6 error crashed on all examples
+            if sp.prediction_error >= 1e5:
+                crash_prims.add(prim.name)
+                continue
             # Detect no-ops: output identical to input on all training examples
             if sp.prediction_error > solve_thresh:
                 is_noop = True
@@ -2130,25 +2179,27 @@ class Learner:
         # --- Smart pruning for depth-2: filter inner steps by quality ---
         # 1. No-op pruning: skip prims that don't change the grid (e.g. binarize
         #    on already-binary grids). f(noop(x)) = f(x), already tried at depth 1.
-        # 2. Quality filter: inner steps with very high error (>0.7) rarely help.
+        # 2. Crash pruning: skip prims that threw exceptions on this task.
+        # 3. Quality filter: inner steps with very high error (>0.7) rarely help.
+        skip_prims = noop_prims | crash_prims
         INNER_STEP_THRESHOLD = 0.70
         inner_pool = [
             name for name in pair_pool
-            if name not in noop_prims
+            if name not in skip_prims
             and depth1_scores.get(name, 1.0) <= INNER_STEP_THRESHOLD
         ]
         # Fallback: if too few pass threshold, use top half by score
-        # but still exclude no-ops
+        # but still exclude no-ops and crash prims
         if len(inner_pool) < pair_top_k // 3:
             inner_pool = [n for n in pair_pool[:pair_top_k // 2]
-                          if n not in noop_prims]
+                          if n not in skip_prims]
 
         # --- Depth 2: smart K × K' pairs (cost: 2 ops each) ---
         for outer_name in pair_pool:
             if not _budget_ok():
                 break
-            if outer_name in noop_prims:
-                continue  # noop(x) = x, already tested at depth 1
+            if outer_name in skip_prims:
+                continue  # noop/crash — already tested or broken at depth 1
             for inner_name in inner_pool:
                 if not _budget_ok():
                     break

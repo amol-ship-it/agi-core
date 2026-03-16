@@ -99,7 +99,10 @@ class ARCGrammar(Grammar):
         return ATOMIC_ESSENTIAL_PAIR_CONCEPTS
 
     def task_priority_primitives(self, task: Task) -> list[str]:
-        """Return primitives likely relevant for this task based on structure."""
+        """Return primitives likely relevant for this task based on structure.
+
+        Uses deterministic analysis of input-output pairs to recommend primitives.
+        """
         if not task.train_examples:
             return []
         first_inp = task.train_examples[0][0]
@@ -111,14 +114,34 @@ class ARCGrammar(Grammar):
         h, w = len(first_inp), len(first_inp[0])
         oh, ow = len(first_out), len(first_out[0]) if first_out[0] else 0
 
+        # Dimension-based hints
         if oh < h or ow < w:
-            hints.extend(["trim_rows", "trim_cols", "crop_half_top", "crop_half_left"])
+            hints.extend(["trim_rows", "trim_cols", "crop_half_top", "crop_half_left",
+                          "extract_largest_object", "extract_smallest_object",
+                          "remove_border", "extract_repeating_pattern"])
         if oh > h or ow > w:
-            hints.append("pad_border")
+            hints.extend(["pad_border", "complete_horizontal_symmetry",
+                          "complete_vertical_symmetry"])
         if oh == h and ow == w:
-            hints.extend(["fill_enclosed", "gravity_down", "label_components"])
+            hints.extend(["fill_enclosed", "gravity_down", "label_components",
+                          "hollow_objects", "denoise_majority"])
 
-        return hints
+        # Color-based hints: check if output has fewer colors
+        inp_colors = set(c for row in first_inp for c in row) - {0}
+        out_colors = set(c for row in first_out for c in row) - {0}
+        if out_colors < inp_colors:
+            hints.extend(["binarize", "erode"])
+        if out_colors - inp_colors:
+            hints.extend(["fill_enclosed", "dilate"])
+
+        # Symmetry hints
+        if first_out == first_out[::-1]:  # vertical symmetry in output
+            hints.append("complete_vertical_symmetry")
+        if all(row == row[::-1] for row in first_out):  # horizontal symmetry
+            hints.append("complete_horizontal_symmetry")
+
+        # Unique deduplication
+        return list(dict.fromkeys(hints))
 
     def base_primitives(self) -> list[Primitive]:
         from .transformation_primitives import build_atomic_primitives, build_parameterized_primitives

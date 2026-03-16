@@ -308,6 +308,92 @@ def interior_dominant_color(grid: Grid) -> int:
 
 
 # =============================================================================
+# Additional perception: spatial and structural
+# =============================================================================
+
+def has_horizontal_symmetry(grid: Grid) -> int:
+    """Return 1 if the grid is horizontally symmetric, 0 otherwise."""
+    if not grid or not grid[0]:
+        return 0
+    return 1 if all(row == row[::-1] for row in grid) else 0
+
+
+def has_vertical_symmetry(grid: Grid) -> int:
+    """Return 1 if the grid is vertically symmetric, 0 otherwise."""
+    if not grid or not grid[0]:
+        return 0
+    return 1 if grid == grid[::-1] else 0
+
+
+def nonzero_pixel_count(grid: Grid) -> int:
+    """Return the count of non-zero pixels in the grid."""
+    if not grid or not grid[0]:
+        return 0
+    return sum(1 for row in grid for c in row if c != 0)
+
+
+def unique_color_count(grid: Grid) -> int:
+    """Return the number of unique non-zero colors."""
+    if not grid or not grid[0]:
+        return 0
+    return len(set(c for row in grid for c in row if c != 0))
+
+
+def most_common_nonzero(grid: Grid) -> int:
+    """Return the most common non-zero color (differs from dominant_color by not excluding bg)."""
+    if not grid or not grid[0]:
+        return 0
+    nonzero = [c for row in grid for c in row if c != 0]
+    if not nonzero:
+        return 0
+    return Counter(nonzero).most_common(1)[0][0]
+
+
+def largest_object_size(grid: Grid) -> int:
+    """Return the pixel count of the largest connected foreground component."""
+    if not grid or not grid[0]:
+        return 0
+    h, w = len(grid), len(grid[0])
+    flat = [grid[r][c] for r in range(h) for c in range(w)]
+    bg = Counter(flat).most_common(1)[0][0]
+    visited = set()
+    max_size = 0
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != bg and (r, c) not in visited:
+                size = 0
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop()
+                    size += 1
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if (0 <= nr < h and 0 <= nc < w
+                                and (nr, nc) not in visited
+                                and grid[nr][nc] != bg):
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                max_size = max(max_size, size)
+    return max_size
+
+
+def grid_density(grid: Grid) -> int:
+    """Return the percentage of non-background pixels (0-100).
+
+    Useful as a parameterized action input: e.g., scale by density ratio.
+    """
+    if not grid or not grid[0]:
+        return 0
+    h, w = len(grid), len(grid[0])
+    total = h * w
+    flat = [grid[r][c] for r in range(h) for c in range(w)]
+    bg = Counter(flat).most_common(1)[0][0]
+    fg = sum(1 for c in flat if c != bg)
+    return (fg * 100) // total if total > 0 else 0
+
+
+# =============================================================================
 # Build functions
 # =============================================================================
 
@@ -317,7 +403,8 @@ def build_perception_primitives() -> list[Primitive]:
     Each is arity-0 in the composition sense — they have no program
     children. They receive the input grid through the execution context.
 
-    18 total: 6 color role + 2 counting + 4 geometry + 6 structural.
+    25 total: 6 color role + 2 counting + 4 geometry + 6 structural
+              + 2 symmetry + 2 pixel counting + 3 additional structural.
     """
     perceptions = [
         # Color role detection (6)
@@ -342,6 +429,16 @@ def build_perception_primitives() -> list[Primitive]:
         ("center_color",            center_color),
         ("edge_color",              edge_color),
         ("interior_dominant_color", interior_dominant_color),
+        # Symmetry detection (2)
+        ("has_horizontal_symmetry", has_horizontal_symmetry),
+        ("has_vertical_symmetry",   has_vertical_symmetry),
+        # Pixel counting (2)
+        ("nonzero_pixel_count",     nonzero_pixel_count),
+        ("unique_color_count",      unique_color_count),
+        # Additional structural (3)
+        ("most_common_nonzero",     most_common_nonzero),
+        ("largest_object_size",     largest_object_size),
+        ("grid_density",            grid_density),
     ]
     return [
         Primitive(name=name, arity=0, fn=fn, domain="arc", kind="perception")

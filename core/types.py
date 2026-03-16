@@ -41,10 +41,15 @@ class Program:
 
     This is the universal representation of a hypothesis, a skill,
     a transformation, a policy — anything the system synthesizes.
+
+    Structural programs (structural=True) represent higher-order patterns
+    like map_objects, conditional, or split_apply_combine. They carry
+    sub-programs in their children and can be library-promoted.
     """
     root: str                          # name of the primitive at this node
     children: list[Program] = field(default_factory=list)  # sub-expressions
     params: dict[str, float] = field(default_factory=dict) # fitted constants
+    structural: bool = False           # True for structural programs (per-object, conditional, etc.)
 
     @property
     def depth(self) -> int:

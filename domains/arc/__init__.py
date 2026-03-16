@@ -10,6 +10,7 @@ Module layout:
     perception_primitives.py     - Atomic Grid→Value perception
     primitives.py                - Registry (_PRIM_MAP) + utilities (to_np, from_np)
     objects.py                   - Connected component detection
+    analysis.py                  - Deterministic I/O analysis for phase ordering
     environment.py               - ARCEnv (execute programs on grids)
     grammar.py                   - ARCGrammar (composition, mutation, crossover)
     drive.py                     - ARCDrive (scoring: pixel accuracy + complexity)

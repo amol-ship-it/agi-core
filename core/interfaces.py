@@ -136,6 +136,16 @@ class Environment(ABC):
         """
         return None
 
+    def analyze_task(self, task: "Task") -> Optional[dict]:
+        """Compute deterministic task signature for phase ordering.
+
+        Returns a dict with analysis results that the learner can use
+        to reorder/prune search phases. Keys are domain-specific.
+
+        Default: no analysis (returns None — all phases run).
+        """
+        return None
+
     def infer_output_correction(
         self,
         program_outputs: list[Any],

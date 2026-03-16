@@ -3082,4 +3082,45 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 **Files changed:** `domains/arc/environment.py` (+per-row/col, +cell algebra, +template stamp), `domains/arc/transformation_primitives.py` (+5 primitives), `core/learner.py` (+phase 1.05), `scripts/analyze_failures.py` (new), `tests/test_atomic_primitives.py` (+40 tests).
 
 ---
+
+## Decision 103 — Principled Improvement Roadmap Implementation (2026-03-16)
+
+**Context:** Based on an honest critique identifying 5 fundamental problems (insufficient primitives, non-composable structural programs, guidance signal-to-noise issues, train→eval transfer gap, no deterministic I/O analysis), implemented the "Part 4: Immediate Improvements" from the roadmap.
+
+**Changes (4 areas):**
+
+### 4A. First-Class Structural Programs
+- Added `structural` field to `Program` dataclass to mark programs from structural strategies (per-object, conditional, cross-reference)
+- Modified sleep phase to promote solved structural programs to the library (previously only unsolved programs were promoted)
+- Updated serialization to persist the `structural` flag
+- **Rationale:** Structural solutions were opaque closures that couldn't compound through the library. Now they can be promoted and reused in subsequent rounds.
+
+### 4B. Expanded Primitive Vocabulary (64 → 82 primitives)
+- **11 new unary transforms:** extract_largest_object, extract_smallest_object, hollow_objects, complete_horizontal_symmetry, complete_vertical_symmetry, fill_diagonal_symmetry, remove_border, denoise_majority, keep_unique_rows, keep_unique_cols, extract_repeating_pattern
+- **2 new binary transforms:** xor_grids, subtract_grids
+- **7 new perception primitives:** has_horizontal_symmetry, has_vertical_symmetry, nonzero_pixel_count, unique_color_count, most_common_nonzero, largest_object_size, grid_density
+- Updated essential_pair_concepts to include extract_largest/smallest_object, hollow_objects, remove_border, complete_h/v_symmetry
+- Enhanced task_priority_primitives with analysis-informed recommendations
+- **Rationale:** Missing primitive categories (object extraction, symmetry completion, pattern detection, grid operations) made entire classes of ARC tasks unsolvable.
+
+### 4C. Deterministic Input-Output Analysis
+- New `domains/arc/analysis.py` module with `analyze_task()` function
+- Computes task signature: dim_relation, color_relation, pixel_relation, object_count_change, symmetry, scale_factor
+- Derives phase ordering hints: skip_gravity, skip_per_object, prioritize_cross_ref, prioritize_scale_tile, prioritize_color_ops, prioritize_symmetry
+- Integrated into Environment interface (`analyze_task()` method) and learner's wake phase (`ctx.task_analysis`)
+- Currently used to skip per-object phase when analysis indicates output shrinks (extraction pattern)
+- **Rationale:** Cheap O(pixels) computation that enables principled phase pruning. Humans do this analysis instantly; the system had no equivalent.
+
+### 4D. Strengthened Search Guidance (5 sub-improvements)
+1. **Quality-weighted transition matrix** — Solved programs contribute weight 1.0, unsolved contribute exp(-error) * unsolved_weight. Previously all transitions counted equally, letting 10-50x more failures dilute the composition prior.
+2. **Example-weighted primitive crediting** — Solved programs use example_solve_score (k/n)^2 instead of flat 1.0, providing finer signal about which primitives contribute to better solutions.
+3. **Adaptive near-miss threshold** — threshold = min(configured, 2/n_examples), ensuring tasks with many examples require at least 2 perfect matches. Previously static at 0.20.
+4. **Negative feedback (crash tracking)** — Track which primitives throw exceptions on each task and exclude them from depth-2/3 pool construction. Previously crash-prone primitives wasted compute.
+5. **Crash pruning in pool construction** — Combined noop_prims and crash_prims into skip_prims set, used consistently across all pool filtering.
+
+**Test results:** 545 tests pass (509 original + 36 new)
+**Quick benchmark (50 tasks):** 4/50 (8%) train — consistent with baseline, no regressions
+**Files changed:** `core/types.py`, `core/interfaces.py`, `core/learner.py`, `core/transition_matrix.py`, `core/memory.py`, `domains/arc/analysis.py` (new), `domains/arc/environment.py`, `domains/arc/grammar.py`, `domains/arc/transformation_primitives.py`, `domains/arc/perception_primitives.py`, `domains/arc/__init__.py`, `tests/test_new_primitives.py` (new), `tests/test_atomic_primitives.py`
+
+---
 *This document will be updated with each new session and major decision.*

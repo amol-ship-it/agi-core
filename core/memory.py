@@ -27,6 +27,8 @@ def _program_to_dict(prog: Program) -> dict:
         d["children"] = [_program_to_dict(c) for c in prog.children]
     if prog.params:
         d["params"] = prog.params
+    if prog.structural:
+        d["structural"] = True
     return d
 
 
@@ -36,6 +38,7 @@ def _program_from_dict(d: dict) -> Program:
         root=d["root"],
         children=[_program_from_dict(c) for c in d.get("children", [])],
         params=d.get("params", {}),
+        structural=d.get("structural", False),
     )
 
 
