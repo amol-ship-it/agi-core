@@ -23,21 +23,15 @@ class TransitionMatrix:
 
     def __init__(self, smoothing: float = 0.1):
         self._counts: dict[str, Counter] = defaultdict(Counter)
-        self._totals: dict[str, float] = defaultdict(float)
+        self._totals: dict[str, int] = defaultdict(int)
         self._smoothing = smoothing
 
-    def observe_program(self, program: Program, weight: float = 1.0) -> None:
-        """Record parent->child transitions from a program tree.
-
-        weight: quality weight for this program. Solved programs get 1.0,
-        unsolved get exp(-error) * 0.1 so solved transitions dominate the
-        prior. This prevents the 10-50x more failures from diluting the
-        composition signal.
-        """
+    def observe_program(self, program: Program) -> None:
+        """Record parent->child transitions from a program tree."""
         for child in program.children:
-            self._counts[program.root][child.root] += weight
-            self._totals[program.root] += weight
-            self.observe_program(child, weight)
+            self._counts[program.root][child.root] += 1
+            self._totals[program.root] += 1
+            self.observe_program(child)
 
     def probability(self, parent_op: str, child_op: str, n_primitives: int) -> float:
         """P(child_op | parent_op) with Laplace smoothing."""
@@ -69,8 +63,8 @@ class TransitionMatrix:
         return primitives[-1]
 
     @property
-    def size(self) -> float:
-        """Total weight of observed transitions."""
+    def size(self) -> int:
+        """Number of observed transitions."""
         return sum(self._totals.values())
 
     def __repr__(self):

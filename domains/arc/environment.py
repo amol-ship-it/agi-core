@@ -30,7 +30,6 @@ import numpy as np
 from core import Environment, Primitive, Program, Task, Observation
 from core.types import ScoredProgram
 from .primitives import Grid, _PRIM_MAP
-from .analysis import analyze_task as _analyze_task, TaskSignature
 
 
 class ARCEnv(Environment):
@@ -56,37 +55,6 @@ class ARCEnv(Environment):
     def register_primitive(self, primitive) -> None:
         """Register a dynamically created primitive for ARC execution."""
         _PRIM_MAP[primitive.name] = primitive
-
-    def analyze_task(self, task: Task) -> dict | None:
-        """Compute deterministic task signature for phase ordering.
-
-        Returns a dict representation of TaskSignature with fields:
-          dim_relation, color_relation, pixel_relation, object_count_change,
-          has_symmetry, scale_factor, skip_gravity, skip_per_object,
-          prioritize_cross_ref, prioritize_scale_tile, prioritize_color_ops,
-          prioritize_symmetry, recommended_phases.
-        """
-        if not task.train_examples:
-            return None
-        sig = _analyze_task(task.train_examples)
-        return {
-            "dim_relation": sig.dim_relation,
-            "color_relation": sig.color_relation,
-            "pixel_relation": sig.pixel_relation,
-            "object_count_change": sig.object_count_change,
-            "has_symmetry": sig.has_symmetry,
-            "scale_factor": sig.scale_factor,
-            "output_smaller": sig.output_smaller,
-            "output_larger": sig.output_larger,
-            "same_nonzero_count": sig.same_nonzero_count,
-            "skip_gravity": sig.skip_gravity,
-            "skip_per_object": sig.skip_per_object,
-            "prioritize_cross_ref": sig.prioritize_cross_ref,
-            "prioritize_scale_tile": sig.prioritize_scale_tile,
-            "prioritize_color_ops": sig.prioritize_color_ops,
-            "prioritize_symmetry": sig.prioritize_symmetry,
-            "recommended_phases": sig.recommended_phases,
-        }
 
     # --- Structural search strategies ---
     # These are search strategies, not vocabulary choices. They compose

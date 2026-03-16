@@ -320,11 +320,8 @@ class TestBuilders:
         prims = build_atomic_primitives()
         # 6 geometric + 7 spatial + 2 color + 2 morphological
         # + 4 physics + 2 sorting + 2 fill + 4 ray extension
-        # + 1 flood_fill_from_markers + 1 label_components
-        # + 2 object extraction + 1 hollow + 3 symmetry completion
-        # + 2 spatial (remove_border, denoise) + 2 dedup + 1 pattern
-        # + 4 binary (overlay, mask_by, xor_grids, subtract_grids) = 46
-        assert len(prims) == 46
+        # + 1 flood_fill_from_markers + 1 label_components + 2 binary = 33
+        assert len(prims) == 33
 
     def test_all_have_names(self):
         for p in build_atomic_primitives():
@@ -341,12 +338,10 @@ class TestBuilders:
     def test_binary_prims(self):
         prims = build_atomic_primitives()
         binary = [p for p in prims if p.arity == 2]
-        assert len(binary) == 4
+        assert len(binary) == 2
         names = {p.name for p in binary}
         assert "overlay" in names
         assert "mask_by" in names
-        assert "xor_grids" in names
-        assert "subtract_grids" in names
 
     def test_parameterized_prims(self):
         prims = build_parameterized_primitives()
@@ -372,6 +367,7 @@ class TestBuilders:
         names = {p.name for p in prims}
         compound_names = [
             "crop_to_content",  # compositional: trim_rows + trim_cols
+            "extract_largest_object", "extract_smallest_object",
             "keep_largest_component", "keep_smallest_component",
         ]
         for name in compound_names:
