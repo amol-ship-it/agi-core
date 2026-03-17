@@ -296,6 +296,30 @@ def sort_cols_by_nonzero(grid: Grid) -> Grid:
     return [[cols[c][r] for c in range(w)] for r in range(h)]
 
 
+# --- Periodicity transforms ---
+
+def extract_period_tile(grid: Grid) -> Grid:
+    """Find the smallest tile that, when repeated, reconstructs the grid.
+
+    Justified by task 7b7f7511.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    for ph in range(1, h + 1):
+        if h % ph != 0:
+            continue
+        for pw in range(1, w + 1):
+            if w % pw != 0:
+                continue
+            tile = [grid[r][:pw] for r in range(ph)]
+            match = all(grid[r][c] == tile[r % ph][c % pw]
+                        for r in range(h) for c in range(w))
+            if match and (ph < h or pw < w):
+                return tile
+    return grid
+
+
 # --- Compression transforms ---
 
 def compress_rows(grid: Grid) -> Grid:
@@ -764,6 +788,8 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
+        # Periodicity (1)
+        ("extract_period_tile",         extract_period_tile),
         # Compression (3)
         ("compress_rows",               compress_rows),
         ("compress_cols",               compress_cols),
