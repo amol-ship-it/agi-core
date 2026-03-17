@@ -205,6 +205,7 @@ class Learner:
             self._phase_per_row_column,
             self._phase_object_decomposition,
             self._phase_for_each_object,
+            self._phase_cross_reference,
             self._phase_near_miss_refinement,
             self._phase_color_fix,
         ]
@@ -277,6 +278,22 @@ class Learner:
             ctx.enum_candidates.append(sp)
         logger.debug(f"  [wake] For-each-object: {time.time()-t:.2f}s")
         return "for-each-object" if ctx.solved else None
+
+    def _phase_cross_reference(self, ctx: _WakeContext) -> Optional[str]:
+        """Cross-reference: one grid part informs another."""
+        if ctx.solved or not self.grammar.allow_structural_phases():
+            return None
+        t = time.time()
+        result = self.env.try_cross_reference(ctx.task, ctx.all_prims)
+        if result is not None:
+            name, fn = result
+            sp = self._evaluate_program(Program(root=name), ctx.task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+        logger.debug(f"  [wake] Cross-reference: {time.time()-t:.2f}s")
+        return "cross-reference" if ctx.solved else None
 
     def _phase_near_miss_refinement(self, ctx: _WakeContext) -> Optional[str]:
         """Append/prepend primitives to near-miss programs."""
