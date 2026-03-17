@@ -3170,5 +3170,30 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Note:** Task 73251a56 (err=0.006) has a diagonal band pattern, not a simple 2D tile. Needs a different approach — flagged as future work.
 
+### Decision 111: Broad Primitive Scan — Phase 3 Results
+
+**Method:** Instead of analyzing individual near-miss tasks, wrote scripts testing candidate primitives against ALL 400 tasks. Much more efficient than per-task analysis.
+
+**Results:**
+
+| Primitive | Train Delta | Eval Delta | Tasks Solved |
+|-----------|-------------|------------|--------------|
+| inpaint_periodic | +4 | +4 | 29ec7d0e + 3 via composition |
+| extract_largest_cc | +2 | +1 | be94b721, 1f85a75f |
+| extract_unique_color_region | +3 | +0 | c909285e, 0b148d64, 23b5c85d |
+| mirror_tile_h | — | — | 6d0aefbc, c9e6f938 |
+| mirror_tile_v | — | — | 6fa7a44f, 8be77c9e |
+| mirror_tile_both | — | — | 67e8384a, 3af2c5a8, 62c24649 |
+| rotate_tile_cw | — | — | 46442a0e, 7fe24cdd |
+| **Tiling total** | **+10** | **+1** | 9 direct + compositions |
+
+**Rejected primitives (zero solves):** crop_to_content, remove_minority_color, replace_minority_with_majority, flood_fill_zeros, unique_rows, unique_cols, deduplicate_rows, deduplicate_cols, majority_color_fill, keep_only_color(1-9), remove_color(1-9), extract_smallest_cc, remove_bg_border, extract_non_bg_rectangle, upscale_2x, downscale_2x.
+
+**Attempted but abandoned:** denoise_rectangles for task 7e0986d6 — too complex to generalize, fragment-merging heuristic didn't work cleanly.
+
+**Cumulative progress:** 28/400 → 47/400 train (+19), 6/400 → 12/400 eval (+6).
+
+**Key insight:** The broad-scan approach (test many candidates against all tasks) is much more efficient than deep-diving individual tasks. Most ARC tasks that CAN be solved by a single primitive are already captured by this approach.
+
 ---
 *This document will be updated with each new session and major decision.*
