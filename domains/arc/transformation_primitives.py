@@ -761,4 +761,12 @@ ATOMIC_ESSENTIAL_PAIR_CONCEPTS: frozenset = frozenset([
     "binarize",
     "dilate",
     "erode",
+    "extract_largest_cc",
+    "extract_unique_color_region",
+    "inpaint_periodic",
+    "inpaint_by_symmetry",
+    "tile_h",
+    "mirror_tile_h",
+    "mirror_tile_v",
+    "mirror_tile_both",
 ])
