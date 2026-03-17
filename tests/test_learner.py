@@ -937,11 +937,11 @@ class TestRunnerHelpers(unittest.TestCase):
         resolved = resolve_from_preset(args, PRESETS["contest"])
         self.assertEqual(resolved["rounds"], 3)  # auto: 50M >= 20M
         self.assertEqual(resolved["compute_cap"], 50_000_000)
-        # Auto-derived: wide pools and beam from 50M budget
+        # Auto-derived: wide pools from 50M budget (beam search removed)
         self.assertEqual(resolved["exhaustive_pair_top_k"], 48)
         self.assertEqual(resolved["exhaustive_triple_top_k"], 20)
-        self.assertGreater(resolved["beam_width"], 1)
-        self.assertGreater(resolved["max_generations"], 1)
+        self.assertEqual(resolved["beam_width"], 1)
+        self.assertEqual(resolved["max_generations"], 1)
 
     def test_resolve_cli_override_wins(self):
         """Explicit CLI pair/triple top-k overrides auto-derived values."""
@@ -1285,8 +1285,8 @@ class TestDeriveSearchParams(unittest.TestCase):
         result = derive_search_params(62500, n_prims=48)
         self.assertEqual(result["exhaustive_pair_top_k"], 48)
         self.assertEqual(result["exhaustive_triple_top_k"], 20)
-        self.assertGreater(result["beam_width"], 1)
-        self.assertGreater(result["max_generations"], 1)
+        self.assertEqual(result["beam_width"], 1)
+        self.assertEqual(result["max_generations"], 1)
 
     def test_derive_search_params_monotonic(self):
         """Higher budget → wider or equal params (never shrink)."""

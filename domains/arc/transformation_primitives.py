@@ -425,6 +425,59 @@ def rotate_tile_cw(grid: Grid) -> Grid:
 
 # --- Inpainting transforms ---
 
+def inpaint_by_symmetry(grid: Grid) -> Grid:
+    """Inpaint masked cells using the grid's inherent symmetry.
+
+    Auto-detects the mask color (the one that breaks symmetry most),
+    then fills masked cells from their symmetric counterparts using
+    H-mirror, V-mirror, 180° rotation, and transpose.
+
+    Justified by task b8825c91.
+    """
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    h, w = len(grid), len(grid[0])
+
+    # Find the best mask color: try each non-zero color, pick the one
+    # where replacing it via symmetry produces the most consistent result
+    colors = set(c for row in grid for c in row if c != 0)
+    if not colors:
+        return grid
+
+    best_result = None
+    best_remaining = h * w  # fewer remaining mask cells = better
+
+    for mask_color in colors:
+        result = [row[:] for row in grid]
+        # Apply symmetry fills iteratively until stable
+        for _ in range(4):
+            changed = False
+            for r in range(h):
+                for c in range(w):
+                    if result[r][c] != mask_color:
+                        continue
+                    # Try mirrors in priority order
+                    for mr, mc in [(r, w-1-c), (h-1-r, c), (h-1-r, w-1-c)]:
+                        if 0 <= mr < h and 0 <= mc < w and result[mr][mc] != mask_color:
+                            result[r][c] = result[mr][mc]
+                            changed = True
+                            break
+                    else:
+                        if h == w and result[c][r] != mask_color:
+                            result[r][c] = result[c][r]
+                            changed = True
+            if not changed:
+                break
+
+        remaining = sum(1 for r in range(h) for c in range(w) if result[r][c] == mask_color)
+        if remaining < best_remaining:
+            best_remaining = remaining
+            best_result = result
+
+    return best_result if best_result is not None else grid
+
+
 def inpaint_periodic(grid: Grid) -> Grid:
     """Fill zeros by detecting and extrapolating the periodic tile pattern.
 
@@ -555,7 +608,8 @@ def build_atomic_primitives() -> list[Primitive]:
         ("mirror_tile_both",           mirror_tile_both),
         ("tile_h",                     tile_h),
         ("rotate_tile_cw",             rotate_tile_cw),
-        # Inpainting (1)
+        # Inpainting (2)
+        ("inpaint_by_symmetry",         inpaint_by_symmetry),
         ("inpaint_periodic",            inpaint_periodic),
     ]
     prims = [Primitive(name=name, arity=1, fn=fn, domain="arc")
@@ -707,4 +761,12 @@ ATOMIC_ESSENTIAL_PAIR_CONCEPTS: frozenset = frozenset([
     "binarize",
     "dilate",
     "erode",
+    "extract_largest_cc",
+    "extract_unique_color_region",
+    "inpaint_periodic",
+    "inpaint_by_symmetry",
+    "tile_h",
+    "mirror_tile_h",
+    "mirror_tile_v",
+    "mirror_tile_both",
 ])
