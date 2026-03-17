@@ -565,4 +565,20 @@ Implement the Session 15 plan: 6 changes to improve search strategies based on n
 
 ---
 
+## Session 17 — Claude Code CLI (March 16, 2026)
+
+### Prompt 1: Structural Strategy Restore (previous plan)
+
+> Implement the plan: Add Back Structural Strategies (Justified by Data)
+
+Bulk-restored structural strategies from pre-strip git history. Result: 22→28 train (+6), 6/400 eval. But 5 of 10 phases added zero solves (~500 LOC dead weight).
+
+### Prompt 2: Course Correction
+
+> Did you really follow my instructions properly? Also, did you follow the CLAUDE.md instructions? Because, it looks like we are back to square one, and the whole point of the previous plan was to systematically identify areas of improvement by stripping down to the basics. If needed, start from scratch again, taking into account the lessons we have learned along the way. What should be next steps?
+
+**Response:** New plan created — strip dead weight, analyze 132 near-miss tasks data-first, then add primitives one at a time justified by specific task IDs. Feature branch `principled-rebuild-v2`.
+
+---
+
 *This document will be updated with each new session.*

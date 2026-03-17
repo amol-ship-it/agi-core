@@ -9,9 +9,9 @@ The loop:
     SLEEP:  analyze solutions → extract sub-programs → compress → add to library
     REPEAT: library grows → search space shrinks → harder problems become tractable
 
-STRIPPED TO CORE: Only exhaustive enumeration + basic sleep.
-Beam search, structural strategies, near-miss refinement, etc.
-will be added back when justified by specific tasks.
+Wake phases: exhaustive enumeration + per-object decomposition +
+cross-reference + color fix. Additional phases added only when
+justified by measured solves on specific tasks.
 """
 
 from __future__ import annotations
@@ -202,15 +202,10 @@ class Learner:
         """
         return [
             self._phase_exhaustive,
-            self._phase_per_row_column,
             self._phase_object_decomposition,
             self._phase_for_each_object,
-            self._phase_conditional_per_object,
             self._phase_cross_reference,
-            self._phase_near_miss_refinement,
             self._phase_color_fix,
-            self._phase_beam_search,
-            self._phase_post_beam_color_fix,
         ]
 
     def _phase_exhaustive(self, ctx: _WakeContext) -> Optional[str]:
@@ -228,25 +223,6 @@ class Learner:
         ctx.enum_candidates.extend(candidates)
         logger.debug(f"  [wake] Phase 1 enumeration: {time.time()-t:.2f}s, {ctx.n_evals} evals")
         return "enumeration" if ctx.solved else None
-
-    def _phase_per_row_column(self, ctx: _WakeContext) -> Optional[str]:
-        """Try per-row/per-column decomposition."""
-        if ctx.solved or not self.grammar.allow_structural_phases():
-            return None
-        if not hasattr(self.env, 'try_per_row_column_decomposition'):
-            return None
-        t = time.time()
-        result = self.env.try_per_row_column_decomposition(
-            ctx.task, ctx.all_prims) if ctx.budget_ok() else None
-        if result is not None:
-            name, fn = result
-            sp = self._evaluate_program(Program(root=name), ctx.task)
-            ctx.n_evals += 1
-            self._update_pareto_front(ctx.pareto, sp)
-            ctx.update_best(sp)
-            ctx.enum_candidates.append(sp)
-        logger.debug(f"  [wake] Per-row/col: {time.time()-t:.2f}s")
-        return "per-row/column" if ctx.solved else None
 
     def _phase_object_decomposition(self, ctx: _WakeContext) -> Optional[str]:
         """Try per-object transforms via connected components."""
@@ -282,28 +258,6 @@ class Learner:
         logger.debug(f"  [wake] For-each-object: {time.time()-t:.2f}s")
         return "for-each-object" if ctx.solved else None
 
-    def _phase_conditional_per_object(self, ctx: _WakeContext) -> Optional[str]:
-        """Try if(pred, A, B) per-object."""
-        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
-            return None
-        if not self.grammar.allow_structural_phases():
-            return None
-        predicates = self.grammar.get_predicates()
-        if not predicates:
-            return None
-        t = time.time()
-        result = self.env.try_conditional_per_object(
-            ctx.task, ctx.enum_candidates, predicates, top_k=8)
-        if result is not None:
-            name, fn = result
-            sp = self._evaluate_program(Program(root=name), ctx.task)
-            ctx.n_evals += 1
-            self._update_pareto_front(ctx.pareto, sp)
-            ctx.update_best(sp)
-            ctx.enum_candidates.append(sp)
-        logger.debug(f"  [wake] Cond-per-object: {time.time()-t:.2f}s")
-        return "conditional per-object" if ctx.solved else None
-
     def _phase_cross_reference(self, ctx: _WakeContext) -> Optional[str]:
         """Cross-reference: one grid part informs another."""
         if ctx.solved or not self.grammar.allow_structural_phases():
@@ -320,45 +274,6 @@ class Learner:
         logger.debug(f"  [wake] Cross-reference: {time.time()-t:.2f}s")
         return "cross-reference" if ctx.solved else None
 
-    def _phase_conditional_search(self, ctx: _WakeContext) -> Optional[str]:
-        """Try if(predicate, A, B) programs."""
-        if not self.grammar.allow_structural_phases():
-            return None
-        predicates = self.grammar.get_predicates()
-        if not predicates or not ctx.enum_candidates or not ctx.budget_ok():
-            return None
-        if ctx.solved:
-            return None
-        t = time.time()
-        result, n_evals = self._try_conditional_search(
-            predicates, ctx.enum_candidates, ctx.all_prims, ctx.task)
-        ctx.n_evals += n_evals
-        if result is not None:
-            self._update_pareto_front(ctx.pareto, result)
-            ctx.update_best(result)
-            ctx.enum_candidates.append(result)
-        logger.debug(f"  [wake] Conditional search: {time.time()-t:.2f}s")
-        return "conditional" if ctx.solved else None
-
-    def _phase_near_miss_refinement(self, ctx: _WakeContext) -> Optional[str]:
-        """Append/prepend primitives to near-miss programs."""
-        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
-            return None
-        if ctx.cfg.near_miss_threshold <= 0:
-            return None
-        t = time.time()
-        n_examples = max(len(ctx.task.train_examples), 1)
-        threshold = min(ctx.cfg.near_miss_threshold, 2.0 / n_examples)
-        refined, n_evals = self._near_miss_refine(
-            ctx.enum_candidates, ctx.all_prims, ctx.task, threshold)
-        ctx.n_evals += n_evals
-        for sp in refined:
-            self._update_pareto_front(ctx.pareto, sp)
-            ctx.update_best(sp)
-        ctx.enum_candidates.extend(refined)
-        logger.debug(f"  [wake] Near-miss refine: {time.time()-t:.2f}s, {n_evals} evals")
-        return "near-miss refinement" if ctx.solved else None
-
     def _phase_color_fix(self, ctx: _WakeContext) -> Optional[str]:
         """Learn color remapping from near-miss programs."""
         if ctx.solved or not ctx.enum_candidates:
@@ -371,91 +286,6 @@ class Learner:
             ctx.update_best(result)
         logger.debug(f"  [wake] Phase 2 color fix: {time.time()-t:.2f}s")
         return "color fix" if ctx.solved else None
-
-    def _phase_beam_search(self, ctx: _WakeContext) -> Optional[str]:
-        """Beam search with mutation/crossover."""
-        if ctx.solved:
-            return None
-        t = time.time()
-        cfg = ctx.cfg
-        best_enum_error = ctx.best_so_far.prediction_error if ctx.best_so_far else 1.0
-        if not ctx.budget_ok():
-            logger.debug(f"  [wake] Beam search: SKIPPED (budget exceeded)")
-            return None
-
-        if cfg.max_generations <= 1:
-            effective_gens = cfg.max_generations
-        elif best_enum_error > 0.3:
-            effective_gens = max(5, cfg.max_generations // 4)
-        elif best_enum_error > 0.15:
-            effective_gens = max(10, cfg.max_generations // 2)
-        else:
-            effective_gens = cfg.max_generations
-
-        seed_progs = [sp.program for sp in sorted(
-            ctx.enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
-        n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
-        beam = seed_progs + self._init_beam(ctx.all_prims, n_random)
-
-        for gen in range(effective_gens):
-            ctx.gens_used = gen + 1
-            if not ctx.budget_ok():
-                break
-
-            scored = []
-            for prog in beam:
-                sp = self._evaluate_program(prog, ctx.task)
-                ctx.n_evals += 1
-                scored.append(sp)
-                self._update_pareto_front(ctx.pareto, sp)
-                ctx.update_best(sp)
-
-            if ctx.best_so_far and ctx.best_so_far.energy <= cfg.early_stop_energy:
-                logger.info(f"  [wake] Task {ctx.task.task_id}: perfect solve at gen {gen}")
-                break
-
-            if cfg.semantic_dedup:
-                scored, n_removed = self._semantic_dedup(scored, ctx.task)
-                ctx.total_deduped += n_removed
-
-            scored.sort(key=lambda s: s.energy)
-            survivors = [s.program for s in scored[:cfg.beam_width]]
-            next_gen = list(survivors)
-
-            tm = self._transition_matrix if self._transition_matrix.size > 0 else None
-            for prog in survivors:
-                for _ in range(cfg.mutations_per_candidate):
-                    next_gen.append(self.grammar.mutate(prog, ctx.all_prims, transition_matrix=tm))
-
-            n_cross = int(len(survivors) * cfg.crossover_fraction)
-            for _ in range(n_cross):
-                a = self._rng.choice(survivors)
-                b = self._rng.choice(survivors)
-                next_gen.append(self.grammar.crossover(a, b))
-
-            beam = next_gen
-            ctx.beam_scored = scored
-
-        logger.debug(f"  [wake] Beam search: {time.time()-t:.2f}s, gens={ctx.gens_used}")
-        return "beam search" if ctx.solved else None
-
-    def _phase_post_beam_color_fix(self, ctx: _WakeContext) -> Optional[str]:
-        """Color remapping on beam + enumeration results."""
-        if ctx.solved or not self.grammar.allow_structural_phases():
-            return None
-        if not ctx.best_so_far or ctx.best_so_far.prediction_error <= ctx.cfg.solve_threshold:
-            return None
-        t = time.time()
-        all_candidates = list(ctx.enum_candidates)
-        if ctx.beam_scored:
-            all_candidates.extend(ctx.beam_scored)
-        result = self._try_color_fix(all_candidates, ctx.task)
-        if result is not None:
-            ctx.n_evals += 1
-            self._update_pareto_front(ctx.pareto, result)
-            ctx.update_best(result)
-        logger.debug(f"  [wake] Post-beam color fix: {time.time()-t:.2f}s")
-        return "post-beam color fix" if ctx.solved else None
 
     # -------------------------------------------------------------------------
     # Wake result builders
@@ -1163,290 +993,6 @@ class Learner:
         return scored, n_evals
 
     # -------------------------------------------------------------------------
-    # Near-miss refinement
-    # -------------------------------------------------------------------------
-
-    def _near_miss_refine(
-        self,
-        candidates: list[ScoredProgram],
-        primitives: list[Primitive],
-        task: Task,
-        threshold: float = 0.20,
-    ) -> tuple[list[ScoredProgram], int]:
-        """For programs scoring close-but-not-perfect, try appending/prepending
-        each unary primitive to fix them.
-
-        Cost: O(near_misses × unary_prims × 2) plus node replacement and
-        two-step refinement for close misses.
-        """
-        solve_thresh = self.search_cfg.solve_threshold
-        near_misses = [
-            sp for sp in candidates
-            if solve_thresh < sp.prediction_error <= threshold
-        ]
-        if not near_misses:
-            return [], 0
-
-        near_misses.sort(key=lambda s: s.prediction_error)
-        near_misses = near_misses[:5]
-
-        all_unary = [p for p in primitives if p.arity <= 1]
-        refined: list[ScoredProgram] = []
-        n_evals = 0
-
-        for nm in near_misses:
-            for prim in all_unary:
-                # Append: prim(near_miss_program)
-                prog_append = Program(
-                    root=prim.name,
-                    children=[copy.deepcopy(nm.program)],
-                )
-                sp = self._evaluate_program(prog_append, task)
-                refined.append(sp)
-                n_evals += 1
-                if sp.prediction_error <= solve_thresh:
-                    return refined, n_evals
-
-                # Prepend: insert prim as the innermost step
-                prog_prepend = copy.deepcopy(nm.program)
-                node = prog_prepend
-                while node.children:
-                    node = node.children[0]
-                old_root = node.root
-                node.root = prim.name
-                node.children = [Program(root=old_root)]
-                sp = self._evaluate_program(prog_prepend, task)
-                refined.append(sp)
-                n_evals += 1
-                if sp.prediction_error <= solve_thresh:
-                    return refined, n_evals
-
-        # Node replacement for depth-1+ near-misses
-        NODE_REPLACE_PRIMS = 60
-        depth1_sorted = sorted(
-            [sp for sp in candidates if sp.program.depth == 1],
-            key=lambda s: s.prediction_error)
-        replace_names = set()
-        for sp in depth1_sorted:
-            replace_names.add(sp.program.root)
-            if len(replace_names) >= NODE_REPLACE_PRIMS:
-                break
-        replace_prims = [p for p in all_unary if p.name in replace_names]
-
-        for nm in near_misses:
-            if nm.program.depth < 1:
-                continue
-            nodes_to_replace: list[Program] = []
-
-            def _collect(node: Program, parent: Optional[Program] = None):
-                if parent is not None:
-                    nodes_to_replace.append(node)
-                for child in (node.children or []):
-                    _collect(child, node)
-
-            _collect(nm.program)
-            for target_node in nodes_to_replace:
-                original_root = target_node.root
-                for prim in replace_prims:
-                    if prim.name == original_root:
-                        continue
-                    target_node.root = prim.name
-                    prog_replaced = copy.deepcopy(nm.program)
-                    target_node.root = original_root
-                    sp = self._evaluate_program(prog_replaced, task)
-                    refined.append(sp)
-                    n_evals += 1
-                    if sp.prediction_error <= solve_thresh:
-                        return refined, n_evals
-
-        # Two-step refinement for close misses (error < 0.10)
-        TWO_STEP_THRESHOLD = 0.10
-        close_misses = [sp for sp in refined if sp.prediction_error < TWO_STEP_THRESHOLD]
-        if not close_misses:
-            close_misses = [nm for nm in near_misses if nm.prediction_error < TWO_STEP_THRESHOLD]
-        if close_misses:
-            close_misses.sort(key=lambda s: s.prediction_error)
-            close_misses = close_misses[:5]
-            for cm in close_misses:
-                for prim in all_unary:
-                    prog_outer = Program(
-                        root=prim.name,
-                        children=[copy.deepcopy(cm.program)],
-                    )
-                    sp = self._evaluate_program(prog_outer, task)
-                    refined.append(sp)
-                    n_evals += 1
-                    if sp.prediction_error <= solve_thresh:
-                        return refined, n_evals
-
-        # Binary near-miss refinement
-        binary_prims = [p for p in primitives if p.arity == 2 and p.kind == "transform"]
-        if binary_prims:
-            BINARY_TOP_K = 15
-            top_depth1 = sorted(
-                [sp for sp in candidates if sp.program.depth == 1],
-                key=lambda s: s.prediction_error)[:BINARY_TOP_K]
-            for nm in near_misses[:5]:
-                for bp in binary_prims:
-                    for other in top_depth1:
-                        prog_a = Program(root=bp.name, children=[
-                            copy.deepcopy(nm.program),
-                            copy.deepcopy(other.program)])
-                        sp = self._evaluate_program(prog_a, task)
-                        refined.append(sp)
-                        n_evals += 1
-                        if sp.prediction_error <= solve_thresh:
-                            return refined, n_evals
-                        prog_b = Program(root=bp.name, children=[
-                            copy.deepcopy(other.program),
-                            copy.deepcopy(nm.program)])
-                        sp = self._evaluate_program(prog_b, task)
-                        refined.append(sp)
-                        n_evals += 1
-                        if sp.prediction_error <= solve_thresh:
-                            return refined, n_evals
-
-        return refined, n_evals
-
-    # -------------------------------------------------------------------------
-    # Conditional search
-    # -------------------------------------------------------------------------
-
-    def _try_conditional_search(
-        self,
-        predicates: list[tuple[str, callable]],
-        candidates: list[ScoredProgram],
-        primitives: list[Primitive],
-        task: Task,
-        top_k: int = 15,
-    ) -> tuple[Optional[ScoredProgram], int]:
-        """Search for conditional programs: if pred(input) then A else B."""
-        n_evals = 0
-        solve_thresh = self.search_cfg.solve_threshold
-
-        # Build candidate pool from top depth-1 + depth-2 programs
-        depth1 = [sp for sp in candidates if sp.program.depth == 1]
-        depth1.sort(key=lambda s: s.prediction_error)
-        top_prims_names = []
-        seen = set()
-        for sp in depth1:
-            if sp.program.root not in seen:
-                top_prims_names.append(sp.program.root)
-                seen.add(sp.program.root)
-            if len(top_prims_names) >= top_k:
-                break
-
-        prim_map = {p.name: p for p in primitives}
-        top_prims = [prim_map[n] for n in top_prims_names if n in prim_map]
-
-        # Add top depth-2 programs as branch candidates
-        depth2 = [sp for sp in candidates
-                   if sp.program.depth == 2 and sp.program.children]
-        depth2.sort(key=lambda s: s.prediction_error)
-        depth2_added = 0
-        DEPTH2_BRANCH_K = 15
-        for sp in depth2:
-            prog_repr = repr(sp.program)
-            if prog_repr in seen:
-                continue
-            seen.add(prog_repr)
-
-            def _make_d2_fn(prog=sp.program, env=self.env):
-                def fn(grid):
-                    return env.execute(prog, grid)
-                return fn
-            d2_prim = Primitive(
-                name=prog_repr, arity=1, fn=_make_d2_fn(), domain="arc")
-            top_prims.append(d2_prim)
-            depth2_added += 1
-            if depth2_added >= DEPTH2_BRANCH_K:
-                break
-
-        if len(top_prims) < 2:
-            return None, 0
-
-        best_result: Optional[ScoredProgram] = None
-
-        for pred_name, pred_fn in predicates:
-            true_indices = []
-            false_indices = []
-            for idx, (inp, _) in enumerate(task.train_examples):
-                try:
-                    if pred_fn(inp):
-                        true_indices.append(idx)
-                    else:
-                        false_indices.append(idx)
-                except Exception:
-                    false_indices.append(idx)
-
-            if not true_indices or not false_indices:
-                continue
-
-            true_scores: list[tuple[float, Primitive]] = []
-            false_scores: list[tuple[float, Primitive]] = []
-
-            for prim in top_prims:
-                true_err = 0.0
-                for idx in true_indices:
-                    inp, expected = task.train_examples[idx]
-                    try:
-                        out = prim.fn(inp)
-                        true_err += self.drive.prediction_error(out, expected)
-                    except Exception:
-                        true_err += 1.0
-                true_scores.append((true_err / len(true_indices), prim))
-
-                false_err = 0.0
-                for idx in false_indices:
-                    inp, expected = task.train_examples[idx]
-                    try:
-                        out = prim.fn(inp)
-                        false_err += self.drive.prediction_error(out, expected)
-                    except Exception:
-                        false_err += 1.0
-                false_scores.append((false_err / len(false_indices), prim))
-
-            true_scores.sort(key=lambda x: x[0])
-            false_scores.sort(key=lambda x: x[0])
-
-            best_true = [p for _, p in true_scores[:5]]
-            best_false = [p for _, p in false_scores[:5]]
-
-            for then_prim in best_true:
-                for else_prim in best_false:
-                    if then_prim.name == else_prim.name:
-                        continue
-
-                    def _make_cond(pf, tf, ef):
-                        def cond_fn(grid):
-                            try:
-                                if pf(grid):
-                                    return tf(grid)
-                                else:
-                                    return ef(grid)
-                            except Exception:
-                                return grid
-                        return cond_fn
-
-                    cond_fn = _make_cond(pred_fn, then_prim.fn, else_prim.fn)
-                    cond_name = f"if_{pred_name}_{then_prim.name}_else_{else_prim.name}"
-
-                    cond_prim = Primitive(
-                        name=cond_name, arity=1, fn=cond_fn, domain="arc")
-                    self.env.register_primitive(cond_prim)
-
-                    prog = Program(root=cond_name)
-                    sp = self._evaluate_program(prog, task)
-                    n_evals += 1
-
-                    if sp.prediction_error <= solve_thresh:
-                        return sp, n_evals
-                    if best_result is None or sp.energy < best_result.energy:
-                        best_result = sp
-
-        return best_result, n_evals
-
-    # -------------------------------------------------------------------------
     # Color fix
     # -------------------------------------------------------------------------
 
@@ -1521,79 +1067,6 @@ class Learner:
                 best_fix = sp
 
         return best_fix
-
-    # -------------------------------------------------------------------------
-    # Beam search helpers
-    # -------------------------------------------------------------------------
-
-    def _init_beam(self, primitives: list[Primitive], n: int) -> list[Program]:
-        """Generate n random programs of varying depth (1-4)."""
-        beam = []
-        use_prior = self._transition_matrix.size > 0
-        for i in range(n):
-            r = self._rng.random()
-            max_depth = 1 if r < 0.2 else (2 if r < 0.55 else (3 if r < 0.85 else 4))
-            prog = self._random_program(primitives, max_depth, use_prior)
-            beam.append(prog)
-        return beam
-
-    def _random_program(self, primitives: list[Primitive], max_depth: int,
-                        use_prior: bool, parent_op: str = "") -> Program:
-        """Generate a random program tree up to max_depth."""
-        if max_depth <= 1:
-            leaf_prims = [p for p in primitives if p.arity <= 1]
-            if not leaf_prims:
-                leaf_prims = primitives
-            if use_prior and parent_op:
-                prim = self._transition_matrix.weighted_choice(
-                    parent_op, leaf_prims, self._rng)
-            else:
-                prim = self._rng.choice(leaf_prims)
-            return Program(root=prim.name)
-
-        if use_prior and parent_op:
-            prim = self._transition_matrix.weighted_choice(
-                parent_op, primitives, self._rng)
-        else:
-            prim = self._rng.choice(primitives)
-
-        if prim.arity == 0:
-            return Program(root=prim.name)
-
-        children = []
-        for _ in range(prim.arity):
-            child = self._random_program(
-                primitives, max_depth - 1, use_prior, prim.name)
-            children.append(child)
-        return Program(root=prim.name, children=children)
-
-    def _semantic_hash(self, program: Program, task: Task) -> str:
-        """Hash a program by its outputs on training inputs."""
-        precision = self.search_cfg.dedup_precision
-        outputs = []
-        for inp, _ in task.train_examples:
-            try:
-                val = self.env.execute(program, inp)
-                if isinstance(val, (int, float)):
-                    outputs.append(round(float(val), precision))
-                elif isinstance(val, list):
-                    outputs.append(tuple(tuple(row) for row in val) if val and isinstance(val[0], list) else tuple(val))
-                else:
-                    outputs.append(val)
-            except Exception:
-                outputs.append(None)
-        return str(outputs)
-
-    def _semantic_dedup(self, scored: list[ScoredProgram],
-                        task: Task) -> tuple[list[ScoredProgram], int]:
-        """Remove semantically duplicate programs from the scored list."""
-        seen: dict[str, ScoredProgram] = {}
-        for sp in scored:
-            key = self._semantic_hash(sp.program, task)
-            if key not in seen or sp.energy < seen[key].energy:
-                seen[key] = sp
-        deduped = sorted(seen.values(), key=lambda s: s.energy)
-        return deduped, len(scored) - len(deduped)
 
     # -------------------------------------------------------------------------
     # Private helpers

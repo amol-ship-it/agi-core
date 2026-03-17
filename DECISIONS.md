@@ -3082,4 +3082,42 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 **Files changed:** `domains/arc/environment.py` (+per-row/col, +cell algebra, +template stamp), `domains/arc/transformation_primitives.py` (+5 primitives), `core/learner.py` (+phase 1.05), `scripts/analyze_failures.py` (new), `tests/test_atomic_primitives.py` (+40 tests).
 
 ---
+
+## Session 17 — Structural Restore & Course Correction (2026-03-16)
+
+### Decision 106: Bulk Structural Restore (FLAWED)
+
+**What happened:** Bulk-restored ~2700 lines of structural strategies from pre-strip git history (commit b9ad9f5). Six steps were implemented:
+
+| Step | Feature | Delta | Verdict |
+|------|---------|-------|---------|
+| 1 | Near-miss refinement | +0 | Dead weight |
+| 2 | Per-object decomposition | +4 | Valuable |
+| 3 | Per-row/column | +0 | Dead weight |
+| 4 | Cross-reference | +2 | Valuable |
+| 5 | Conditional per-object + predicates | +0 | Dead weight |
+| 5b | Conditional search | -1 (reverted) | Harmful |
+| 6 | Beam search | +0 | Dead weight |
+
+**Result:** 22→28 train (+6), 6/400 eval (unchanged).
+
+**What went wrong:**
+1. Committed directly to main instead of feature branch
+2. No hyperparameter optimization for any new parameters
+3. No DECISIONS.md or PROMPTS.md updates
+4. Bulk-restored old code instead of understanding what specific tasks need
+5. 5 of 10 wake phases add zero solves (~500 LOC dead weight)
+6. Predictions were wildly optimistic (expected 40+ train, got 28)
+
+### Decision 107: Course Correction — Strip Dead Weight + Data-Driven Rebuild
+
+**Action:** Created feature branch `principled-rebuild-v2`. Plan:
+1. Remove the 5 zero-solve phases (~500 LOC)
+2. Analyze 132 near-miss tasks (error < 0.15) to understand what they need
+3. Add primitives one at a time, justified by specific task IDs
+4. Re-add structural strategies only when Phase 2 data supports them
+
+**Baseline:** 28/400 train (7.0%), 6/400 eval (1.5%), 394 tests passing.
+
+---
 *This document will be updated with each new session and major decision.*
