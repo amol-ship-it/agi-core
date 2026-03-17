@@ -197,10 +197,12 @@ class Learner:
     def _wake_phases(self):
         """Return the ordered list of wake phase methods.
 
-        STRIPPED: Only exhaustive enumeration + color fix.
+        Each phase takes a _WakeContext and returns a phase name string
+        if the task was solved, or None to continue to the next phase.
         """
         return [
             self._phase_exhaustive,
+            self._phase_near_miss_refinement,
             self._phase_color_fix,
         ]
 
@@ -220,8 +222,27 @@ class Learner:
         logger.debug(f"  [wake] Phase 1 enumeration: {time.time()-t:.2f}s, {ctx.n_evals} evals")
         return "enumeration" if ctx.solved else None
 
+    def _phase_near_miss_refinement(self, ctx: _WakeContext) -> Optional[str]:
+        """Append/prepend primitives to near-miss programs."""
+        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
+            return None
+        if ctx.cfg.near_miss_threshold <= 0:
+            return None
+        t = time.time()
+        n_examples = max(len(ctx.task.train_examples), 1)
+        threshold = min(ctx.cfg.near_miss_threshold, 2.0 / n_examples)
+        refined, n_evals = self._near_miss_refine(
+            ctx.enum_candidates, ctx.all_prims, ctx.task, threshold)
+        ctx.n_evals += n_evals
+        for sp in refined:
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+        ctx.enum_candidates.extend(refined)
+        logger.debug(f"  [wake] Near-miss refine: {time.time()-t:.2f}s, {n_evals} evals")
+        return "near-miss refinement" if ctx.solved else None
+
     def _phase_color_fix(self, ctx: _WakeContext) -> Optional[str]:
-        """Phase 2: Learn color remapping from near-miss programs."""
+        """Learn color remapping from near-miss programs."""
         if ctx.solved or not ctx.enum_candidates:
             return None
         t = time.time()
@@ -937,6 +958,152 @@ class Learner:
                         return scored, n_evals
 
         return scored, n_evals
+
+    # -------------------------------------------------------------------------
+    # Near-miss refinement
+    # -------------------------------------------------------------------------
+
+    def _near_miss_refine(
+        self,
+        candidates: list[ScoredProgram],
+        primitives: list[Primitive],
+        task: Task,
+        threshold: float = 0.20,
+    ) -> tuple[list[ScoredProgram], int]:
+        """For programs scoring close-but-not-perfect, try appending/prepending
+        each unary primitive to fix them.
+
+        Cost: O(near_misses × unary_prims × 2) plus node replacement and
+        two-step refinement for close misses.
+        """
+        solve_thresh = self.search_cfg.solve_threshold
+        near_misses = [
+            sp for sp in candidates
+            if solve_thresh < sp.prediction_error <= threshold
+        ]
+        if not near_misses:
+            return [], 0
+
+        near_misses.sort(key=lambda s: s.prediction_error)
+        near_misses = near_misses[:5]
+
+        all_unary = [p for p in primitives if p.arity <= 1]
+        refined: list[ScoredProgram] = []
+        n_evals = 0
+
+        for nm in near_misses:
+            for prim in all_unary:
+                # Append: prim(near_miss_program)
+                prog_append = Program(
+                    root=prim.name,
+                    children=[copy.deepcopy(nm.program)],
+                )
+                sp = self._evaluate_program(prog_append, task)
+                refined.append(sp)
+                n_evals += 1
+                if sp.prediction_error <= solve_thresh:
+                    return refined, n_evals
+
+                # Prepend: insert prim as the innermost step
+                prog_prepend = copy.deepcopy(nm.program)
+                node = prog_prepend
+                while node.children:
+                    node = node.children[0]
+                old_root = node.root
+                node.root = prim.name
+                node.children = [Program(root=old_root)]
+                sp = self._evaluate_program(prog_prepend, task)
+                refined.append(sp)
+                n_evals += 1
+                if sp.prediction_error <= solve_thresh:
+                    return refined, n_evals
+
+        # Node replacement for depth-1+ near-misses
+        NODE_REPLACE_PRIMS = 60
+        depth1_sorted = sorted(
+            [sp for sp in candidates if sp.program.depth == 1],
+            key=lambda s: s.prediction_error)
+        replace_names = set()
+        for sp in depth1_sorted:
+            replace_names.add(sp.program.root)
+            if len(replace_names) >= NODE_REPLACE_PRIMS:
+                break
+        replace_prims = [p for p in all_unary if p.name in replace_names]
+
+        for nm in near_misses:
+            if nm.program.depth < 1:
+                continue
+            nodes_to_replace: list[Program] = []
+
+            def _collect(node: Program, parent: Optional[Program] = None):
+                if parent is not None:
+                    nodes_to_replace.append(node)
+                for child in (node.children or []):
+                    _collect(child, node)
+
+            _collect(nm.program)
+            for target_node in nodes_to_replace:
+                original_root = target_node.root
+                for prim in replace_prims:
+                    if prim.name == original_root:
+                        continue
+                    target_node.root = prim.name
+                    prog_replaced = copy.deepcopy(nm.program)
+                    target_node.root = original_root
+                    sp = self._evaluate_program(prog_replaced, task)
+                    refined.append(sp)
+                    n_evals += 1
+                    if sp.prediction_error <= solve_thresh:
+                        return refined, n_evals
+
+        # Two-step refinement for close misses (error < 0.10)
+        TWO_STEP_THRESHOLD = 0.10
+        close_misses = [sp for sp in refined if sp.prediction_error < TWO_STEP_THRESHOLD]
+        if not close_misses:
+            close_misses = [nm for nm in near_misses if nm.prediction_error < TWO_STEP_THRESHOLD]
+        if close_misses:
+            close_misses.sort(key=lambda s: s.prediction_error)
+            close_misses = close_misses[:5]
+            for cm in close_misses:
+                for prim in all_unary:
+                    prog_outer = Program(
+                        root=prim.name,
+                        children=[copy.deepcopy(cm.program)],
+                    )
+                    sp = self._evaluate_program(prog_outer, task)
+                    refined.append(sp)
+                    n_evals += 1
+                    if sp.prediction_error <= solve_thresh:
+                        return refined, n_evals
+
+        # Binary near-miss refinement
+        binary_prims = [p for p in primitives if p.arity == 2 and p.kind == "transform"]
+        if binary_prims:
+            BINARY_TOP_K = 15
+            top_depth1 = sorted(
+                [sp for sp in candidates if sp.program.depth == 1],
+                key=lambda s: s.prediction_error)[:BINARY_TOP_K]
+            for nm in near_misses[:5]:
+                for bp in binary_prims:
+                    for other in top_depth1:
+                        prog_a = Program(root=bp.name, children=[
+                            copy.deepcopy(nm.program),
+                            copy.deepcopy(other.program)])
+                        sp = self._evaluate_program(prog_a, task)
+                        refined.append(sp)
+                        n_evals += 1
+                        if sp.prediction_error <= solve_thresh:
+                            return refined, n_evals
+                        prog_b = Program(root=bp.name, children=[
+                            copy.deepcopy(other.program),
+                            copy.deepcopy(nm.program)])
+                        sp = self._evaluate_program(prog_b, task)
+                        refined.append(sp)
+                        n_evals += 1
+                        if sp.prediction_error <= solve_thresh:
+                            return refined, n_evals
+
+        return refined, n_evals
 
     # -------------------------------------------------------------------------
     # Color fix
