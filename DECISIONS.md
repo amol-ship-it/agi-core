@@ -3224,5 +3224,15 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Current state:** 47/400 train (11.8%), 14/400 eval (3.5%), 34 primitives, 411 tests.
 
+### Decision 114: Inner Pool Fix + Search Experiments
+
+**Inner pool fix (MERGED to main):** Essential pair concepts now bypass INNER_STEP_THRESHOLD (0.70) in depth-2 search. Extraction primitives like `extract_unique_color_region` were pruned as inner steps despite being critical for compositions. Result: eval 14→17 (+3). Train 47 stable.
+
+**Interleaving experiment (REVERTED):** Tested interleaving essentials into outer pair pool for earlier budget access. Result: train 47→49 (+2), eval 17→15 (-2). Total unchanged (64 vs 64). Reverted because eval (generalization) matters more.
+
+**Compounding experiment:** Round 3 adds nothing at quick budget (47→47). Round 2 gains +3 (44→47). Compounding is saturated with current library quality.
+
+**Current state:** 47/400 train (11.8%), 17/400 eval (4.2%), 34 primitives, 411 tests.
+
 ---
 *This document will be updated with each new session and major decision.*
