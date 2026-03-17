@@ -270,6 +270,9 @@ class ARCEnv(Environment):
         result = self._try_separator_marker_ops(task)
         if result is not None:
             return result
+        result = self._try_subgrid_selection(task)
+        if result is not None:
+            return result
         return None
 
     def _try_boolean_halves(
@@ -774,6 +777,68 @@ class ARCEnv(Environment):
             prim = Primitive(name=name, arity=0, fn=fn2, domain="arc")
             self.register_primitive(prim)
             return (name, fn2)
+
+        return None
+
+    def _try_subgrid_selection(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Extract subgrid by property: densest or most-colorful region.
+
+        For tasks where output is smaller than input, tries extracting
+        the output-sized subgrid that maximizes a specific property.
+
+        Justified by tasks a87f7484, d9fac9be, 2013d3e2, d10ecb37.
+        """
+        from .objects import _test_on_examples
+        examples = task.train_examples
+        if not examples:
+            return None
+        # Output must be smaller than input (extraction task)
+        oh = len(examples[0][1])
+        ow = len(examples[0][1][0]) if examples[0][1] else 0
+        for inp, out in examples:
+            if len(out) != oh or len(out[0]) != ow:
+                return None
+            if oh >= len(inp) and ow >= len(inp[0]):
+                return None  # not an extraction
+
+        def _select(grid, oh, ow, score_fn):
+            ih, iw = len(grid), len(grid[0])
+            if oh > ih or ow > iw:
+                return grid
+            best_pos, best_score = (0, 0), -1
+            for r in range(ih - oh + 1):
+                for c in range(iw - ow + 1):
+                    s = score_fn(grid, r, c, oh, ow)
+                    if s > best_score:
+                        best_score = s
+                        best_pos = (r, c)
+            r, c = best_pos
+            return [grid[r + dr][c:c + ow] for dr in range(oh)]
+
+        def _densest(grid, r, c, oh, ow):
+            return sum(1 for dr in range(oh) for dc in range(ow)
+                       if grid[r + dr][c + dc] != 0)
+
+        def _most_colorful(grid, r, c, oh, ow):
+            return len(set(grid[r + dr][c + dc]
+                           for dr in range(oh) for dc in range(ow)))
+
+        for strat_name, score_fn in [
+            ("densest_subgrid", _densest),
+            ("most_colorful_subgrid", _most_colorful),
+        ]:
+            def _make_fn(sf=score_fn, h=oh, w=ow):
+                def fn(grid):
+                    return _select(grid, h, w, sf)
+                return fn
+
+            fn = _make_fn()
+            if _test_on_examples(fn, examples):
+                prim = Primitive(name=strat_name, arity=0, fn=fn, domain="arc")
+                self.register_primitive(prim)
+                return (strat_name, fn)
 
         return None
 
