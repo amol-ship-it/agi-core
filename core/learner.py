@@ -274,6 +274,26 @@ class Learner:
         logger.debug(f"  [wake] Cross-reference: {time.time()-t:.2f}s")
         return "cross-reference" if ctx.solved else None
 
+    def _phase_conditional_search(self, ctx: _WakeContext) -> Optional[str]:
+        """Try if(predicate, A, B) programs."""
+        if not self.grammar.allow_structural_phases():
+            return None
+        predicates = self.grammar.get_predicates()
+        if not predicates or not ctx.enum_candidates or not ctx.budget_ok():
+            return None
+        if ctx.solved:
+            return None
+        t = time.time()
+        result, n_evals = self._try_conditional_search(
+            predicates, ctx.enum_candidates, ctx.all_prims, ctx.task)
+        ctx.n_evals += n_evals
+        if result is not None:
+            self._update_pareto_front(ctx.pareto, result)
+            ctx.update_best(result)
+            ctx.enum_candidates.append(result)
+        logger.debug(f"  [wake] Conditional: {time.time()-t:.2f}s, {n_evals} evals")
+        return "conditional" if ctx.solved else None
+
     def _phase_color_fix(self, ctx: _WakeContext) -> Optional[str]:
         """Learn color remapping from near-miss programs."""
         if ctx.solved or not ctx.enum_candidates:
@@ -1067,6 +1087,100 @@ class Learner:
                 best_fix = sp
 
         return best_fix
+
+    # -------------------------------------------------------------------------
+    # Conditional search
+    # -------------------------------------------------------------------------
+
+    def _try_conditional_search(
+        self,
+        predicates: list[tuple[str, callable]],
+        candidates: list[ScoredProgram],
+        primitives: list[Primitive],
+        task: Task,
+        top_k: int = 15,
+    ) -> tuple[Optional[ScoredProgram], int]:
+        """Search for if(pred, A, B) programs.
+
+        For each predicate that non-trivially splits the training examples,
+        score top-K primitives on each group, then try best 5x5 combinations.
+        """
+        n_evals = 0
+        solve_thresh = self.search_cfg.solve_threshold
+
+        # Build candidate pool from top depth-1 programs
+        depth1 = sorted(
+            [sp for sp in candidates if sp.program.depth == 1],
+            key=lambda s: s.prediction_error)
+        prim_map = {p.name: p for p in primitives}
+        seen = set()
+        top_prims = []
+        for sp in depth1:
+            if sp.program.root not in seen and sp.program.root in prim_map:
+                top_prims.append(prim_map[sp.program.root])
+                seen.add(sp.program.root)
+            if len(top_prims) >= top_k:
+                break
+
+        if len(top_prims) < 2:
+            return None, 0
+
+        best_result: Optional[ScoredProgram] = None
+
+        for pred_name, pred_fn in predicates:
+            true_idx, false_idx = [], []
+            for idx, (inp, _) in enumerate(task.train_examples):
+                try:
+                    (true_idx if pred_fn(inp) else false_idx).append(idx)
+                except Exception:
+                    false_idx.append(idx)
+
+            if not true_idx or not false_idx:
+                continue
+
+            # Score each candidate on each group
+            true_scores = []
+            false_scores = []
+            for prim in top_prims:
+                te = sum(self.drive.prediction_error(
+                    prim.fn(task.train_examples[i][0]), task.train_examples[i][1])
+                    for i in true_idx) / len(true_idx)
+                fe = sum(self.drive.prediction_error(
+                    prim.fn(task.train_examples[i][0]), task.train_examples[i][1])
+                    for i in false_idx) / len(false_idx)
+                true_scores.append((te, prim))
+                false_scores.append((fe, prim))
+
+            true_scores.sort(key=lambda x: x[0])
+            false_scores.sort(key=lambda x: x[0])
+
+            for then_p in [p for _, p in true_scores[:5]]:
+                for else_p in [p for _, p in false_scores[:5]]:
+                    if then_p.name == else_p.name:
+                        continue
+
+                    def _make(pf, tf, ef):
+                        def fn(g):
+                            try:
+                                return tf(g) if pf(g) else ef(g)
+                            except Exception:
+                                return g
+                        return fn
+
+                    cond_fn = _make(pred_fn, then_p.fn, else_p.fn)
+                    cond_name = f"if_{pred_name}_{then_p.name}_else_{else_p.name}"
+                    cond_prim = Primitive(
+                        name=cond_name, arity=1, fn=cond_fn, domain="arc")
+                    self.env.register_primitive(cond_prim)
+
+                    sp = self._evaluate_program(Program(root=cond_name), task)
+                    n_evals += 1
+                    if sp.prediction_error <= solve_thresh:
+                        return sp, n_evals
+                    if best_result is None or sp.energy < best_result.energy:
+                        best_result = sp
+
+        return best_result, n_evals
 
     # -------------------------------------------------------------------------
     # Private helpers
