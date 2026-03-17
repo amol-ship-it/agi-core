@@ -3274,5 +3274,30 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Current state:** 56/400 train (14.0%), 18/400 eval (4.5%), 34 primitives, 411 tests.
 
+### Decision 117: Local Rules Phase — Learned Cellular Automaton Rules
+
+**Insight:** 42 unsolved tasks have a consistent 3x3→1 neighborhood rule on training. However, raw lookup tables overfit (42→4 with LOOCV). Compact feature-based rules generalize better (6-10 LOOCV-validated).
+
+**Approach:** New wake phase `_phase_local_rules` learns cell-level rules from training examples:
+1. **Compact rule:** (center_color, n_nonzero_4neighbors, majority_4neighbor_color) → output_color
+2. **Count rule:** (center_color, n_nonzero_8neighbors) → output_color
+3. **Raw 3x3:** Full 9-cell neighborhood → output_color
+
+Each rule is LOOCV-validated: learned from N-1 examples, verified on the held-out example. This prevents overfitting while allowing task-specific rule learning.
+
+**Key principle:** Instead of adding more grid-level primitives (diminishing returns), learn CELL-LEVEL rules from examples. This is a fundamentally different search strategy — data-driven rather than vocabulary-driven.
+
+**Result:** Train 56→64 (+8), Eval 18→19 (+1). Pipeline time unchanged (~2min).
+
+**Analysis path:**
+- Categorized 341 unsolved tasks: moderate_transform 97 (28%), extraction 73 (21%), fill_gaps 59 (17%), same_structure_recolor 36 (11%)
+- Tested 49 structure-match tasks for color correction — existing perception primitives can't detect task-specific colors
+- Discovered neighborhood rules as a principled alternative
+- Raw 3x3: 42 train-solvable → 4 LOOCV-validated (overfits)
+- Compact features: 12 train-solvable → 6 LOOCV-validated (generalizes)
+- Combined three rule types: 10 unique LOOCV tasks, 8 new solves in practice
+
+**Current state:** 64/400 train (16.0%), 19/400 eval (4.8%), 34 primitives, 411 tests.
+
 ---
 *This document will be updated with each new session and major decision.*
