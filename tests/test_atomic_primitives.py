@@ -19,7 +19,7 @@ class TestAtomicPrimitivesPlaceholder(unittest.TestCase):
         )
         from domains.arc.perception_primitives import build_perception_primitives
 
-        self.assertEqual(len(build_atomic_primitives()), 27)
+        self.assertEqual(len(build_atomic_primitives()), 28)
         self.assertEqual(len(build_parameterized_primitives()), 9)
         self.assertEqual(len(build_perception_primitives()), 12)
 
@@ -66,6 +66,39 @@ class TestExtractLargestCC(unittest.TestCase):
         for i, ex in enumerate(task['train']):
             result = extract_largest_cc(ex['input'])
             self.assertEqual(result, ex['output'], f"Failed on train {i}")
+
+
+class TestExtractUniqueColorRegion(unittest.TestCase):
+    """Test extract_unique_color_region primitive.
+
+    Justification: tasks c909285e, 0b148d64, 23b5c85d.
+    """
+
+    def test_simple(self):
+        from domains.arc.transformation_primitives import extract_unique_color_region
+        grid = [
+            [1, 1, 1, 0, 0],
+            [1, 1, 1, 0, 0],
+            [0, 0, 3, 3, 0],
+            [0, 0, 3, 2, 0],
+            [0, 0, 3, 2, 0],
+        ]
+        # Color 2 is rarest (2 pixels), bbox is rows 3-4, cols 3-3
+        result = extract_unique_color_region(grid)
+        self.assertEqual(result, [[2], [2]])
+
+    def test_on_real_tasks(self):
+        import json, os
+        from domains.arc.transformation_primitives import extract_unique_color_region
+        for tid in ['c909285e', '0b148d64', '23b5c85d']:
+            path = f'data/ARC-AGI/data/training/{tid}.json'
+            if not os.path.exists(path):
+                continue
+            with open(path) as f:
+                task = json.load(f)
+            for i, ex in enumerate(task['train']):
+                result = extract_unique_color_region(ex['input'])
+                self.assertEqual(result, ex['output'], f"Failed on {tid} train {i}")
 
 
 class TestInpaintPeriodic(unittest.TestCase):

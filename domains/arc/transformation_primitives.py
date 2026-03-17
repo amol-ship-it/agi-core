@@ -338,6 +338,29 @@ def extract_largest_cc(grid: Grid) -> Grid:
     return [grid[r][c0:c1 + 1] for r in range(r0, r1 + 1)]
 
 
+def extract_unique_color_region(grid: Grid) -> Grid:
+    """Extract bounding box of the region with the rarest non-zero color.
+
+    Finds the least-common non-zero color and returns the bounding box
+    containing all pixels of that color.
+
+    Justified by tasks c909285e, 0b148d64, 23b5c85d.
+    """
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    h, w = len(grid), len(grid[0])
+    colors = Counter(c for row in grid for c in row if c != 0)
+    if not colors:
+        return grid
+    rarest = colors.most_common()[-1][0]
+    rows = [r for r in range(h) for c in range(w) if grid[r][c] == rarest]
+    cols = [c for r in range(h) for c in range(w) if grid[r][c] == rarest]
+    if not rows:
+        return grid
+    return [grid[r][min(cols):max(cols) + 1] for r in range(min(rows), max(rows) + 1)]
+
+
 # --- Inpainting transforms ---
 
 def inpaint_periodic(grid: Grid) -> Grid:
@@ -461,8 +484,9 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
-        # Extraction (1)
+        # Extraction (2)
         ("extract_largest_cc",          extract_largest_cc),
+        ("extract_unique_color_region", extract_unique_color_region),
         # Inpainting (1)
         ("inpaint_periodic",            inpaint_periodic),
     ]
