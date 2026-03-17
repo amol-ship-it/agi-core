@@ -296,6 +296,48 @@ def sort_cols_by_nonzero(grid: Grid) -> Grid:
     return [[cols[c][r] for c in range(w)] for r in range(h)]
 
 
+# --- Extraction transforms ---
+
+def extract_largest_cc(grid: Grid) -> Grid:
+    """Extract bounding box of the largest connected component.
+
+    Finds the largest 4-connected non-zero region and returns its
+    bounding box as a cropped subgrid.
+
+    Justified by tasks be94b721, 1f85a75f.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    visited = [[False] * w for _ in range(h)]
+    best_comp: list[tuple[int, int]] = []
+
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0 and not visited[r][c]:
+                comp: list[tuple[int, int]] = []
+                stack = [(r, c)]
+                visited[r][c] = True
+                while stack:
+                    cr, cc = stack.pop()
+                    comp.append((cr, cc))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr][nc] and grid[nr][nc] != 0:
+                            visited[nr][nc] = True
+                            stack.append((nr, nc))
+                if len(comp) > len(best_comp):
+                    best_comp = comp
+
+    if not best_comp:
+        return grid
+    rows_c = [p[0] for p in best_comp]
+    cols_c = [p[1] for p in best_comp]
+    r0, r1 = min(rows_c), max(rows_c)
+    c0, c1 = min(cols_c), max(cols_c)
+    return [grid[r][c0:c1 + 1] for r in range(r0, r1 + 1)]
+
+
 # --- Inpainting transforms ---
 
 def inpaint_periodic(grid: Grid) -> Grid:
@@ -419,6 +461,8 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
+        # Extraction (1)
+        ("extract_largest_cc",          extract_largest_cc),
         # Inpainting (1)
         ("inpaint_periodic",            inpaint_periodic),
     ]

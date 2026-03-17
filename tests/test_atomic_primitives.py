@@ -19,9 +19,53 @@ class TestAtomicPrimitivesPlaceholder(unittest.TestCase):
         )
         from domains.arc.perception_primitives import build_perception_primitives
 
-        self.assertEqual(len(build_atomic_primitives()), 26)
+        self.assertEqual(len(build_atomic_primitives()), 27)
         self.assertEqual(len(build_parameterized_primitives()), 9)
         self.assertEqual(len(build_perception_primitives()), 12)
+
+
+class TestExtractLargestCC(unittest.TestCase):
+    """Test extract_largest_cc primitive.
+
+    Justification: tasks be94b721 and 1f85a75f.
+    """
+
+    def test_simple_extraction(self):
+        from domains.arc.transformation_primitives import extract_largest_cc
+        grid = [
+            [0, 0, 1, 0, 0],
+            [0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 0],
+            [3, 3, 0, 0, 0],
+            [3, 3, 0, 0, 0],
+            [3, 3, 0, 0, 0],
+        ]
+        result = extract_largest_cc(grid)
+        self.assertEqual(result, [[3, 3], [3, 3], [3, 3]])
+
+    def test_on_real_task_be94b721(self):
+        import json, os
+        path = 'data/ARC-AGI/data/training/be94b721.json'
+        if not os.path.exists(path):
+            self.skipTest("ARC data not available")
+        from domains.arc.transformation_primitives import extract_largest_cc
+        with open(path) as f:
+            task = json.load(f)
+        for i, ex in enumerate(task['train']):
+            result = extract_largest_cc(ex['input'])
+            self.assertEqual(result, ex['output'], f"Failed on train {i}")
+
+    def test_on_real_task_1f85a75f(self):
+        import json, os
+        path = 'data/ARC-AGI/data/training/1f85a75f.json'
+        if not os.path.exists(path):
+            self.skipTest("ARC data not available")
+        from domains.arc.transformation_primitives import extract_largest_cc
+        with open(path) as f:
+            task = json.load(f)
+        for i, ex in enumerate(task['train']):
+            result = extract_largest_cc(ex['input'])
+            self.assertEqual(result, ex['output'], f"Failed on train {i}")
 
 
 class TestInpaintPeriodic(unittest.TestCase):
