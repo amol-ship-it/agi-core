@@ -340,8 +340,8 @@ class Learner:
         solve_thresh = self.search_cfg.solve_threshold
         task = ctx.task
 
-        # Try top-20 candidates by error
-        candidates = sorted(ctx.enum_candidates, key=lambda s: s.prediction_error)[:20]
+        # Try ALL same-dims candidates (correction only works when dims match)
+        candidates = sorted(ctx.enum_candidates, key=lambda s: s.prediction_error)[:200]
 
         for nm in candidates:
             if nm.prediction_error <= solve_thresh:
