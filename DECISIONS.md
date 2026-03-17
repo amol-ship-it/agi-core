@@ -3160,5 +3160,15 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Conclusion:** The near-misses reveal that the next breakthroughs require genuine new spatial reasoning primitives (pattern detection, noise removal, line detection), not more of the same transform-compose approach.
 
+### Decision 110: Add inpaint_periodic primitive — Train 28→32 (+4), Eval 6→10 (+4)
+
+**Hypothesis:** Task 29ec7d0e (err=0.007) has a periodic tile pattern with zero-patches. A primitive that detects the tile period and fills zeros should solve it.
+
+**Implementation:** `inpaint_periodic(grid)` — tries all tile sizes (ph, pw) from 1 to grid_size. For each, checks if all non-zero cells are consistent with `grid[r][c] == tile[r%ph][c%pw]`. Uses the smallest consistent tile to fill zeros.
+
+**Result:** +4 train solves, +4 eval solves. One primitive, 50 lines of code. This is the highest-ROI addition in the project's history (4 eval solves from 1 primitive).
+
+**Note:** Task 73251a56 (err=0.006) has a diagonal band pattern, not a simple 2D tile. Needs a different approach — flagged as future work.
+
 ---
 *This document will be updated with each new session and major decision.*
