@@ -19,13 +19,11 @@ def derive_search_params(eval_budget: int, n_prims: int = 48) -> dict:
     Allocates budget to highest-ROI phases first:
     1. Depth-1 exhaustive (always, ~n_prims evals)
     2. Structural phases (always, ~1000 evals)
-    3. Near-miss refinement (~5 × n_prims evals)
-    4. Depth-2 pairs (pair_top_k² × 0.6 evals)
-    5. Depth-3 triples (triple_top_k³ evals)
-    6. Beam search (beam_width × max_gen × 4.3 evals)
+    3. Depth-2 pairs (pair_top_k² × 0.6 evals)
+    4. Depth-3 triples (triple_top_k³ evals)
     """
     # Fixed costs (always allocated)
-    fixed = n_prims + 1000 + 5 * n_prims  # depth-1 + structural + near-miss
+    fixed = n_prims + 1000  # depth-1 + structural
     remaining = max(0, eval_budget - fixed)
 
     # Depth-2: pair_top_k scales with sqrt(remaining)
@@ -41,18 +39,11 @@ def derive_search_params(eval_budget: int, n_prims: int = 48) -> dict:
     else:
         triple_top_k = 8
 
-    # Beam: fill remaining budget
-    if remaining > 200:
-        beam_width = min(30, max(1, int(math.sqrt(remaining / 4.3))))
-        max_gen = min(15, max(1, remaining // max(beam_width * 4, 1)))
-    else:
-        beam_width, max_gen = 1, 1
-
     return {
         "exhaustive_pair_top_k": pair_top_k,
         "exhaustive_triple_top_k": triple_top_k,
-        "beam_width": beam_width,
-        "max_generations": max_gen,
+        "beam_width": 1,
+        "max_generations": 1,
     }
 
 
