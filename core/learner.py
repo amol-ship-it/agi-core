@@ -905,6 +905,8 @@ class Learner:
             for inner_name in inner_pool:
                 if not _budget_ok():
                     break
+                if inner_name in noop_prims:
+                    continue  # outer(identity(x)) = outer(x), already tested
                 prog = Program(root=outer_name, children=[
                     Program(root=inner_name)])
                 sp = self._evaluate_program(prog, task)

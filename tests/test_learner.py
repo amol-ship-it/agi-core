@@ -907,8 +907,8 @@ class TestRunnerHelpers(unittest.TestCase):
             exhaustive_pair_top_k=None, exhaustive_triple_top_k=None,
         )
         resolved = resolve_from_preset(args, PRESETS["quick"])
-        self.assertEqual(resolved["rounds"], 2)  # auto-derived from 500K
-        self.assertEqual(resolved["compute_cap"], 500_000)
+        self.assertEqual(resolved["rounds"], 2)  # auto-derived from 1M
+        self.assertEqual(resolved["compute_cap"], 1_000_000)
         # Auto-derived params present
         self.assertIn("beam_width", resolved)
         self.assertIn("exhaustive_pair_top_k", resolved)
@@ -1004,7 +1004,7 @@ class TestRunnerHelpers(unittest.TestCase):
     def test_compute_cap_presets(self):
         """All presets have expected compute_cap values."""
         from common.benchmark import PRESETS
-        self.assertEqual(PRESETS["quick"]["compute_cap"], 500_000)
+        self.assertEqual(PRESETS["quick"]["compute_cap"], 1_000_000)
         self.assertEqual(PRESETS["default"]["compute_cap"], 3_000_000)
         self.assertEqual(PRESETS["contest"]["compute_cap"], 50_000_000)
 
