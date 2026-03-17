@@ -19,7 +19,7 @@ class TestAtomicPrimitivesPlaceholder(unittest.TestCase):
         )
         from domains.arc.perception_primitives import build_perception_primitives
 
-        self.assertEqual(len(build_atomic_primitives()), 35)
+        self.assertEqual(len(build_atomic_primitives()), 37)
         self.assertEqual(len(build_parameterized_primitives()), 9)
         self.assertEqual(len(build_perception_primitives()), 12)
 

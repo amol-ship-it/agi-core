@@ -296,6 +296,56 @@ def sort_cols_by_nonzero(grid: Grid) -> Grid:
     return [[cols[c][r] for c in range(w)] for r in range(h)]
 
 
+# --- Connection transforms ---
+
+def connect_same_color_h(grid: Grid) -> Grid:
+    """Fill zeros between same-color pixels horizontally.
+
+    For each row, if two pixels of the same color have only zeros
+    between them, fill the gap with that color.
+
+    Justified by tasks 22eb0ac0, 22168020.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        color_positions: dict[int, list[int]] = {}
+        for c in range(w):
+            if grid[r][c] != 0:
+                color_positions.setdefault(grid[r][c], []).append(c)
+        for color, positions in color_positions.items():
+            if len(positions) >= 2:
+                for c in range(min(positions), max(positions) + 1):
+                    if result[r][c] == 0:
+                        result[r][c] = color
+    return result
+
+
+def connect_same_color_v(grid: Grid) -> Grid:
+    """Fill zeros between same-color pixels vertically.
+
+    For each column, if two pixels of the same color have only zeros
+    between them, fill the gap with that color.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for c in range(w):
+        color_positions: dict[int, list[int]] = {}
+        for r in range(h):
+            if grid[r][c] != 0:
+                color_positions.setdefault(grid[r][c], []).append(r)
+        for color, positions in color_positions.items():
+            if len(positions) >= 2:
+                for r in range(min(positions), max(positions) + 1):
+                    if result[r][c] == 0:
+                        result[r][c] = color
+    return result
+
+
 # --- Edge detection transforms ---
 
 def outline(grid: Grid) -> Grid:
@@ -625,6 +675,9 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
+        # Connection (2)
+        ("connect_same_color_h",        connect_same_color_h),
+        ("connect_same_color_v",        connect_same_color_v),
         # Edge detection (1)
         ("outline",                     outline),
         # Extraction (2)
