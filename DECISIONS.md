@@ -3234,5 +3234,28 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Current state:** 47/400 train (11.8%), 17/400 eval (4.2%), 34 primitives, 411 tests.
 
+### Decision 115: Budget Sweet-Spot Analysis + Quick Preset Increase
+
+**Diagnostic:** Ran all 400 tasks at 5 compute budgets to find the sweet spot:
+
+| Budget | Train | Eval | Pipeline |
+|--------|-------|------|----------|
+| 500K | 47 | 17 | 1m09s |
+| 600K | 49 | 17 | — |
+| 750K | 53 | 17 | — |
+| **1M** | **54** | **18** | **1m51s** |
+| 1.5M | 53 | 17 | — |
+| 2M | 54 | 17 | 2m16s |
+
+**Conclusion:** 1M is the clear sweet spot. Beyond 1M, returns diminish. The budget was the binding constraint — depth-2 compositions with extraction/tiling primitives weren't reached before budget exhaustion.
+
+**Change:** Quick preset compute_cap 500K → 1M.
+
+**Also tested dimension-aware ordering:** Extraction prims first for shrink tasks, tiling for grow. Result: +1 train, -1 eval (net zero). Not committed — budget increase alone captures the gains.
+
+**Also added:** Noop inner step skip in depth-2 (correctness fix, no solve change).
+
+**Current state:** 54/400 train (13.5%), 18/400 eval (4.5%), 34 primitives, 411 tests.
+
 ---
 *This document will be updated with each new session and major decision.*
