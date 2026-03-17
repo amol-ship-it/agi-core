@@ -402,6 +402,76 @@ class ARCEnv(Environment):
 
         return None
 
+    def try_conditional_per_object(
+        self, task: Task, candidate_programs: list[ScoredProgram],
+        predicates: list, top_k: int = 8,
+    ) -> Optional[tuple[str, Any]]:
+        """Try if(pred, A, B) per object."""
+        from .objects import (
+            find_foreground_shapes, place_subgrid,
+            _get_background_color, _test_on_examples,
+        )
+        if not task.train_examples or not predicates:
+            return None
+        for inp, out in task.train_examples:
+            if len(inp) != len(out):
+                return None
+            if inp and out and len(inp[0]) != len(out[0]):
+                return None
+
+        bg_color = _get_background_color(task.train_examples[0][0])
+        sorted_cands = sorted(candidate_programs,
+                              key=lambda s: s.prediction_error)[:top_k]
+        env = self
+
+        for pred_name, pred_fn in predicates:
+            for i, sp_a in enumerate(sorted_cands):
+                for sp_b in sorted_cands[i + 1:]:
+                    prog_a, prog_b = sp_a.program, sp_b.program
+
+                    def _make_cond_fn(pa=prog_a, pb=prog_b, pf=pred_fn,
+                                      e=env, bg=bg_color):
+                        def fn(grid):
+                            shapes = find_foreground_shapes(grid)
+                            if not shapes:
+                                return grid
+                            h, w = len(grid), len(grid[0]) if grid else 0
+                            canvas = [[bg] * w for _ in range(h)]
+                            for shape in shapes:
+                                sg = shape["subgrid"]
+                                try:
+                                    use_a = pf(sg)
+                                except Exception:
+                                    use_a = False
+                                prog = pa if use_a else pb
+                                try:
+                                    transformed = e._eval_tree(prog, sg)
+                                    if not isinstance(transformed, list):
+                                        transformed = sg
+                                except Exception:
+                                    transformed = sg
+                                canvas = place_subgrid(
+                                    canvas, transformed, shape["position"],
+                                    transparent_color=bg)
+                            return canvas
+                        return fn
+
+                    fn = _make_cond_fn()
+                    if _test_on_examples(fn, task.train_examples):
+                        name = f"cond_per_obj({pred_name},{repr(prog_a)},{repr(prog_b)})"
+                        prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                        self.register_primitive(prim)
+                        return (name, fn)
+
+                    fn2 = _make_cond_fn(pa=prog_b, pb=prog_a)
+                    if _test_on_examples(fn2, task.train_examples):
+                        name = f"cond_per_obj({pred_name},{repr(prog_b)},{repr(prog_a)})"
+                        prim = Primitive(name=name, arity=0, fn=fn2, domain="arc")
+                        self.register_primitive(prim)
+                        return (name, fn2)
+
+        return None
+
     def try_cross_reference(
         self, task: Task, primitives: list[Primitive],
     ) -> Optional[tuple[str, Any]]:

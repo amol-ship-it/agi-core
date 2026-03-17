@@ -43,8 +43,44 @@ class ARCGrammar(Grammar):
         return True
 
     def get_predicates(self) -> list[tuple[str, callable]]:
-        """Return input→bool predicates. Currently empty."""
-        return []
+        """Return input->bool predicates for conditional search."""
+        from collections import Counter
+        from .objects import _find_connected_components
+
+        def _safe_components(grid):
+            try:
+                return _find_connected_components(grid)
+            except Exception:
+                return []
+
+        def _n_foreground_colors(g):
+            if not g or not g[0]:
+                return 0
+            bg = Counter(c for row in g for c in row).most_common(1)[0][0]
+            return len({c for row in g for c in row if c != bg})
+
+        return [
+            ("has_single_object", lambda g: len(_safe_components(g)) == 1),
+            ("has_many_objects", lambda g: len(_safe_components(g)) > 3),
+            ("is_square", lambda g: len(g) == len(g[0]) if g and g[0] else False),
+            ("is_tall", lambda g: len(g) > len(g[0]) if g and g[0] else False),
+            ("is_wide", lambda g: len(g) < len(g[0]) if g and g[0] else False),
+            ("has_symmetry_h", lambda g: all(
+                g[r] == g[r][::-1] for r in range(len(g))) if g else False),
+            ("is_mostly_bg", lambda g: sum(
+                1 for row in g for c in row if c == 0) > len(g) * len(g[0]) * 0.7
+                if g and g[0] else False),
+            ("has_symmetry_v", lambda g: all(
+                g[r][c] == g[len(g) - 1 - r][c]
+                for r in range(len(g)) for c in range(len(g[0])))
+                if g and g[0] else False),
+            ("is_small_grid", lambda g: len(g) * len(g[0]) < 100
+                if g and g[0] else True),
+            ("has_few_colors", lambda g: _n_foreground_colors(g) <= 2),
+            ("has_many_colors", lambda g: _n_foreground_colors(g) > 4),
+            ("all_objects_same_size", lambda g: len(set(
+                comp["size"] for comp in _safe_components(g))) <= 1),
+        ]
 
     def essential_pair_concepts(self) -> frozenset[str]:
         from .transformation_primitives import ATOMIC_ESSENTIAL_PAIR_CONCEPTS
