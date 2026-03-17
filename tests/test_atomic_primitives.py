@@ -19,7 +19,7 @@ class TestAtomicPrimitivesPlaceholder(unittest.TestCase):
         )
         from domains.arc.perception_primitives import build_perception_primitives
 
-        self.assertEqual(len(build_atomic_primitives()), 28)
+        self.assertEqual(len(build_atomic_primitives()), 32)
         self.assertEqual(len(build_parameterized_primitives()), 9)
         self.assertEqual(len(build_perception_primitives()), 12)
 
@@ -66,6 +66,61 @@ class TestExtractLargestCC(unittest.TestCase):
         for i, ex in enumerate(task['train']):
             result = extract_largest_cc(ex['input'])
             self.assertEqual(result, ex['output'], f"Failed on train {i}")
+
+
+class TestTilingPrimitives(unittest.TestCase):
+    """Test mirror/rotation tiling primitives."""
+
+    def test_mirror_tile_h(self):
+        from domains.arc.transformation_primitives import mirror_tile_h
+        grid = [[1, 2], [3, 4]]
+        self.assertEqual(mirror_tile_h(grid), [[1, 2, 2, 1], [3, 4, 4, 3]])
+
+    def test_mirror_tile_v(self):
+        from domains.arc.transformation_primitives import mirror_tile_v
+        grid = [[1, 2], [3, 4]]
+        self.assertEqual(mirror_tile_v(grid), [[1, 2], [3, 4], [3, 4], [1, 2]])
+
+    def test_mirror_tile_both(self):
+        from domains.arc.transformation_primitives import mirror_tile_both
+        grid = [[1, 2], [3, 4]]
+        result = mirror_tile_both(grid)
+        self.assertEqual(len(result), 4)
+        self.assertEqual(len(result[0]), 4)
+
+    def test_rotate_tile_cw(self):
+        from domains.arc.transformation_primitives import rotate_tile_cw
+        grid = [[1, 2], [3, 4]]
+        result = rotate_tile_cw(grid)
+        self.assertEqual(len(result), 4)
+        self.assertEqual(len(result[0]), 4)
+
+    def test_rotate_tile_non_square_returns_input(self):
+        from domains.arc.transformation_primitives import rotate_tile_cw
+        grid = [[1, 2, 3], [4, 5, 6]]
+        self.assertEqual(rotate_tile_cw(grid), grid)
+
+    def test_on_real_tasks(self):
+        import json, os
+        from domains.arc.transformation_primitives import (
+            mirror_tile_h, mirror_tile_v, mirror_tile_both, rotate_tile_cw
+        )
+        task_fn = [
+            ('6d0aefbc', mirror_tile_h), ('c9e6f938', mirror_tile_h),
+            ('6fa7a44f', mirror_tile_v), ('8be77c9e', mirror_tile_v),
+            ('67e8384a', mirror_tile_both), ('3af2c5a8', mirror_tile_both),
+            ('62c24649', mirror_tile_both),
+            ('46442a0e', rotate_tile_cw), ('7fe24cdd', rotate_tile_cw),
+        ]
+        for tid, fn in task_fn:
+            path = f'data/ARC-AGI/data/training/{tid}.json'
+            if not os.path.exists(path):
+                continue
+            with open(path) as f:
+                task = json.load(f)
+            for i, ex in enumerate(task['train']):
+                result = fn(ex['input'])
+                self.assertEqual(result, ex['output'], f"Failed on {tid} train {i}")
 
 
 class TestExtractUniqueColorRegion(unittest.TestCase):

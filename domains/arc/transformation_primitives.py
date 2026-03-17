@@ -361,6 +361,58 @@ def extract_unique_color_region(grid: Grid) -> Grid:
     return [grid[r][min(cols):max(cols) + 1] for r in range(min(rows), max(rows) + 1)]
 
 
+# --- Tiling transforms ---
+
+def mirror_tile_h(grid: Grid) -> Grid:
+    """Tile horizontally: original | horizontally-mirrored.
+
+    Justified by tasks 6d0aefbc, c9e6f938.
+    """
+    if not grid or not grid[0]:
+        return grid
+    return [row + row[::-1] for row in grid]
+
+
+def mirror_tile_v(grid: Grid) -> Grid:
+    """Tile vertically: original on top, vertically-mirrored on bottom.
+
+    Justified by tasks 6fa7a44f, 8be77c9e.
+    """
+    if not grid:
+        return grid
+    return grid + grid[::-1]
+
+
+def mirror_tile_both(grid: Grid) -> Grid:
+    """2x2 mirror tile: orig|mirH / mirV|mirHV.
+
+    Justified by tasks 67e8384a, 3af2c5a8, 62c24649.
+    """
+    if not grid or not grid[0]:
+        return grid
+    top = [row + row[::-1] for row in grid]
+    bottom = [row + row[::-1] for row in grid[::-1]]
+    return top + bottom
+
+
+def rotate_tile_cw(grid: Grid) -> Grid:
+    """2x2 rotation tile: orig|rot90 / rot270|rot180. Square grids only.
+
+    Justified by tasks 46442a0e, 7fe24cdd.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    if h != w:
+        return grid
+    r90 = [[grid[h - 1 - c][r] for c in range(h)] for r in range(w)]
+    r180 = [[grid[h - 1 - r][w - 1 - c] for c in range(w)] for r in range(h)]
+    r270 = [[grid[c][w - 1 - r] for c in range(h)] for r in range(w)]
+    top = [grid[r] + r90[r] for r in range(h)]
+    bottom = [r270[r] + r180[r] for r in range(h)]
+    return top + bottom
+
+
 # --- Inpainting transforms ---
 
 def inpaint_periodic(grid: Grid) -> Grid:
@@ -487,6 +539,11 @@ def build_atomic_primitives() -> list[Primitive]:
         # Extraction (2)
         ("extract_largest_cc",          extract_largest_cc),
         ("extract_unique_color_region", extract_unique_color_region),
+        # Tiling (4)
+        ("mirror_tile_h",              mirror_tile_h),
+        ("mirror_tile_v",              mirror_tile_v),
+        ("mirror_tile_both",           mirror_tile_both),
+        ("rotate_tile_cw",             rotate_tile_cw),
         # Inpainting (1)
         ("inpaint_periodic",            inpaint_periodic),
     ]
