@@ -1001,6 +1001,67 @@ class ARCEnv(Environment):
             self.register_primitive(prim)
             return (rule_name, fn)
 
+        # Also try: local rules on TRANSFORMED inputs (depth-2 composition)
+        from .transformation_primitives import fill_enclosed, dilate
+        for transform_name, transform_fn in [
+            ("fill_enclosed", fill_enclosed),
+            ("dilate", dilate),
+        ]:
+            transformed_examples = []
+            ok = True
+            for inp, out in examples:
+                try:
+                    t_inp = transform_fn(inp)
+                    if (not isinstance(t_inp, list) or not t_inp or
+                            len(t_inp) != len(out) or len(t_inp[0]) != len(out[0])):
+                        ok = False
+                        break
+                    transformed_examples.append((t_inp, out))
+                except Exception:
+                    ok = False
+                    break
+            if not ok or len(transformed_examples) < 2:
+                continue
+
+            for rule_name, learn_fn, apply_fn in [
+                ("compact_local_rule", _learn_compact, _apply_compact),
+            ]:
+                rule = learn_fn(transformed_examples)
+                if rule is None:
+                    continue
+                if not _test_on_examples(
+                        lambda g, r=rule, a=apply_fn, t=transform_fn: a(t(g), r),
+                        examples):
+                    continue
+
+                loocv_pass = True
+                for hold_idx in range(len(transformed_examples)):
+                    train_sub = [ex for i, ex in enumerate(transformed_examples)
+                                 if i != hold_idx]
+                    rule_sub = learn_fn(train_sub)
+                    if rule_sub is None:
+                        loocv_pass = False
+                        break
+                    held_inp = transformed_examples[hold_idx][0]
+                    held_exp = transformed_examples[hold_idx][1]
+                    if apply_fn(held_inp, rule_sub) != held_exp:
+                        loocv_pass = False
+                        break
+
+                if not loocv_pass:
+                    continue
+
+                def _make_composed(r=rule, a=apply_fn, t=transform_fn):
+                    def fn(grid):
+                        return a(t(grid), r)
+                    return fn
+
+                fn = _make_composed()
+                name = f"local_rule({transform_name})"
+                prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                self.register_primitive(prim)
+                return (name, fn)
+
         return None
 
     # Maximum intermediate grid size (pixels).
