@@ -296,6 +296,32 @@ def sort_cols_by_nonzero(grid: Grid) -> Grid:
     return [[cols[c][r] for c in range(w)] for r in range(h)]
 
 
+# --- Edge detection transforms ---
+
+def outline(grid: Grid) -> Grid:
+    """Extract edges: keep non-zero pixels that have at least one zero 4-neighbor.
+
+    Equivalent to diff(input, erode(input)). Justified by task 4347f46a.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [[0] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0:
+                continue
+            is_edge = False
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if nr < 0 or nr >= h or nc < 0 or nc >= w or grid[nr][nc] == 0:
+                    is_edge = True
+                    break
+            if is_edge:
+                result[r][c] = grid[r][c]
+    return result
+
+
 # --- Extraction transforms ---
 
 def extract_largest_cc(grid: Grid) -> Grid:
@@ -599,6 +625,8 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
+        # Edge detection (1)
+        ("outline",                     outline),
         # Extraction (2)
         ("extract_largest_cc",          extract_largest_cc),
         ("extract_unique_color_region", extract_unique_color_region),
