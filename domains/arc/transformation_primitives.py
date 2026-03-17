@@ -309,6 +309,23 @@ def compress_rows(grid: Grid) -> Grid:
     return result
 
 
+def unique_cols(grid: Grid) -> Grid:
+    """Remove duplicate columns (keep first occurrence). Justified by task 2dee498d."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    seen: set[tuple[int, ...]] = set()
+    keep: list[int] = []
+    for c in range(w):
+        col = tuple(grid[r][c] for r in range(h))
+        if col not in seen:
+            seen.add(col)
+            keep.append(c)
+    if not keep:
+        return grid
+    return [[grid[r][c] for c in keep] for r in range(h)]
+
+
 def compress_cols(grid: Grid) -> Grid:
     """Remove duplicate consecutive columns."""
     if not grid or not grid[0]:
@@ -747,9 +764,10 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
-        # Compression (2)
+        # Compression (3)
         ("compress_rows",               compress_rows),
         ("compress_cols",               compress_cols),
+        ("unique_cols",                 unique_cols),
         # Ray extension (2)
         ("extend_diag_rays",            extend_diag_rays),
         ("extend_down",                 extend_down),
