@@ -209,6 +209,8 @@ class Learner:
             self._phase_cross_reference,
             self._phase_near_miss_refinement,
             self._phase_color_fix,
+            self._phase_beam_search,
+            self._phase_post_beam_color_fix,
         ]
 
     def _phase_exhaustive(self, ctx: _WakeContext) -> Optional[str]:
@@ -369,6 +371,91 @@ class Learner:
             ctx.update_best(result)
         logger.debug(f"  [wake] Phase 2 color fix: {time.time()-t:.2f}s")
         return "color fix" if ctx.solved else None
+
+    def _phase_beam_search(self, ctx: _WakeContext) -> Optional[str]:
+        """Beam search with mutation/crossover."""
+        if ctx.solved:
+            return None
+        t = time.time()
+        cfg = ctx.cfg
+        best_enum_error = ctx.best_so_far.prediction_error if ctx.best_so_far else 1.0
+        if not ctx.budget_ok():
+            logger.debug(f"  [wake] Beam search: SKIPPED (budget exceeded)")
+            return None
+
+        if cfg.max_generations <= 1:
+            effective_gens = cfg.max_generations
+        elif best_enum_error > 0.3:
+            effective_gens = max(5, cfg.max_generations // 4)
+        elif best_enum_error > 0.15:
+            effective_gens = max(10, cfg.max_generations // 2)
+        else:
+            effective_gens = cfg.max_generations
+
+        seed_progs = [sp.program for sp in sorted(
+            ctx.enum_candidates, key=lambda s: s.energy)[:cfg.beam_width // 2]]
+        n_random = max(cfg.beam_width - len(seed_progs), cfg.beam_width // 2)
+        beam = seed_progs + self._init_beam(ctx.all_prims, n_random)
+
+        for gen in range(effective_gens):
+            ctx.gens_used = gen + 1
+            if not ctx.budget_ok():
+                break
+
+            scored = []
+            for prog in beam:
+                sp = self._evaluate_program(prog, ctx.task)
+                ctx.n_evals += 1
+                scored.append(sp)
+                self._update_pareto_front(ctx.pareto, sp)
+                ctx.update_best(sp)
+
+            if ctx.best_so_far and ctx.best_so_far.energy <= cfg.early_stop_energy:
+                logger.info(f"  [wake] Task {ctx.task.task_id}: perfect solve at gen {gen}")
+                break
+
+            if cfg.semantic_dedup:
+                scored, n_removed = self._semantic_dedup(scored, ctx.task)
+                ctx.total_deduped += n_removed
+
+            scored.sort(key=lambda s: s.energy)
+            survivors = [s.program for s in scored[:cfg.beam_width]]
+            next_gen = list(survivors)
+
+            tm = self._transition_matrix if self._transition_matrix.size > 0 else None
+            for prog in survivors:
+                for _ in range(cfg.mutations_per_candidate):
+                    next_gen.append(self.grammar.mutate(prog, ctx.all_prims, transition_matrix=tm))
+
+            n_cross = int(len(survivors) * cfg.crossover_fraction)
+            for _ in range(n_cross):
+                a = self._rng.choice(survivors)
+                b = self._rng.choice(survivors)
+                next_gen.append(self.grammar.crossover(a, b))
+
+            beam = next_gen
+            ctx.beam_scored = scored
+
+        logger.debug(f"  [wake] Beam search: {time.time()-t:.2f}s, gens={ctx.gens_used}")
+        return "beam search" if ctx.solved else None
+
+    def _phase_post_beam_color_fix(self, ctx: _WakeContext) -> Optional[str]:
+        """Color remapping on beam + enumeration results."""
+        if ctx.solved or not self.grammar.allow_structural_phases():
+            return None
+        if not ctx.best_so_far or ctx.best_so_far.prediction_error <= ctx.cfg.solve_threshold:
+            return None
+        t = time.time()
+        all_candidates = list(ctx.enum_candidates)
+        if ctx.beam_scored:
+            all_candidates.extend(ctx.beam_scored)
+        result = self._try_color_fix(all_candidates, ctx.task)
+        if result is not None:
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, result)
+            ctx.update_best(result)
+        logger.debug(f"  [wake] Post-beam color fix: {time.time()-t:.2f}s")
+        return "post-beam color fix" if ctx.solved else None
 
     # -------------------------------------------------------------------------
     # Wake result builders
@@ -1434,6 +1521,79 @@ class Learner:
                 best_fix = sp
 
         return best_fix
+
+    # -------------------------------------------------------------------------
+    # Beam search helpers
+    # -------------------------------------------------------------------------
+
+    def _init_beam(self, primitives: list[Primitive], n: int) -> list[Program]:
+        """Generate n random programs of varying depth (1-4)."""
+        beam = []
+        use_prior = self._transition_matrix.size > 0
+        for i in range(n):
+            r = self._rng.random()
+            max_depth = 1 if r < 0.2 else (2 if r < 0.55 else (3 if r < 0.85 else 4))
+            prog = self._random_program(primitives, max_depth, use_prior)
+            beam.append(prog)
+        return beam
+
+    def _random_program(self, primitives: list[Primitive], max_depth: int,
+                        use_prior: bool, parent_op: str = "") -> Program:
+        """Generate a random program tree up to max_depth."""
+        if max_depth <= 1:
+            leaf_prims = [p for p in primitives if p.arity <= 1]
+            if not leaf_prims:
+                leaf_prims = primitives
+            if use_prior and parent_op:
+                prim = self._transition_matrix.weighted_choice(
+                    parent_op, leaf_prims, self._rng)
+            else:
+                prim = self._rng.choice(leaf_prims)
+            return Program(root=prim.name)
+
+        if use_prior and parent_op:
+            prim = self._transition_matrix.weighted_choice(
+                parent_op, primitives, self._rng)
+        else:
+            prim = self._rng.choice(primitives)
+
+        if prim.arity == 0:
+            return Program(root=prim.name)
+
+        children = []
+        for _ in range(prim.arity):
+            child = self._random_program(
+                primitives, max_depth - 1, use_prior, prim.name)
+            children.append(child)
+        return Program(root=prim.name, children=children)
+
+    def _semantic_hash(self, program: Program, task: Task) -> str:
+        """Hash a program by its outputs on training inputs."""
+        precision = self.search_cfg.dedup_precision
+        outputs = []
+        for inp, _ in task.train_examples:
+            try:
+                val = self.env.execute(program, inp)
+                if isinstance(val, (int, float)):
+                    outputs.append(round(float(val), precision))
+                elif isinstance(val, list):
+                    outputs.append(tuple(tuple(row) for row in val) if val and isinstance(val[0], list) else tuple(val))
+                else:
+                    outputs.append(val)
+            except Exception:
+                outputs.append(None)
+        return str(outputs)
+
+    def _semantic_dedup(self, scored: list[ScoredProgram],
+                        task: Task) -> tuple[list[ScoredProgram], int]:
+        """Remove semantically duplicate programs from the scored list."""
+        seen: dict[str, ScoredProgram] = {}
+        for sp in scored:
+            key = self._semantic_hash(sp.program, task)
+            if key not in seen or sp.energy < seen[key].energy:
+                seen[key] = sp
+        deduped = sorted(seen.values(), key=lambda s: s.energy)
+        return deduped, len(scored) - len(deduped)
 
     # -------------------------------------------------------------------------
     # Private helpers
