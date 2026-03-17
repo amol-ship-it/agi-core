@@ -3299,5 +3299,25 @@ Each rule is LOOCV-validated: learned from N-1 examples, verified on the held-ou
 
 **Current state:** 64/400 train (16.0%), 19/400 eval (4.8%), 34 primitives, 411 tests.
 
+### Decision 118: Multi-Strategy Additions
+
+**Outline primitive:** Edge detection (keep non-zero pixels with zero 4-neighbor). +1 train (4347f46a). Found via binary op scan: `diff(input, erode(input))`.
+
+**Subgrid selection:** Two new cross-reference sub-strategies for extraction tasks:
+- `densest_subgrid`: extract output-sized region with most non-zero pixels (+2 tasks: a87f7484, d9fac9be)
+- `most_colorful_subgrid`: extract region with most distinct colors (+1 task: 2013d3e2, d10ecb37)
+
+**Approaches tested but yielding zero:**
+- Extended local rule features (directional, same_count, minmax, color_row/col/diag): 0
+- Local rules composed with transforms: 0
+- Iterative fills (spread, dominant spread, GoL, flood): 0
+- Object extraction by unique color/size/shape: 0
+- Grid boolean ops between transformed pairs: 0 beyond outline
+- Output as object count/property encoding: 0
+- Subgrid at specific color position: 0
+- Most common tile extraction: 0
+
+**Current state:** 68/400 train (17.0%), 19/400 eval (4.8%), 35 primitives, 411 tests.
+
 ---
 *This document will be updated with each new session and major decision.*
