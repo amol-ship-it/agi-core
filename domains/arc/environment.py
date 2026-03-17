@@ -267,6 +267,9 @@ class ARCEnv(Environment):
         result = self._try_template_stamp(task)
         if result is not None:
             return result
+        result = self._try_separator_marker_ops(task)
+        if result is not None:
+            return result
         return None
 
     def _try_boolean_halves(
@@ -652,6 +655,125 @@ class ARCEnv(Environment):
                     prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
                     self.register_primitive(prim)
                     return (name, fn)
+
+        return None
+
+    def _try_separator_marker_ops(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Try marker operations relative to separator lines.
+
+        Strategy 1: Recolor each non-separator pixel to nearest separator's color.
+        Strategy 2: Slide each marker to the separator matching its color.
+
+        Justified by tasks 2204b7a8 and 1a07d186.
+        """
+        from .objects import _test_on_examples
+        examples = task.train_examples
+        if not examples:
+            return None
+        # Only same-dims tasks
+        for inp, out in examples:
+            if len(inp) != len(out):
+                return None
+            if inp and out and len(inp[0]) != len(out[0]):
+                return None
+
+        first_inp = examples[0][0]
+        h, w = len(first_inp), len(first_inp[0]) if first_inp else 0
+
+        # Detect separators
+        def _find_seps(grid):
+            gh, gw = len(grid), len(grid[0]) if grid else 0
+            v_seps, h_seps = {}, {}
+            for c in range(gw):
+                col = [grid[r][c] for r in range(gh)]
+                if len(set(col)) == 1 and col[0] != 0:
+                    v_seps.setdefault(col[0], []).append(c)
+            for r in range(gh):
+                if len(set(grid[r])) == 1 and grid[r][0] != 0:
+                    h_seps.setdefault(grid[r][0], []).append(r)
+            return v_seps, h_seps
+
+        v_seps, h_seps = _find_seps(first_inp)
+        if not v_seps and not h_seps:
+            return None
+
+        # Strategy 1: Recolor markers to nearest separator color
+        def _make_recolor_fn():
+            def fn(grid):
+                gh, gw = len(grid), len(grid[0]) if grid else 0
+                vs, hs = _find_seps(grid)
+                sep_rows = {r for rows in hs.values() for r in rows}
+                sep_cols = {c for cols in vs.values() for c in cols}
+                all_seps = []
+                for color, rows in hs.items():
+                    for r in rows:
+                        all_seps.append(('h', r, color))
+                for color, cols in vs.items():
+                    for c in cols:
+                        all_seps.append(('v', c, color))
+                result = [row[:] for row in grid]
+                for r in range(gh):
+                    if r in sep_rows:
+                        continue
+                    for c in range(gw):
+                        if c in sep_cols:
+                            continue
+                        if grid[r][c] != 0:
+                            best_d, best_color = float('inf'), grid[r][c]
+                            for kind, pos, color in all_seps:
+                                d = abs(r - pos) if kind == 'h' else abs(c - pos)
+                                if d < best_d:
+                                    best_d, best_color = d, color
+                            result[r][c] = best_color
+                return result
+            return fn
+
+        fn1 = _make_recolor_fn()
+        if _test_on_examples(fn1, examples):
+            name = "recolor_markers_by_nearest_sep"
+            prim = Primitive(name=name, arity=0, fn=fn1, domain="arc")
+            self.register_primitive(prim)
+            return (name, fn1)
+
+        # Strategy 2: Slide markers to matching-color separator
+        def _make_slide_fn():
+            def fn(grid):
+                gh, gw = len(grid), len(grid[0]) if grid else 0
+                vs, hs = _find_seps(grid)
+                sep_rows = {r for rows in hs.values() for r in rows}
+                sep_cols = {c for cols in vs.values() for c in cols}
+                result = [row[:] for row in grid]
+                for r in range(gh):
+                    if r in sep_rows:
+                        continue
+                    for c in range(gw):
+                        if c in sep_cols:
+                            continue
+                        if grid[r][c] == 0:
+                            continue
+                        mcolor = grid[r][c]
+                        result[r][c] = 0
+                        if mcolor in vs:
+                            best_c = min(vs[mcolor], key=lambda sc: abs(c - sc))
+                            nc = best_c - 1 if c < best_c else best_c + 1
+                            if 0 <= nc < gw:
+                                result[r][nc] = mcolor
+                        elif mcolor in hs:
+                            best_r = min(hs[mcolor], key=lambda sr: abs(r - sr))
+                            nr = best_r - 1 if r < best_r else best_r + 1
+                            if 0 <= nr < gh:
+                                result[nr][c] = mcolor
+                return result
+            return fn
+
+        fn2 = _make_slide_fn()
+        if _test_on_examples(fn2, examples):
+            name = "slide_markers_to_matching_sep"
+            prim = Primitive(name=name, arity=0, fn=fn2, domain="arc")
+            self.register_primitive(prim)
+            return (name, fn2)
 
         return None
 
