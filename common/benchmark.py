@@ -82,9 +82,10 @@ def _safe_dumps(obj, **kwargs):
 # =============================================================================
 
 PRESETS = {
-    # Quick: fast dev loop. 50 tasks, auto-derived search from 500K budget.
+    # Quick: fast dev loop. 50 tasks, auto-derived search from 1M budget.
+    # Sweep: 500K→47/17, 750K→53/17, 1M→54/18 (sweet spot, ~2min pipeline).
     "quick": {
-        "compute_cap": 500_000,
+        "compute_cap": 1_000_000,
         "max_tasks": 50,
     },
     # Default: full dataset, auto-derived search from 3M budget.
