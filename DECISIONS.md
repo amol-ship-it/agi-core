@@ -3214,5 +3214,15 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Recommendation:** Merge feature branch. Further progress requires fundamentally new approaches (pattern inference, spatial reasoning) not achievable by parameter tuning or simple structural strategies.
 
+### Decision 113: Continued Primitive Search + inpaint_by_symmetry
+
+**Added:** `inpaint_by_symmetry` — auto-detects mask color, fills from H/V mirror + 180° rotation. -1 train (budget displacement), +2 eval (generalization gain).
+
+**Budget fix:** Removed dead near-miss/beam allocation from `derive_search_params`.
+
+**Depth-2 composition analysis:** Found `tile_h(extract_unique_color_region)` solves 2 tasks and `extract_unique_color_region(erode)` solves 1, but pair_top_k scoring filters them out because extraction primitives score poorly individually on tasks where output dims differ from input.
+
+**Current state:** 47/400 train (11.8%), 14/400 eval (3.5%), 34 primitives, 411 tests.
+
 ---
 *This document will be updated with each new session and major decision.*
