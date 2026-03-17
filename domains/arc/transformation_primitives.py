@@ -395,6 +395,16 @@ def mirror_tile_both(grid: Grid) -> Grid:
     return top + bottom
 
 
+def tile_h(grid: Grid) -> Grid:
+    """Repeat grid horizontally: grid | grid.
+
+    Justified by task a416b8f3.
+    """
+    if not grid or not grid[0]:
+        return grid
+    return [row + row for row in grid]
+
+
 def rotate_tile_cw(grid: Grid) -> Grid:
     """2x2 rotation tile: orig|rot90 / rot270|rot180. Square grids only.
 
@@ -539,10 +549,11 @@ def build_atomic_primitives() -> list[Primitive]:
         # Extraction (2)
         ("extract_largest_cc",          extract_largest_cc),
         ("extract_unique_color_region", extract_unique_color_region),
-        # Tiling (4)
+        # Tiling (5)
         ("mirror_tile_h",              mirror_tile_h),
         ("mirror_tile_v",              mirror_tile_v),
         ("mirror_tile_both",           mirror_tile_both),
+        ("tile_h",                     tile_h),
         ("rotate_tile_cw",             rotate_tile_cw),
         # Inpainting (1)
         ("inpaint_periodic",            inpaint_periodic),
