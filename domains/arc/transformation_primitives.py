@@ -296,6 +296,50 @@ def sort_cols_by_nonzero(grid: Grid) -> Grid:
     return [[cols[c][r] for c in range(w)] for r in range(h)]
 
 
+# --- Compression transforms ---
+
+def compress_rows(grid: Grid) -> Grid:
+    """Remove duplicate consecutive rows. Justified by tasks eb5a1d5d, 746b3537."""
+    if not grid:
+        return grid
+    result = [grid[0]]
+    for r in range(1, len(grid)):
+        if grid[r] != grid[r - 1]:
+            result.append(grid[r])
+    return result
+
+
+def unique_cols(grid: Grid) -> Grid:
+    """Remove duplicate columns (keep first occurrence). Justified by task 2dee498d."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    seen: set[tuple[int, ...]] = set()
+    keep: list[int] = []
+    for c in range(w):
+        col = tuple(grid[r][c] for r in range(h))
+        if col not in seen:
+            seen.add(col)
+            keep.append(c)
+    if not keep:
+        return grid
+    return [[grid[r][c] for c in keep] for r in range(h)]
+
+
+def compress_cols(grid: Grid) -> Grid:
+    """Remove duplicate consecutive columns."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    keep = [0]
+    for c in range(1, w):
+        col = tuple(grid[r][c] for r in range(h))
+        prev = tuple(grid[r][c - 1] for r in range(h))
+        if col != prev:
+            keep.append(c)
+    return [[grid[r][c] for c in keep] for r in range(h)]
+
+
 # --- Ray extension transforms ---
 
 def extend_diag_rays(grid: Grid) -> Grid:
@@ -720,6 +764,10 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
+        # Compression (3)
+        ("compress_rows",               compress_rows),
+        ("compress_cols",               compress_cols),
+        ("unique_cols",                 unique_cols),
         # Ray extension (2)
         ("extend_diag_rays",            extend_diag_rays),
         ("extend_down",                 extend_down),
