@@ -884,12 +884,13 @@ class Learner:
                 pair_pool.append(name)
                 seen_names.add(name)
 
-        # Smart pruning for inner steps
+        # Smart pruning for inner steps — essential primitives always included
         INNER_STEP_THRESHOLD = 0.70
         inner_pool = [
             name for name in pair_pool
             if name not in noop_prims
-            and depth1_scores.get(name, 1.0) <= INNER_STEP_THRESHOLD
+            and (depth1_scores.get(name, 1.0) <= INNER_STEP_THRESHOLD
+                 or name in essential_names)
         ]
         if len(inner_pool) < pair_top_k // 3:
             inner_pool = [n for n in pair_pool[:pair_top_k // 2]
