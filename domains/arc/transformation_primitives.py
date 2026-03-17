@@ -296,6 +296,65 @@ def sort_cols_by_nonzero(grid: Grid) -> Grid:
     return [[cols[c][r] for c in range(w)] for r in range(h)]
 
 
+# --- Inpainting transforms ---
+
+def inpaint_periodic(grid: Grid) -> Grid:
+    """Fill zeros by detecting and extrapolating the periodic tile pattern.
+
+    Algorithm: try every possible tile size (ph, pw). For each, check if
+    all non-zero cells are consistent with grid[r][c] == tile[r%ph][c%pw].
+    Use the smallest consistent tile to fill zeros.
+
+    Justified by tasks 73251a56, 29ec7d0e.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    # Check if there are any zeros to fill
+    has_zero = any(grid[r][c] == 0 for r in range(h) for c in range(w))
+    if not has_zero:
+        return grid
+
+    # Try all tile periods from smallest to largest
+    for ph in range(1, h + 1):
+        for pw in range(1, w + 1):
+            # Build tile from non-zero cells
+            tile = [[None] * pw for _ in range(ph)]
+            consistent = True
+            for r in range(h):
+                if not consistent:
+                    break
+                for c in range(w):
+                    val = grid[r][c]
+                    if val == 0:
+                        continue
+                    tr, tc = r % ph, c % pw
+                    if tile[tr][tc] is None:
+                        tile[tr][tc] = val
+                    elif tile[tr][tc] != val:
+                        consistent = False
+                        break
+
+            if not consistent:
+                continue
+
+            # Check tile is fully determined (no None cells)
+            if any(tile[r][c] is None for r in range(ph) for c in range(pw)):
+                continue
+
+            # Fill zeros using the tile
+            result = [row[:] for row in grid]
+            for r in range(h):
+                for c in range(w):
+                    if result[r][c] == 0:
+                        result[r][c] = tile[r % ph][c % pw]
+            return result
+
+    # No consistent tile found — return original
+    return grid
+
+
 # --- Binary transforms ---
 
 def overlay(grid1: Grid, grid2: Grid) -> Grid:
@@ -360,6 +419,8 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
+        # Inpainting (1)
+        ("inpaint_periodic",            inpaint_periodic),
     ]
     prims = [Primitive(name=name, arity=1, fn=fn, domain="arc")
              for name, fn in unary_ops]
