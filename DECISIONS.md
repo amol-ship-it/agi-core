@@ -3257,5 +3257,22 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Current state:** 54/400 train (13.5%), 18/400 eval (4.5%), 34 primitives, 411 tests.
 
+### Decision 116: Separator Marker Operations
+
+**Analysis:** Top 5 unsolved separator tasks analyzed. Found 3 share "marker-to-separator" pattern but each variant differs:
+- 2204b7a8: recolor markers to nearest separator's color (**solved**)
+- 1a07d186: slide markers to matching-color separator (**solved**)
+- 4093f84a: slide to nearest thick band — tested, doesn't match (needs marker color matching)
+- 2c608aff: draw lines from rect to markers — NOT a separator task (false positive from non-zero bg)
+- ba97ae07: crossing band priority — needs band-intersection logic
+
+**Added:** `_try_separator_marker_ops` in `try_cross_reference` with 2 sub-strategies:
+1. `recolor_markers_by_nearest_sep`: +1 train (2204b7a8)
+2. `slide_markers_to_matching_sep`: +1 train (1a07d186)
+
+**Result:** 54→56 train (+2), eval 18 stable. Thick-band variant tested but yields zero.
+
+**Current state:** 56/400 train (14.0%), 18/400 eval (4.5%), 34 primitives, 411 tests.
+
 ---
 *This document will be updated with each new session and major decision.*
