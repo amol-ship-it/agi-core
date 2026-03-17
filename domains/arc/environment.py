@@ -777,6 +777,167 @@ class ARCEnv(Environment):
 
         return None
 
+    def try_local_rules(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Learn cellular automaton rules from training examples.
+
+        Tries three rule types in order of compactness:
+        1. (center, n_nonzero_4neighbors, majority_4neighbor) → output
+        2. (center, n_nonzero_8neighbors) → output
+        3. Raw 3x3 neighborhood → output
+
+        Each rule is LOOCV-validated to avoid overfitting.
+        """
+        from .objects import _test_on_examples
+        from collections import Counter
+        examples = task.train_examples
+        if not examples or len(examples) < 2:
+            return None
+        # Only same-dims tasks
+        for inp, out in examples:
+            if len(inp) != len(out):
+                return None
+            if inp and out and len(inp[0]) != len(out[0]):
+                return None
+
+        def _nbr_4(grid, r, c):
+            h, w = len(grid), len(grid[0])
+            return [grid[nr][nc] if 0 <= nr < h and 0 <= nc < w else -1
+                    for nr, nc in [(r-1,c),(r+1,c),(r,c-1),(r,c+1)]]
+
+        def _learn_compact(exs):
+            """Rule type 1: (center, n_nz_4, majority_4) → output."""
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        nb = _nbr_4(inp, r, c)
+                        nz = [n for n in nb if n > 0]
+                        key = (inp[r][c], len(nz),
+                               Counter(nz).most_common(1)[0][0] if nz else 0)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_compact(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    nb = _nbr_4(grid, r, c)
+                    nz = [n for n in nb if n > 0]
+                    key = (grid[r][c], len(nz),
+                           Counter(nz).most_common(1)[0][0] if nz else 0)
+                    row.append(rule.get(key, grid[r][c]))
+                result.append(row)
+            return result
+
+        def _learn_v2(exs):
+            """Rule type 2: (center, n_nz_8) → output."""
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        n_nz = sum(1 for dr in range(-1,2) for dc in range(-1,2)
+                                   if (dr or dc) and 0<=r+dr<h and 0<=c+dc<w
+                                   and inp[r+dr][c+dc] != 0)
+                        key = (inp[r][c], n_nz)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_v2(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    n_nz = sum(1 for dr in range(-1,2) for dc in range(-1,2)
+                               if (dr or dc) and 0<=r+dr<h and 0<=c+dc<w
+                               and grid[r+dr][c+dc] != 0)
+                    key = (grid[r][c], n_nz)
+                    row.append(rule.get(key, grid[r][c]))
+                result.append(row)
+            return result
+
+        def _learn_raw3(exs):
+            """Rule type 3: raw 3x3 neighborhood → output."""
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        key = tuple(inp[r+dr][c+dc] if 0<=r+dr<h and 0<=c+dc<w else -1
+                                    for dr in range(-1,2) for dc in range(-1,2))
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_raw3(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    key = tuple(grid[r+dr][c+dc] if 0<=r+dr<h and 0<=c+dc<w else -1
+                                for dr in range(-1,2) for dc in range(-1,2))
+                    row.append(rule.get(key, grid[r][c]))
+                result.append(row)
+            return result
+
+        # Try each rule type with LOOCV
+        for rule_name, learn_fn, apply_fn in [
+            ("compact_local_rule", _learn_compact, _apply_compact),
+            ("count_local_rule", _learn_v2, _apply_v2),
+            ("raw3x3_local_rule", _learn_raw3, _apply_raw3),
+        ]:
+            # First: check if rule is consistent on ALL training
+            rule = learn_fn(examples)
+            if rule is None:
+                continue
+            if not _test_on_examples(lambda g, r=rule, a=apply_fn: a(g, r), examples):
+                continue
+
+            # LOOCV validation
+            loocv_pass = True
+            for hold_idx in range(len(examples)):
+                train_sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+                rule_sub = learn_fn(train_sub)
+                if rule_sub is None:
+                    loocv_pass = False
+                    break
+                held_inp, held_exp = examples[hold_idx]
+                result = apply_fn(held_inp, rule_sub)
+                if result != held_exp:
+                    loocv_pass = False
+                    break
+
+            if not loocv_pass:
+                continue
+
+            # LOOCV passed — create the transform
+            def _make_fn(r=rule, a=apply_fn):
+                def fn(grid):
+                    return a(grid, r)
+                return fn
+
+            fn = _make_fn()
+            prim = Primitive(name=rule_name, arity=0, fn=fn, domain="arc")
+            self.register_primitive(prim)
+            return (rule_name, fn)
+
+        return None
+
     # Maximum intermediate grid size (pixels).
     MAX_GRID_PIXELS = 10_000
 

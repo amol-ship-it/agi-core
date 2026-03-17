@@ -205,6 +205,7 @@ class Learner:
             self._phase_object_decomposition,
             self._phase_for_each_object,
             self._phase_cross_reference,
+            self._phase_local_rules,
             self._phase_color_fix,
         ]
 
@@ -273,6 +274,24 @@ class Learner:
             ctx.enum_candidates.append(sp)
         logger.debug(f"  [wake] Cross-reference: {time.time()-t:.2f}s")
         return "cross-reference" if ctx.solved else None
+
+    def _phase_local_rules(self, ctx: _WakeContext) -> Optional[str]:
+        """Learn cellular automaton rules from training examples."""
+        if ctx.solved or not self.grammar.allow_structural_phases():
+            return None
+        if not hasattr(self.env, 'try_local_rules'):
+            return None
+        t = time.time()
+        result = self.env.try_local_rules(ctx.task)
+        if result is not None:
+            name, fn = result
+            sp = self._evaluate_program(Program(root=name), ctx.task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+        logger.debug(f"  [wake] Local rules: {time.time()-t:.2f}s")
+        return "local rules" if ctx.solved else None
 
     def _phase_conditional_search(self, ctx: _WakeContext) -> Optional[str]:
         """Try if(predicate, A, B) programs."""
