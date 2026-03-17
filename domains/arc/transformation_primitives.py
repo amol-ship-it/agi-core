@@ -296,6 +296,101 @@ def sort_cols_by_nonzero(grid: Grid) -> Grid:
     return [[cols[c][r] for c in range(w)] for r in range(h)]
 
 
+# --- Ray extension transforms ---
+
+def extend_diag_rays(grid: Grid) -> Grid:
+    """Each non-zero pixel shoots diagonal rays until hitting another non-zero.
+
+    Justified by task 623ea044.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0:
+                continue
+            color = grid[r][c]
+            for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                nr, nc = r + dr, c + dc
+                while 0 <= nr < h and 0 <= nc < w and grid[nr][nc] == 0:
+                    result[nr][nc] = color
+                    nr += dr
+                    nc += dc
+    return result
+
+
+def extend_down(grid: Grid) -> Grid:
+    """Each non-zero pixel extends downward until hitting another non-zero.
+
+    Justified by task d037b0a7.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0:
+                continue
+            nr = r + 1
+            while nr < h and grid[nr][c] == 0:
+                result[nr][c] = grid[r][c]
+                nr += 1
+    return result
+
+
+# --- Connection transforms ---
+
+def connect_same_color_h(grid: Grid) -> Grid:
+    """Fill zeros between same-color pixels horizontally.
+
+    For each row, if two pixels of the same color have only zeros
+    between them, fill the gap with that color.
+
+    Justified by tasks 22eb0ac0, 22168020.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        color_positions: dict[int, list[int]] = {}
+        for c in range(w):
+            if grid[r][c] != 0:
+                color_positions.setdefault(grid[r][c], []).append(c)
+        for color, positions in color_positions.items():
+            if len(positions) >= 2:
+                for c in range(min(positions), max(positions) + 1):
+                    if result[r][c] == 0:
+                        result[r][c] = color
+    return result
+
+
+def connect_same_color_v(grid: Grid) -> Grid:
+    """Fill zeros between same-color pixels vertically.
+
+    For each column, if two pixels of the same color have only zeros
+    between them, fill the gap with that color.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for c in range(w):
+        color_positions: dict[int, list[int]] = {}
+        for r in range(h):
+            if grid[r][c] != 0:
+                color_positions.setdefault(grid[r][c], []).append(r)
+        for color, positions in color_positions.items():
+            if len(positions) >= 2:
+                for r in range(min(positions), max(positions) + 1):
+                    if result[r][c] == 0:
+                        result[r][c] = color
+    return result
+
+
 # --- Edge detection transforms ---
 
 def outline(grid: Grid) -> Grid:
@@ -625,6 +720,12 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
+        # Ray extension (2)
+        ("extend_diag_rays",            extend_diag_rays),
+        ("extend_down",                 extend_down),
+        # Connection (2)
+        ("connect_same_color_h",        connect_same_color_h),
+        ("connect_same_color_v",        connect_same_color_v),
         # Edge detection (1)
         ("outline",                     outline),
         # Extraction (2)
