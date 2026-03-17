@@ -3119,5 +3119,46 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Baseline:** 28/400 train (7.0%), 6/400 eval (1.5%), 394 tests passing.
 
+### Decision 108: Phase 1 Strip Complete — Measured Results
+
+**Removed:** 750 lines across learner.py (-527) and environment.py (-223).
+**Result:** 28/400 train, 6/400 eval — unchanged. Pipeline time 51s → 45s (-12%).
+**Remaining phases:** exhaustive, object_decomposition, for_each_object, cross_reference, color_fix.
+
+### Decision 109: Near-Miss Diagnostic — Top 10 Task Analysis
+
+**Data:** 370 unsolved tasks. 215 near-miss (error < 0.3). 132 very close (error < 0.15).
+
+**Error distribution:**
+- Same-dims unsolved: 242 (65%), avg error 0.180, 204 near-miss
+- Shrink unsolved: 95 (26%), avg error 0.854, 8 near-miss
+- Grow unsolved: 31 (8%), avg error 0.792, 3 near-miss
+
+**Top near-miss programs:** trim_rows (34x), fill_enclosed (30x), learned_1 (13x)
+
+**Top 10 closest tasks analyzed:**
+
+| Task | Error | Classification | Missing Concept |
+|------|-------|---------------|-----------------|
+| 73251a56 | 0.006 | Structural | Periodic pattern inpainting |
+| 29ec7d0e | 0.007 | Structural | Periodic pattern inpainting |
+| 7e0986d6 | 0.009 | Cell-patch overfit | Noise/defect removal |
+| 54d82841 | 0.011 | Cell-patch overfit | Shape opening detection |
+| 2204b7a8 | 0.012 | Structural | Proximity-based color assignment |
+| ba97ae07 | 0.016 | Structural | Line detection + dot snapping |
+| 776ffc46 | 0.019 | Structural | Template matching + conditional recolor |
+| 1a07d186 | 0.019 | Structural | Color-matched line attraction |
+| 2c608aff | 0.020 | Structural | Dot-to-rectangle line drawing |
+| cbded52d | 0.022 | Structural | Sub-grid pattern broadcast |
+
+**Key findings:**
+1. 8/10 closest tasks are Structural — need new compositional concepts, not parameter tweaks
+2. Tasks 1+2 share the same concept (periodic inpainting) — 2-for-1 opportunity
+3. Tasks 6+8 share similar concept (dot-to-line attraction) — another 2-for-1
+4. Most near-misses need concepts like: pattern inpainting, noise removal, line/shape detection, template matching — higher-level spatial reasoning primitives
+5. The top near-miss programs (trim_rows 34x, fill_enclosed 30x) suggest these primitives capture *part* of many tasks but need one more step
+
+**Conclusion:** The near-misses reveal that the next breakthroughs require genuine new spatial reasoning primitives (pattern detection, noise removal, line detection), not more of the same transform-compose approach.
+
 ---
 *This document will be updated with each new session and major decision.*
