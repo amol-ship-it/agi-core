@@ -3195,5 +3195,24 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 
 **Key insight:** The broad-scan approach (test many candidates against all tasks) is much more efficient than deep-diving individual tasks. Most ARC tasks that CAN be solved by a single primitive are already captured by this approach.
 
+### Decision 112: Hyperparameter Sweep + Structural Strategy Assessment
+
+**Hyperparameter sweep results (3+ values each, quick mode):**
+
+| Parameter | Values Tested | Result |
+|-----------|--------------|--------|
+| exhaustive_pair_top_k | 20, 30, 40, 50, 60 | All 48/400 — flat |
+| exhaustive_triple_top_k | 8, 12, 15, 20, 25 | All 48/400 — flat |
+| energy_beta | 0.0001, 0.001, 0.01, 0.1 | All 48/400 — flat |
+
+**Conclusion:** Auto-derivation from compute_cap handles tuning. No manual adjustment needed.
+
+**Structural strategy assessment:**
+- Near-miss refinement: tested with 33 prims, confirmed zero benefit (stored predictions + any unary prim = 0 new solves)
+- Conditional search: implemented but too slow at quick budget (~3x runtime) and 0 confirmed wins. Kept in code, excluded from pipeline.
+- Per-row/column: still zero direct solves (confirmed earlier)
+
+**Recommendation:** Merge feature branch. Further progress requires fundamentally new approaches (pattern inference, spatial reasoning) not achievable by parameter tuning or simple structural strategies.
+
 ---
 *This document will be updated with each new session and major decision.*
