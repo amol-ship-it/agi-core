@@ -207,6 +207,7 @@ class Learner:
             self._phase_cross_reference,
             self._phase_local_rules,
             self._phase_color_fix,
+            self._phase_input_pred_correction,
         ]
 
     def _phase_exhaustive(self, ctx: _WakeContext) -> Optional[str]:
@@ -325,6 +326,137 @@ class Learner:
             ctx.update_best(result)
         logger.debug(f"  [wake] Phase 2 color fix: {time.time()-t:.2f}s")
         return "color fix" if ctx.solved else None
+
+    def _phase_input_pred_correction(self, ctx: _WakeContext) -> Optional[str]:
+        """Learn a (input_pixel, prediction_pixel) → output_pixel correction.
+
+        For each near-miss candidate, checks if a consistent mapping from
+        (original_input[r][c], prediction[r][c]) → expected[r][c] exists
+        across all training examples, with LOOCV validation.
+        """
+        if ctx.solved or not ctx.enum_candidates:
+            return None
+        t = time.time()
+        solve_thresh = self.search_cfg.solve_threshold
+        task = ctx.task
+
+        # Try top-20 candidates by error
+        candidates = sorted(ctx.enum_candidates, key=lambda s: s.prediction_error)[:20]
+
+        for nm in candidates:
+            if nm.prediction_error <= solve_thresh:
+                continue
+
+            # Execute program on all training inputs to get predictions
+            preds = []
+            ok = True
+            for inp, expected in task.train_examples:
+                try:
+                    pred = self.env.execute(nm.program, inp)
+                    if (not isinstance(pred, list) or not pred or
+                            len(pred) != len(expected) or len(pred[0]) != len(expected[0]) or
+                            len(inp) != len(expected) or len(inp[0]) != len(expected[0])):
+                        ok = False
+                        break
+                    preds.append((pred, inp, expected))
+                except Exception:
+                    ok = False
+                    break
+            if not ok or len(preds) < 2:
+                continue
+
+            # Learn (input_pixel, pred_pixel) → output_pixel rule
+            rule: dict[tuple[int, int], int] = {}
+            consistent = True
+            for pred, inp, expected in preds:
+                h, w = len(pred), len(pred[0])
+                for r in range(h):
+                    for c in range(w):
+                        key = (inp[r][c], pred[r][c])
+                        val = expected[r][c]
+                        if key in rule:
+                            if rule[key] != val:
+                                consistent = False
+                                break
+                        else:
+                            rule[key] = val
+                    if not consistent:
+                        break
+                if not consistent:
+                    break
+            if not consistent:
+                continue
+
+            # Check non-trivial (at least one mapping changes something)
+            if all(rule.get((i, p), p) == p for i, p in rule):
+                continue
+
+            # LOOCV
+            loocv_pass = True
+            for hold in range(len(preds)):
+                sub = [x for i, x in enumerate(preds) if i != hold]
+                sub_rule: dict[tuple[int, int], int] = {}
+                sub_ok = True
+                for pred, inp, expected in sub:
+                    h, w = len(pred), len(pred[0])
+                    for r in range(h):
+                        for c in range(w):
+                            key = (inp[r][c], pred[r][c])
+                            if key in sub_rule and sub_rule[key] != expected[r][c]:
+                                sub_ok = False
+                                break
+                            sub_rule[key] = expected[r][c]
+                        if not sub_ok:
+                            break
+                    if not sub_ok:
+                        break
+                if not sub_ok:
+                    loocv_pass = False
+                    break
+                hp, hi, he = preds[hold]
+                h, w = len(hp), len(hp[0])
+                for r in range(h):
+                    for c in range(w):
+                        key = (hi[r][c], hp[r][c])
+                        if sub_rule.get(key, hp[r][c]) != he[r][c]:
+                            loocv_pass = False
+                            break
+                    if not loocv_pass:
+                        break
+                if not loocv_pass:
+                    break
+
+            if not loocv_pass:
+                continue
+
+            # Build the corrected program
+            base_prog = nm.program
+            final_rule = dict(rule)
+
+            def _make_correction(bp=base_prog, fr=final_rule, env=self.env):
+                def fn(grid):
+                    pred = env.execute(bp, grid)
+                    if not isinstance(pred, list) or not pred:
+                        return grid
+                    return [[fr.get((grid[r][c], pred[r][c]), pred[r][c])
+                             for c in range(len(pred[0]))] for r in range(len(pred))]
+                return fn
+
+            corr_fn = _make_correction()
+            name = f"input_pred_correct({repr(base_prog)[:30]})"
+            prim = Primitive(name=name, arity=0, fn=corr_fn, domain="arc")
+            self.env.register_primitive(prim)
+            sp = self._evaluate_program(Program(root=name), task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+            if sp.prediction_error <= solve_thresh:
+                logger.debug(f"  [wake] Input-pred correction: {time.time()-t:.2f}s SOLVED")
+                return "input-pred correction"
+
+        logger.debug(f"  [wake] Input-pred correction: {time.time()-t:.2f}s")
+        return "input-pred correction" if ctx.solved else None
 
     # -------------------------------------------------------------------------
     # Wake result builders
