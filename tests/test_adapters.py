@@ -39,8 +39,8 @@ class TestARCAdapter:
         adapter = self._make()
         _, grammar, _ = adapter.create_interfaces(seed=42)
         assert grammar._vocabulary == "atomic"
-        # Structural phases disabled during zero-strip rebuild
-        assert grammar.allow_structural_phases() is False
+        # Structural phases enabled for per-object, cross-reference, etc.
+        assert grammar.allow_structural_phases() is True
 
     def test_config_defaults(self):
         adapter = self._make()

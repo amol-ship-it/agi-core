@@ -39,8 +39,8 @@ class ARCGrammar(Grammar):
         self._vocabulary = vocabulary
 
     def allow_structural_phases(self) -> bool:
-        """Structural phases disabled until justified by specific tasks."""
-        return False
+        """Enable structural search phases (per-object, cross-reference, etc.)."""
+        return True
 
     def get_predicates(self) -> list[tuple[str, callable]]:
         """Return input→bool predicates. Currently empty."""

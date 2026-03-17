@@ -176,6 +176,79 @@ class ARCEnv(Environment):
         self.register_primitive(prim)
         return Program(root=name)
 
+    # --- Structural strategies ---
+
+    def try_object_decomposition(
+        self, task: Task, primitives: list[Primitive],
+    ) -> Optional[tuple[str, Any]]:
+        """Try solving a task by applying the same transform per object."""
+        from .objects import try_object_decomposition as _try_obj_decomp
+        result = _try_obj_decomp(task.train_examples, primitives)
+        if result is None:
+            return None
+        name, fn = result
+        prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+        self.register_primitive(prim)
+        return (name, fn)
+
+    def try_for_each_object(
+        self, task: Task, candidate_programs: list[ScoredProgram],
+        top_k: int = 10,
+    ) -> Optional[tuple[str, Any]]:
+        """Try applying top-K candidate programs per-object."""
+        from .objects import (
+            apply_transform_per_object, apply_transform_per_multicolor_object,
+            _get_background_color, _test_on_examples,
+        )
+        if not task.train_examples:
+            return None
+        for inp, out in task.train_examples:
+            if len(inp) != len(out):
+                return None
+            if inp and out and len(inp[0]) != len(out[0]):
+                return None
+
+        bg_color = _get_background_color(task.train_examples[0][0])
+        sorted_cands = sorted(candidate_programs,
+                              key=lambda s: s.prediction_error)[:top_k]
+
+        for sp in sorted_cands:
+            prog = sp.program
+            env = self
+
+            def _make_per_obj_fn(p=prog, e=env, bg=bg_color):
+                def transform(subgrid):
+                    return e._eval_tree(p, subgrid)
+                def fn(grid):
+                    result = apply_transform_per_object(grid, transform, bg)
+                    return result if result is not None else grid
+                return fn
+
+            per_obj_fn = _make_per_obj_fn()
+            if _test_on_examples(per_obj_fn, task.train_examples):
+                name = f"for_each_object({repr(prog)})"
+                prim = Primitive(name=name, arity=0, fn=per_obj_fn, domain="arc")
+                self.register_primitive(prim)
+                return (name, per_obj_fn)
+
+            def _make_mc_fn(p=prog, e=env, bg=bg_color):
+                def transform(subgrid):
+                    return e._eval_tree(p, subgrid)
+                def fn(grid):
+                    result = apply_transform_per_multicolor_object(
+                        grid, transform, bg)
+                    return result if result is not None else grid
+                return fn
+
+            mc_fn = _make_mc_fn()
+            if _test_on_examples(mc_fn, task.train_examples):
+                name = f"for_each_mc_object({repr(prog)})"
+                prim = Primitive(name=name, arity=0, fn=mc_fn, domain="arc")
+                self.register_primitive(prim)
+                return (name, mc_fn)
+
+        return None
+
     # Maximum intermediate grid size (pixels).
     MAX_GRID_PIXELS = 10_000
 

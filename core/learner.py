@@ -202,6 +202,8 @@ class Learner:
         """
         return [
             self._phase_exhaustive,
+            self._phase_object_decomposition,
+            self._phase_for_each_object,
             self._phase_near_miss_refinement,
             self._phase_color_fix,
         ]
@@ -221,6 +223,40 @@ class Learner:
         ctx.enum_candidates.extend(candidates)
         logger.debug(f"  [wake] Phase 1 enumeration: {time.time()-t:.2f}s, {ctx.n_evals} evals")
         return "enumeration" if ctx.solved else None
+
+    def _phase_object_decomposition(self, ctx: _WakeContext) -> Optional[str]:
+        """Try per-object transforms via connected components."""
+        if ctx.solved or not self.grammar.allow_structural_phases():
+            return None
+        t = time.time()
+        result = self.env.try_object_decomposition(ctx.task, ctx.all_prims) if ctx.budget_ok() else None
+        if result is not None:
+            name, fn = result
+            sp = self._evaluate_program(Program(root=name), ctx.task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+        logger.debug(f"  [wake] Object decomp: {time.time()-t:.2f}s")
+        return "object decomposition" if ctx.solved else None
+
+    def _phase_for_each_object(self, ctx: _WakeContext) -> Optional[str]:
+        """Apply top-K enumeration candidates per-object."""
+        if ctx.solved or not ctx.enum_candidates or not ctx.budget_ok():
+            return None
+        if not self.grammar.allow_structural_phases():
+            return None
+        t = time.time()
+        result = self.env.try_for_each_object(ctx.task, ctx.enum_candidates, top_k=10)
+        if result is not None:
+            name, fn = result
+            sp = self._evaluate_program(Program(root=name), ctx.task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+        logger.debug(f"  [wake] For-each-object: {time.time()-t:.2f}s")
+        return "for-each-object" if ctx.solved else None
 
     def _phase_near_miss_refinement(self, ctx: _WakeContext) -> Optional[str]:
         """Append/prepend primitives to near-miss programs."""
