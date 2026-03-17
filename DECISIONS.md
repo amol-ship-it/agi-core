@@ -3082,4 +3082,137 @@ Contest: +2 train (+50%), 6× slower. Extra solves came from library compounding
 **Files changed:** `domains/arc/environment.py` (+per-row/col, +cell algebra, +template stamp), `domains/arc/transformation_primitives.py` (+5 primitives), `core/learner.py` (+phase 1.05), `scripts/analyze_failures.py` (new), `tests/test_atomic_primitives.py` (+40 tests).
 
 ---
+
+## Session 17 — Structural Restore & Course Correction (2026-03-16)
+
+### Decision 106: Bulk Structural Restore (FLAWED)
+
+**What happened:** Bulk-restored ~2700 lines of structural strategies from pre-strip git history (commit b9ad9f5). Six steps were implemented:
+
+| Step | Feature | Delta | Verdict |
+|------|---------|-------|---------|
+| 1 | Near-miss refinement | +0 | Dead weight |
+| 2 | Per-object decomposition | +4 | Valuable |
+| 3 | Per-row/column | +0 | Dead weight |
+| 4 | Cross-reference | +2 | Valuable |
+| 5 | Conditional per-object + predicates | +0 | Dead weight |
+| 5b | Conditional search | -1 (reverted) | Harmful |
+| 6 | Beam search | +0 | Dead weight |
+
+**Result:** 22→28 train (+6), 6/400 eval (unchanged).
+
+**What went wrong:**
+1. Committed directly to main instead of feature branch
+2. No hyperparameter optimization for any new parameters
+3. No DECISIONS.md or PROMPTS.md updates
+4. Bulk-restored old code instead of understanding what specific tasks need
+5. 5 of 10 wake phases add zero solves (~500 LOC dead weight)
+6. Predictions were wildly optimistic (expected 40+ train, got 28)
+
+### Decision 107: Course Correction — Strip Dead Weight + Data-Driven Rebuild
+
+**Action:** Created feature branch `principled-rebuild-v2`. Plan:
+1. Remove the 5 zero-solve phases (~500 LOC)
+2. Analyze 132 near-miss tasks (error < 0.15) to understand what they need
+3. Add primitives one at a time, justified by specific task IDs
+4. Re-add structural strategies only when Phase 2 data supports them
+
+**Baseline:** 28/400 train (7.0%), 6/400 eval (1.5%), 394 tests passing.
+
+### Decision 108: Phase 1 Strip Complete — Measured Results
+
+**Removed:** 750 lines across learner.py (-527) and environment.py (-223).
+**Result:** 28/400 train, 6/400 eval — unchanged. Pipeline time 51s → 45s (-12%).
+**Remaining phases:** exhaustive, object_decomposition, for_each_object, cross_reference, color_fix.
+
+### Decision 109: Near-Miss Diagnostic — Top 10 Task Analysis
+
+**Data:** 370 unsolved tasks. 215 near-miss (error < 0.3). 132 very close (error < 0.15).
+
+**Error distribution:**
+- Same-dims unsolved: 242 (65%), avg error 0.180, 204 near-miss
+- Shrink unsolved: 95 (26%), avg error 0.854, 8 near-miss
+- Grow unsolved: 31 (8%), avg error 0.792, 3 near-miss
+
+**Top near-miss programs:** trim_rows (34x), fill_enclosed (30x), learned_1 (13x)
+
+**Top 10 closest tasks analyzed:**
+
+| Task | Error | Classification | Missing Concept |
+|------|-------|---------------|-----------------|
+| 73251a56 | 0.006 | Structural | Periodic pattern inpainting |
+| 29ec7d0e | 0.007 | Structural | Periodic pattern inpainting |
+| 7e0986d6 | 0.009 | Cell-patch overfit | Noise/defect removal |
+| 54d82841 | 0.011 | Cell-patch overfit | Shape opening detection |
+| 2204b7a8 | 0.012 | Structural | Proximity-based color assignment |
+| ba97ae07 | 0.016 | Structural | Line detection + dot snapping |
+| 776ffc46 | 0.019 | Structural | Template matching + conditional recolor |
+| 1a07d186 | 0.019 | Structural | Color-matched line attraction |
+| 2c608aff | 0.020 | Structural | Dot-to-rectangle line drawing |
+| cbded52d | 0.022 | Structural | Sub-grid pattern broadcast |
+
+**Key findings:**
+1. 8/10 closest tasks are Structural — need new compositional concepts, not parameter tweaks
+2. Tasks 1+2 share the same concept (periodic inpainting) — 2-for-1 opportunity
+3. Tasks 6+8 share similar concept (dot-to-line attraction) — another 2-for-1
+4. Most near-misses need concepts like: pattern inpainting, noise removal, line/shape detection, template matching — higher-level spatial reasoning primitives
+5. The top near-miss programs (trim_rows 34x, fill_enclosed 30x) suggest these primitives capture *part* of many tasks but need one more step
+
+**Conclusion:** The near-misses reveal that the next breakthroughs require genuine new spatial reasoning primitives (pattern detection, noise removal, line detection), not more of the same transform-compose approach.
+
+### Decision 110: Add inpaint_periodic primitive — Train 28→32 (+4), Eval 6→10 (+4)
+
+**Hypothesis:** Task 29ec7d0e (err=0.007) has a periodic tile pattern with zero-patches. A primitive that detects the tile period and fills zeros should solve it.
+
+**Implementation:** `inpaint_periodic(grid)` — tries all tile sizes (ph, pw) from 1 to grid_size. For each, checks if all non-zero cells are consistent with `grid[r][c] == tile[r%ph][c%pw]`. Uses the smallest consistent tile to fill zeros.
+
+**Result:** +4 train solves, +4 eval solves. One primitive, 50 lines of code. This is the highest-ROI addition in the project's history (4 eval solves from 1 primitive).
+
+**Note:** Task 73251a56 (err=0.006) has a diagonal band pattern, not a simple 2D tile. Needs a different approach — flagged as future work.
+
+### Decision 111: Broad Primitive Scan — Phase 3 Results
+
+**Method:** Instead of analyzing individual near-miss tasks, wrote scripts testing candidate primitives against ALL 400 tasks. Much more efficient than per-task analysis.
+
+**Results:**
+
+| Primitive | Train Delta | Eval Delta | Tasks Solved |
+|-----------|-------------|------------|--------------|
+| inpaint_periodic | +4 | +4 | 29ec7d0e + 3 via composition |
+| extract_largest_cc | +2 | +1 | be94b721, 1f85a75f |
+| extract_unique_color_region | +3 | +0 | c909285e, 0b148d64, 23b5c85d |
+| mirror_tile_h | — | — | 6d0aefbc, c9e6f938 |
+| mirror_tile_v | — | — | 6fa7a44f, 8be77c9e |
+| mirror_tile_both | — | — | 67e8384a, 3af2c5a8, 62c24649 |
+| rotate_tile_cw | — | — | 46442a0e, 7fe24cdd |
+| **Tiling total** | **+10** | **+1** | 9 direct + compositions |
+
+**Rejected primitives (zero solves):** crop_to_content, remove_minority_color, replace_minority_with_majority, flood_fill_zeros, unique_rows, unique_cols, deduplicate_rows, deduplicate_cols, majority_color_fill, keep_only_color(1-9), remove_color(1-9), extract_smallest_cc, remove_bg_border, extract_non_bg_rectangle, upscale_2x, downscale_2x.
+
+**Attempted but abandoned:** denoise_rectangles for task 7e0986d6 — too complex to generalize, fragment-merging heuristic didn't work cleanly.
+
+**Cumulative progress:** 28/400 → 47/400 train (+19), 6/400 → 12/400 eval (+6).
+
+**Key insight:** The broad-scan approach (test many candidates against all tasks) is much more efficient than deep-diving individual tasks. Most ARC tasks that CAN be solved by a single primitive are already captured by this approach.
+
+### Decision 112: Hyperparameter Sweep + Structural Strategy Assessment
+
+**Hyperparameter sweep results (3+ values each, quick mode):**
+
+| Parameter | Values Tested | Result |
+|-----------|--------------|--------|
+| exhaustive_pair_top_k | 20, 30, 40, 50, 60 | All 48/400 — flat |
+| exhaustive_triple_top_k | 8, 12, 15, 20, 25 | All 48/400 — flat |
+| energy_beta | 0.0001, 0.001, 0.01, 0.1 | All 48/400 — flat |
+
+**Conclusion:** Auto-derivation from compute_cap handles tuning. No manual adjustment needed.
+
+**Structural strategy assessment:**
+- Near-miss refinement: tested with 33 prims, confirmed zero benefit (stored predictions + any unary prim = 0 new solves)
+- Conditional search: implemented but too slow at quick budget (~3x runtime) and 0 confirmed wins. Kept in code, excluded from pipeline.
+- Per-row/column: still zero direct solves (confirmed earlier)
+
+**Recommendation:** Merge feature branch. Further progress requires fundamentally new approaches (pattern inference, spatial reasoning) not achievable by parameter tuning or simple structural strategies.
+
+---
 *This document will be updated with each new session and major decision.*

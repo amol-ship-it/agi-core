@@ -296,6 +296,192 @@ def sort_cols_by_nonzero(grid: Grid) -> Grid:
     return [[cols[c][r] for c in range(w)] for r in range(h)]
 
 
+# --- Extraction transforms ---
+
+def extract_largest_cc(grid: Grid) -> Grid:
+    """Extract bounding box of the largest connected component.
+
+    Finds the largest 4-connected non-zero region and returns its
+    bounding box as a cropped subgrid.
+
+    Justified by tasks be94b721, 1f85a75f.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    visited = [[False] * w for _ in range(h)]
+    best_comp: list[tuple[int, int]] = []
+
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0 and not visited[r][c]:
+                comp: list[tuple[int, int]] = []
+                stack = [(r, c)]
+                visited[r][c] = True
+                while stack:
+                    cr, cc = stack.pop()
+                    comp.append((cr, cc))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr][nc] and grid[nr][nc] != 0:
+                            visited[nr][nc] = True
+                            stack.append((nr, nc))
+                if len(comp) > len(best_comp):
+                    best_comp = comp
+
+    if not best_comp:
+        return grid
+    rows_c = [p[0] for p in best_comp]
+    cols_c = [p[1] for p in best_comp]
+    r0, r1 = min(rows_c), max(rows_c)
+    c0, c1 = min(cols_c), max(cols_c)
+    return [grid[r][c0:c1 + 1] for r in range(r0, r1 + 1)]
+
+
+def extract_unique_color_region(grid: Grid) -> Grid:
+    """Extract bounding box of the region with the rarest non-zero color.
+
+    Finds the least-common non-zero color and returns the bounding box
+    containing all pixels of that color.
+
+    Justified by tasks c909285e, 0b148d64, 23b5c85d.
+    """
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    h, w = len(grid), len(grid[0])
+    colors = Counter(c for row in grid for c in row if c != 0)
+    if not colors:
+        return grid
+    rarest = colors.most_common()[-1][0]
+    rows = [r for r in range(h) for c in range(w) if grid[r][c] == rarest]
+    cols = [c for r in range(h) for c in range(w) if grid[r][c] == rarest]
+    if not rows:
+        return grid
+    return [grid[r][min(cols):max(cols) + 1] for r in range(min(rows), max(rows) + 1)]
+
+
+# --- Tiling transforms ---
+
+def mirror_tile_h(grid: Grid) -> Grid:
+    """Tile horizontally: original | horizontally-mirrored.
+
+    Justified by tasks 6d0aefbc, c9e6f938.
+    """
+    if not grid or not grid[0]:
+        return grid
+    return [row + row[::-1] for row in grid]
+
+
+def mirror_tile_v(grid: Grid) -> Grid:
+    """Tile vertically: original on top, vertically-mirrored on bottom.
+
+    Justified by tasks 6fa7a44f, 8be77c9e.
+    """
+    if not grid:
+        return grid
+    return grid + grid[::-1]
+
+
+def mirror_tile_both(grid: Grid) -> Grid:
+    """2x2 mirror tile: orig|mirH / mirV|mirHV.
+
+    Justified by tasks 67e8384a, 3af2c5a8, 62c24649.
+    """
+    if not grid or not grid[0]:
+        return grid
+    top = [row + row[::-1] for row in grid]
+    bottom = [row + row[::-1] for row in grid[::-1]]
+    return top + bottom
+
+
+def tile_h(grid: Grid) -> Grid:
+    """Repeat grid horizontally: grid | grid.
+
+    Justified by task a416b8f3.
+    """
+    if not grid or not grid[0]:
+        return grid
+    return [row + row for row in grid]
+
+
+def rotate_tile_cw(grid: Grid) -> Grid:
+    """2x2 rotation tile: orig|rot90 / rot270|rot180. Square grids only.
+
+    Justified by tasks 46442a0e, 7fe24cdd.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    if h != w:
+        return grid
+    r90 = [[grid[h - 1 - c][r] for c in range(h)] for r in range(w)]
+    r180 = [[grid[h - 1 - r][w - 1 - c] for c in range(w)] for r in range(h)]
+    r270 = [[grid[c][w - 1 - r] for c in range(h)] for r in range(w)]
+    top = [grid[r] + r90[r] for r in range(h)]
+    bottom = [r270[r] + r180[r] for r in range(h)]
+    return top + bottom
+
+
+# --- Inpainting transforms ---
+
+def inpaint_periodic(grid: Grid) -> Grid:
+    """Fill zeros by detecting and extrapolating the periodic tile pattern.
+
+    Algorithm: try every possible tile size (ph, pw). For each, check if
+    all non-zero cells are consistent with grid[r][c] == tile[r%ph][c%pw].
+    Use the smallest consistent tile to fill zeros.
+
+    Justified by tasks 73251a56, 29ec7d0e.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    # Check if there are any zeros to fill
+    has_zero = any(grid[r][c] == 0 for r in range(h) for c in range(w))
+    if not has_zero:
+        return grid
+
+    # Try all tile periods from smallest to largest
+    for ph in range(1, h + 1):
+        for pw in range(1, w + 1):
+            # Build tile from non-zero cells
+            tile = [[None] * pw for _ in range(ph)]
+            consistent = True
+            for r in range(h):
+                if not consistent:
+                    break
+                for c in range(w):
+                    val = grid[r][c]
+                    if val == 0:
+                        continue
+                    tr, tc = r % ph, c % pw
+                    if tile[tr][tc] is None:
+                        tile[tr][tc] = val
+                    elif tile[tr][tc] != val:
+                        consistent = False
+                        break
+
+            if not consistent:
+                continue
+
+            # Check tile is fully determined (no None cells)
+            if any(tile[r][c] is None for r in range(ph) for c in range(pw)):
+                continue
+
+            # Fill zeros using the tile
+            result = [row[:] for row in grid]
+            for r in range(h):
+                for c in range(w):
+                    if result[r][c] == 0:
+                        result[r][c] = tile[r % ph][c % pw]
+            return result
+
+    # No consistent tile found — return original
+    return grid
+
+
 # --- Binary transforms ---
 
 def overlay(grid1: Grid, grid2: Grid) -> Grid:
@@ -360,6 +546,17 @@ def build_atomic_primitives() -> list[Primitive]:
         # Sorting (2)
         ("sort_rows_by_nonzero",        sort_rows_by_nonzero),
         ("sort_cols_by_nonzero",        sort_cols_by_nonzero),
+        # Extraction (2)
+        ("extract_largest_cc",          extract_largest_cc),
+        ("extract_unique_color_region", extract_unique_color_region),
+        # Tiling (5)
+        ("mirror_tile_h",              mirror_tile_h),
+        ("mirror_tile_v",              mirror_tile_v),
+        ("mirror_tile_both",           mirror_tile_both),
+        ("tile_h",                     tile_h),
+        ("rotate_tile_cw",             rotate_tile_cw),
+        # Inpainting (1)
+        ("inpaint_periodic",            inpaint_periodic),
     ]
     prims = [Primitive(name=name, arity=1, fn=fn, domain="arc")
              for name, fn in unary_ops]
