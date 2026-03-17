@@ -202,6 +202,7 @@ class Learner:
         """
         return [
             self._phase_exhaustive,
+            self._phase_per_row_column,
             self._phase_object_decomposition,
             self._phase_for_each_object,
             self._phase_near_miss_refinement,
@@ -223,6 +224,25 @@ class Learner:
         ctx.enum_candidates.extend(candidates)
         logger.debug(f"  [wake] Phase 1 enumeration: {time.time()-t:.2f}s, {ctx.n_evals} evals")
         return "enumeration" if ctx.solved else None
+
+    def _phase_per_row_column(self, ctx: _WakeContext) -> Optional[str]:
+        """Try per-row/per-column decomposition."""
+        if ctx.solved or not self.grammar.allow_structural_phases():
+            return None
+        if not hasattr(self.env, 'try_per_row_column_decomposition'):
+            return None
+        t = time.time()
+        result = self.env.try_per_row_column_decomposition(
+            ctx.task, ctx.all_prims) if ctx.budget_ok() else None
+        if result is not None:
+            name, fn = result
+            sp = self._evaluate_program(Program(root=name), ctx.task)
+            ctx.n_evals += 1
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+            ctx.enum_candidates.append(sp)
+        logger.debug(f"  [wake] Per-row/col: {time.time()-t:.2f}s")
+        return "per-row/column" if ctx.solved else None
 
     def _phase_object_decomposition(self, ctx: _WakeContext) -> Optional[str]:
         """Try per-object transforms via connected components."""
