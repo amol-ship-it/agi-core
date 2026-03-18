@@ -370,6 +370,10 @@ class ARCEnv(Environment):
         if result is not None:
             return result
 
+        result = self._try_nway_colormap(task)
+        if result is not None:
+            return result
+
         return None
 
     def _try_half_colormap(
@@ -484,6 +488,155 @@ class ARCEnv(Environment):
                     continue
 
                 name = f"half_colormap({split_name})"
+                prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                self.register_primitive(prim)
+                return (name, fn)
+
+        return None
+
+    def _try_nway_colormap(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Split grid into 3+ sections, learn pixel-tuple → output mapping."""
+        from .objects import _test_on_examples
+        examples = task.train_examples
+        if not examples or len(examples) < 2:
+            return None
+        fi, fo = examples[0]
+        h, w = len(fi), len(fi[0]) if fi else 0
+        oh, ow = len(fo), len(fo[0]) if fo else 0
+        if oh == 0 or ow == 0:
+            return None
+
+        splits = []
+        for n in [3, 4]:
+            # Vertical N-way with separators
+            sec_h = oh
+            total_h = sec_h * n + (n - 1)
+            if h == total_h and w == ow:
+                sep_positions = [sec_h * i + i for i in range(1, n)]
+                all_sep = all(len(set(fi[sp])) == 1 for sp in sep_positions if sp < h)
+                if all_sep:
+                    def _sf(g, sh=sec_h, nn=n):
+                        parts = []
+                        for i in range(nn):
+                            start = sh * i + i
+                            parts.append([g[r][:] for r in range(start, start + sh)])
+                        return parts
+                    splits.append((f"vsplit{n}", _sf))
+
+            # Vertical N-way without separators
+            if h == sec_h * n and w == ow:
+                def _sf(g, sh=sec_h, nn=n):
+                    return [[g[r][:] for r in range(sh * i, sh * (i + 1))] for i in range(nn)]
+                splits.append((f"vsplit{n}_nosep", _sf))
+
+            # Horizontal N-way with separators
+            sec_w = ow
+            total_w = sec_w * n + (n - 1)
+            if w == total_w and h == oh:
+                sep_positions = [sec_w * i + i for i in range(1, n)]
+                all_sep = all(len(set(fi[r][sp] for r in range(h))) == 1
+                              for sp in sep_positions if sp < w)
+                if all_sep:
+                    def _sf(g, sw=sec_w, nn=n):
+                        parts = []
+                        for i in range(nn):
+                            start = sw * i + i
+                            parts.append([row[start:start + sw] for row in g])
+                        return parts
+                    splits.append((f"hsplit{n}", _sf))
+
+            # Horizontal N-way without separators
+            if w == sec_w * n and h == oh:
+                def _sf(g, sw=sec_w, nn=n):
+                    return [[row[sw * i:sw * (i + 1)] for row in g] for i in range(nn)]
+                splits.append((f"hsplit{n}_nosep", _sf))
+
+        for split_name, split_fn in splits:
+            color_map: dict[tuple, int] = {}
+            consistent = True
+            for inp, out in examples:
+                try:
+                    parts = split_fn(inp)
+                except Exception:
+                    consistent = False
+                    break
+                rh = min(len(p) for p in parts)
+                rh = min(rh, len(out))
+                rw = min((len(p[0]) if p else 0) for p in parts)
+                rw = min(rw, len(out[0]) if out else 0)
+                for r in range(rh):
+                    for c in range(rw):
+                        key = tuple(p[r][c] for p in parts)
+                        val = out[r][c]
+                        if key in color_map and color_map[key] != val:
+                            consistent = False
+                            break
+                        color_map[key] = val
+                    if not consistent:
+                        break
+                if not consistent:
+                    break
+
+            if not consistent:
+                continue
+
+            def _make_fn(sf=split_fn, cm=dict(color_map)):
+                def fn(grid):
+                    parts = sf(grid)
+                    rh = min(len(p) for p in parts)
+                    rw = min((len(p[0]) if p else 0) for p in parts)
+                    return [[cm.get(tuple(p[r][c] for p in parts), 0)
+                             for c in range(rw)] for r in range(rh)]
+                return fn
+
+            fn = _make_fn()
+            if _test_on_examples(fn, examples):
+                # LOOCV
+                loocv_pass = True
+                for hold_idx in range(len(examples)):
+                    train_sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+                    sub_map: dict[tuple, int] = {}
+                    sub_ok = True
+                    for inp, out in train_sub:
+                        try:
+                            parts = split_fn(inp)
+                        except Exception:
+                            sub_ok = False
+                            break
+                        rh = min(len(p) for p in parts)
+                        rh = min(rh, len(out))
+                        rw = min((len(p[0]) if p else 0) for p in parts)
+                        rw = min(rw, len(out[0]) if out else 0)
+                        for r in range(rh):
+                            for c in range(rw):
+                                key = tuple(p[r][c] for p in parts)
+                                if key in sub_map and sub_map[key] != out[r][c]:
+                                    sub_ok = False
+                                    break
+                                sub_map[key] = out[r][c]
+                            if not sub_ok:
+                                break
+                        if not sub_ok:
+                            break
+                    if not sub_ok:
+                        loocv_pass = False
+                        break
+                    sub_fn = _make_fn(split_fn, sub_map)
+                    held_inp, held_exp = examples[hold_idx]
+                    try:
+                        if sub_fn(held_inp) != held_exp:
+                            loocv_pass = False
+                            break
+                    except Exception:
+                        loocv_pass = False
+                        break
+
+                if not loocv_pass:
+                    continue
+
+                name = f"nway_colormap({split_name})"
                 prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
                 self.register_primitive(prim)
                 return (name, fn)
