@@ -890,6 +890,153 @@ def _learn_rule_for_key(
 # Public API
 # =============================================================================
 
+def _try_global_fill_enclosed(examples):
+    """Try: fill ALL enclosed zero regions with a learned color.
+
+    For each enclosed region, determine fill color from training examples.
+    """
+    if not examples or len(examples) < 2:
+        return None
+
+    # All must be same dimensions
+    for inp, out in examples:
+        if not inp or not out:
+            return None
+        if len(inp) != len(out) or len(inp[0]) != len(out[0]):
+            return None
+
+    # Check: is every diff pixel an enclosed zero being filled?
+    fill_colors_seen = set()
+
+    for inp, out in examples:
+        h, w = len(inp), len(inp[0])
+        diff = compute_diff(inp, out)
+        if not diff:
+            return None
+
+        # Flood fill from border
+        exterior = set()
+        queue = []
+        for r in range(h):
+            for c in range(w):
+                if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and inp[r][c] == 0:
+                    if (r, c) not in exterior:
+                        exterior.add((r, c))
+                        queue.append((r, c))
+        while queue:
+            r, c = queue.pop()
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in exterior and inp[nr][nc] == 0:
+                    exterior.add((nr, nc))
+                    queue.append((nr, nc))
+
+        # All diff pixels should be interior zeros
+        interior = set()
+        for r in range(h):
+            for c in range(w):
+                if inp[r][c] == 0 and (r, c) not in exterior:
+                    interior.add((r, c))
+
+        if set(diff.keys()) != interior:
+            return None
+
+        fill_colors_seen.update(diff.values())
+
+    # Strategy 1: Single fill color for all enclosed regions
+    if len(fill_colors_seen) == 1:
+        fc = fill_colors_seen.pop()
+
+        def _apply_global_fill(grid, fill_color=fc):
+            h, w = len(grid), len(grid[0])
+            exterior = set()
+            queue = []
+            for r in range(h):
+                for c in range(w):
+                    if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and grid[r][c] == 0:
+                        if (r, c) not in exterior:
+                            exterior.add((r, c))
+                            queue.append((r, c))
+            while queue:
+                r, c = queue.pop()
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in exterior and grid[nr][nc] == 0:
+                        exterior.add((nr, nc))
+                        queue.append((nr, nc))
+            result = [row[:] for row in grid]
+            for r in range(h):
+                for c in range(w):
+                    if grid[r][c] == 0 and (r, c) not in exterior:
+                        result[r][c] = fill_color
+            return result
+
+        if _test_on_examples(_apply_global_fill, examples):
+            # LOOCV (trivial for this — the rule doesn't learn from data)
+            return ("procedural_global_fill_enclosed", _apply_global_fill)
+
+    # Strategy 2: Fill color = majority neighbor color (each region gets
+    # the color of its surrounding non-zero pixels)
+    def _apply_neighbor_fill(grid):
+        h, w = len(grid), len(grid[0])
+        exterior = set()
+        queue = []
+        for r in range(h):
+            for c in range(w):
+                if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and grid[r][c] == 0:
+                    if (r, c) not in exterior:
+                        exterior.add((r, c))
+                        queue.append((r, c))
+        while queue:
+            r, c = queue.pop()
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in exterior and grid[nr][nc] == 0:
+                    exterior.add((nr, nc))
+                    queue.append((nr, nc))
+
+        # Find connected interior regions
+        visited = set()
+        result = [row[:] for row in grid]
+        for r in range(h):
+            for c in range(w):
+                if grid[r][c] == 0 and (r, c) not in exterior and (r, c) not in visited:
+                    # BFS this region
+                    region = set()
+                    q = [(r, c)]
+                    while q:
+                        cr, cc = q.pop()
+                        if (cr, cc) in visited:
+                            continue
+                        if cr < 0 or cr >= h or cc < 0 or cc >= w:
+                            continue
+                        if grid[cr][cc] != 0 or (cr, cc) in exterior:
+                            continue
+                        visited.add((cr, cc))
+                        region.add((cr, cc))
+                        q.extend([(cr-1,cc),(cr+1,cc),(cr,cc-1),(cr,cc+1)])
+                    # Find majority neighbor color
+                    neighbor_colors = Counter()
+                    for pr, pc in region:
+                        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                            nr, nc = pr+dr, pc+dc
+                            if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] != 0:
+                                neighbor_colors[grid[nr][nc]] += 1
+                    if neighbor_colors:
+                        fc = neighbor_colors.most_common(1)[0][0]
+                    else:
+                        fc = 0
+                    for pr, pc in region:
+                        result[pr][pc] = fc
+        return result
+
+    if _test_on_examples(_apply_neighbor_fill, examples):
+        # LOOCV not needed — rule is deterministic from input
+        return ("procedural_fill_enclosed_by_neighbor", _apply_neighbor_fill)
+
+    return None
+
+
 def try_procedural(
     task,
 ) -> Optional[tuple[str, Callable]]:
@@ -902,4 +1049,10 @@ def try_procedural(
     if not examples or len(examples) < 2:
         return None
 
+    # Try global patterns first (simpler, faster)
+    result = _try_global_fill_enclosed(examples)
+    if result is not None:
+        return result
+
+    # Then try per-object action rules
     return _learn_object_action_rules(examples)
