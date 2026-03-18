@@ -726,6 +726,33 @@ def inpaint_periodic(grid: Grid) -> Grid:
 
 # --- Binary transforms ---
 
+def extend_right_and_down(grid: Grid) -> Grid:
+    """Each non-zero pixel extends right to edge, then down along the right edge.
+
+    Forms an L-shape: horizontal ray rightward + vertical ray downward
+    from the rightmost point of the horizontal ray. Later (lower) pixels
+    overwrite earlier ones.
+
+    Justified by task 99fa7670.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    # Collect source pixels sorted top-to-bottom
+    sources = [(r, c, grid[r][c]) for r in range(h) for c in range(w) if grid[r][c] != 0]
+    sources.sort()  # top-to-bottom, left-to-right
+
+    result = [row[:] for row in grid]
+    for r, c, color in sources:
+        # Extend right to edge
+        for cc in range(c + 1, w):
+            result[r][cc] = color
+        # Extend down from the right edge
+        for rr in range(r + 1, h):
+            result[rr][w - 1] = color
+    return result
+
+
 def crop_to_content(grid: Grid) -> Grid:
     """Crop to minimal bounding box containing all non-zero pixels.
 
@@ -1065,6 +1092,8 @@ def build_atomic_primitives() -> list[Primitive]:
         ("most_colorful_subgrid",       most_colorful_subgrid),
         # Fill variants (1)
         ("flood_fill_by_neighbor",      flood_fill_by_neighbor),
+        # L-shape extension (1)
+        ("extend_right_and_down",       extend_right_and_down),
         # Tiling (1)
         ("tile_v",                      tile_v),
     ]
