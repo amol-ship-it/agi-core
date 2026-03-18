@@ -273,6 +273,18 @@ class ARCEnv(Environment):
         result = self._try_subgrid_selection(task)
         if result is not None:
             return result
+        result = self._try_half_colormap(task)
+        if result is not None:
+            return result
+        result = self._try_nway_colormap(task)
+        if result is not None:
+            return result
+        result = self._try_quadrant_colormap(task)
+        if result is not None:
+            return result
+        result = self._try_transform_colormap(task)
+        if result is not None:
+            return result
         return None
 
     def _try_boolean_halves(
@@ -364,19 +376,6 @@ class ARCEnv(Environment):
                     prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
                     self.register_primitive(prim)
                     return (name, fn)
-
-        # Also try: split halves + learned color mapping
-        result = self._try_half_colormap(task)
-        if result is not None:
-            return result
-
-        result = self._try_nway_colormap(task)
-        if result is not None:
-            return result
-
-        result = self._try_quadrant_colormap(task)
-        if result is not None:
-            return result
 
         return None
 
@@ -754,6 +753,128 @@ class ARCEnv(Environment):
                 prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
                 self.register_primitive(prim)
                 return (name, fn)
+        return None
+
+    def _try_transform_colormap(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Try (input_pixel, transform(input)_pixel) → output_pixel mapping.
+
+        For same-dimension tasks, applies a transform to the input,
+        then learns a per-pixel color mapping from (original, transformed) pairs.
+        """
+        from .objects import _test_on_examples
+        from .transformation_primitives import (
+            fill_enclosed, dilate, erode, connect_same_color_h,
+            connect_same_color_v, flood_fill_by_neighbor,
+        )
+        examples = task.train_examples
+        if not examples or len(examples) < 2:
+            return None
+        fi, fo = examples[0]
+        if len(fi) != len(fo) or len(fi[0]) != len(fo[0]):
+            return None
+
+        transforms = [
+            ("fill_enclosed", fill_enclosed),
+            ("dilate", dilate),
+            ("erode", erode),
+            ("connect_h", connect_same_color_h),
+            ("connect_v", connect_same_color_v),
+            ("flood_fill", flood_fill_by_neighbor),
+        ]
+
+        for tname, tfn in transforms:
+            # Check transform produces same dims
+            try:
+                t0 = tfn(fi)
+                if len(t0) != len(fi) or len(t0[0]) != len(fi[0]):
+                    continue
+            except Exception:
+                continue
+
+            color_map: dict[tuple[int, int], int] = {}
+            consistent = True
+            for inp, out in examples:
+                try:
+                    t = tfn(inp)
+                except Exception:
+                    consistent = False
+                    break
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        key = (inp[r][c], t[r][c])
+                        val = out[r][c]
+                        if key in color_map and color_map[key] != val:
+                            consistent = False
+                            break
+                        color_map[key] = val
+                    if not consistent:
+                        break
+                if not consistent:
+                    break
+            if not consistent:
+                continue
+            # Must be non-trivial
+            if all(color_map.get((i, p), i) == i for i, p in color_map):
+                continue
+
+            def _make_fn(cm=dict(color_map), tf=tfn):
+                def fn(grid):
+                    t = tf(grid)
+                    return [[cm.get((grid[r][c], t[r][c]), grid[r][c])
+                             for c in range(len(grid[0]))] for r in range(len(grid))]
+                return fn
+
+            fn = _make_fn()
+            if not _test_on_examples(fn, examples):
+                continue
+
+            # LOOCV
+            loocv_pass = True
+            for hold_idx in range(len(examples)):
+                sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+                sub_map: dict[tuple[int, int], int] = {}
+                sub_ok = True
+                for inp, out in sub:
+                    try:
+                        t = tfn(inp)
+                    except Exception:
+                        sub_ok = False
+                        break
+                    for r in range(len(inp)):
+                        for c in range(len(inp[0])):
+                            key = (inp[r][c], t[r][c])
+                            if key in sub_map and sub_map[key] != out[r][c]:
+                                sub_ok = False
+                                break
+                            sub_map[key] = out[r][c]
+                        if not sub_ok:
+                            break
+                    if not sub_ok:
+                        break
+                if not sub_ok:
+                    loocv_pass = False
+                    break
+                sub_fn = _make_fn(sub_map, tfn)
+                held_inp, held_exp = examples[hold_idx]
+                try:
+                    if sub_fn(held_inp) != held_exp:
+                        loocv_pass = False
+                        break
+                except Exception:
+                    loocv_pass = False
+                    break
+
+            if not loocv_pass:
+                continue
+
+            name = f"transform_colormap({tname})"
+            prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+            self.register_primitive(prim)
+            return (name, fn)
+
         return None
 
     def _try_separator_cross_ref(
