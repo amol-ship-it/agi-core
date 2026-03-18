@@ -3335,33 +3335,33 @@ Each rule is LOOCV-validated: learned from N-1 examples, verified on the held-ou
 - Also includes global patterns: fill all enclosed regions (single color or neighbor-majority)
 
 **Results (final):**
-- Train: 84 → 87 (+3) — solved c0f76784, 6d75e8bb (fill_object_bbox), 25ff71a9 (movement)
-- Eval: 24 → 24 (net 0: lost bf89d739 to library renumbering, gained f45f5ca7 via color-based movement)
-- 25 unit tests, 435 total tests pass
+- Train: 84 → 88 (+4) — solved c0f76784, 6d75e8bb (fill_object_bbox), 25ff71a9 (movement), b9b7f026 (extraction)
+- Eval: 24 → 26 (+2) — f45f5ca7 (color-based movement), 1a2e2828 (unique_color extraction), 358ba94e (unique_size extraction)
+- 25 unit tests, 436 total tests pass
 
 **What worked:**
 - `fill_object_bbox` template with property-based rule learning: +2 train
 - Object movement detection (match objects by shape signature, learn displacement): +1 train, +1 eval
+- Object/subgrid extraction for dimension-change tasks: +1 train, +2 eval
+  - Selectors: is_largest, is_smallest, has_hole, unique_color, unique_size, most/least_compact
 - 8-directional rays (cardinal + diagonal) for extend_ray and project_to_border
 - Color-aware diff attribution (preferring color-matching objects)
-- `_try_global_fill_enclosed` (fill all enclosed regions) — matched 2 tasks already solved by other phases
 
 **Analysis of remaining tasks:**
-- 247 tasks have diffs that don't match any template
-- Biggest unmatched patterns: fill_outside_bbox_other_color (409 objects), erase_object (307), recolor_all_pixels (273), extend_outside_bbox (112)
-- 25 move-candidate tasks identified but only 1 solved — rest need relative positioning (gravity toward objects, alignment)
-- 59 tasks have non-zero backgrounds; bg-remapping found 0 additional matches
-- 6 tasks match templates but have inconsistent property→action mappings (e.g., fill_color depends on parity of bbox size)
-- 138 tasks have dimension changes (not supported)
+- 247 same-dim tasks have diffs not matching any template
+- Biggest unmatched: fill_outside_bbox (409 objects), erase_object (307), recolor (273)
+- 25 move tasks, only 1 solved — rest need relative positioning
+- 106 unsolved dimension-change tasks: 71 shrink_both, 14 grow_both, 15 row/col changes
+- Exhaustive scan finds only 3 more false-positive matches (pass train, fail test)
 
 **What didn't help:**
-- fill_enclosed template — matched in unit tests but all matching tasks already solved by existing `fill_enclosed` primitive
-- gravity template — too strict (requires full object erase+replace in diff); the more flexible movement detection superseded it
-- Non-zero background detection — 0 additional matches
-- Diagonal rays — broadened template coverage but no new task solves
-- Copy-pattern detection — only 6 tasks, too few to justify dedicated template
+- fill_enclosed, gravity templates — no new benchmark solves
+- Non-zero background detection — 0 matches
+- Diagonal rays — broadened coverage but no solves
+- Copy-pattern detection — only 6 candidates
+- Interior-of-hole extraction — only 1 candidate
 
-**Current state:** 87/400 train (21.8%), 24/400 eval (6.0%), ~1300 lines in procedural.py, 25 procedural tests.
+**Current state:** 88/400 train (22.0%), 26/400 eval (6.5%), ~1500 lines in procedural.py.
 
 ---
 *This document will be updated with each new session and major decision.*
