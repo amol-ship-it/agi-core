@@ -261,12 +261,118 @@ def _explain_program(prog_str: str, env=None) -> str:
     # For learned library entries, show expansion
     # (already handled by _format_expanded_program)
 
+    # Show learned rules if available (from in-memory or task data)
+    rule_data = None
+    try:
+        from domains.arc.primitives import _PRIM_RULES
+        rule_data = _PRIM_RULES.get(prog_str)
+    except ImportError:
+        pass
+    if rule_data:
+        escaped = html.escape(rule_data)
+        parts.append(f'<details><summary>Learned rules (click to expand)</summary>'
+                     f'<pre style="color:#7FDBFF;font-size:0.85em;margin:4px 0;">'
+                     f'{escaped}</pre></details>')
+
     if not parts:
         return ""
 
     return (f'<div class="program-explanation">'
             f'<h3>How this program works</h3>'
             f'{"".join(parts)}</div>')
+
+
+def _reconstruct_rules(prog_str: str, task) -> str:
+    """Reconstruct learned rules from task data for display purposes.
+
+    Re-analyzes the training examples to show what mapping was learned.
+    """
+    if not task or not task.train_examples:
+        return ""
+
+    examples = task.train_examples
+
+    # half_colormap: reconstruct the (both_nz, a, b) → output mapping
+    if "half_colormap" in prog_str:
+        fi, fo = examples[0]
+        h, w = len(fi), len(fi[0])
+        oh, ow = len(fo), len(fo[0])
+        # Determine split type from name
+        is_sep = "sep" in prog_str
+        is_v = "vsplit" in prog_str
+        if is_v:
+            sec_h = oh
+            if h == sec_h * 2 + (1 if is_sep else 0) and w == ow:
+                sep = 1 if is_sep else 0
+                rule = {}
+                for inp, out in examples:
+                    a = [inp[r][:] for r in range(sec_h)]
+                    b = [inp[r][:] for r in range(sec_h + sep, 2 * sec_h + sep)]
+                    for r in range(min(sec_h, len(out))):
+                        for c in range(min(ow, len(out[0]))):
+                            key = (int(a[r][c] != 0 and b[r][c] != 0), a[r][c], b[r][c])
+                            rule[key] = out[r][c]
+                lines = ["Color mapping (both_nonzero, top_half, bottom_half) → output:"]
+                for k, v in sorted(rule.items()):
+                    lines.append(f"  ({k[0]}, {k[1]}, {k[2]}) → {v}")
+                return "\n".join(lines)
+        elif "hsplit" in prog_str:
+            sec_w = ow
+            if w == sec_w * 2 + (1 if is_sep else 0) and h == oh:
+                sep = 1 if is_sep else 0
+                rule = {}
+                for inp, out in examples:
+                    a = [row[:sec_w] for row in inp]
+                    b = [row[sec_w + sep:] for row in inp]
+                    for r in range(min(oh, len(out))):
+                        for c in range(min(sec_w, len(out[0]))):
+                            key = (int(a[r][c] != 0 and b[r][c] != 0), a[r][c], b[r][c])
+                            rule[key] = out[r][c]
+                lines = ["Color mapping (both_nonzero, left_half, right_half) → output:"]
+                for k, v in sorted(rule.items()):
+                    lines.append(f"  ({k[0]}, {k[1]}, {k[2]}) → {v}")
+                return "\n".join(lines)
+
+    # per_pixel_stamp: reconstruct (color, dr, dc) → fill mapping
+    if "per_pixel_stamp" in prog_str:
+        rule = {}
+        for inp, out in examples:
+            h, w = len(inp), len(inp[0])
+            sources = [(r, c, inp[r][c]) for r in range(h) for c in range(w) if inp[r][c] != 0]
+            for r in range(h):
+                for c in range(w):
+                    if inp[r][c] == 0 and out[r][c] != 0:
+                        best_d, best_src = float('inf'), None
+                        for sr, sc, sc_color in sources:
+                            d = abs(r - sr) + abs(c - sc)
+                            if d < best_d:
+                                best_d = d
+                                best_src = (sr, sc, sc_color)
+                        if best_src:
+                            key = (best_src[2], r - best_src[0], c - best_src[1])
+                            rule[key] = out[r][c]
+        if rule:
+            lines = ["Stamp pattern (source_color, Δrow, Δcol) → fill_color:"]
+            for (sc, dr, dc), fc in sorted(rule.items()):
+                lines.append(f"  color {sc} + offset ({dr:+d}, {dc:+d}) → {fc}")
+            return "\n".join(lines)
+
+    # per_object_recolor: show strategy name from program
+    if "per_object_recolor" in prog_str:
+        strategy = prog_str.split("(")[1].rstrip(")") if "(" in prog_str else "unknown"
+        return f"Recolor strategy: {strategy}\nEach object's color is mapped based on its {strategy} property."
+
+    # Local rules: reconstruct from examples
+    if "local_rule" in prog_str or "pos_mod" in prog_str:
+        return f"Learned cellular automaton rule from training examples.\nRule type: {prog_str}"
+
+    # input_pred_correct: show base program
+    if "input_pred_correct" in prog_str:
+        base = prog_str.replace("input_pred_correct(", "").rstrip(")")
+        return (f"Base program: {base}\n"
+                f"Correction: (original_pixel, predicted_pixel) → corrected_pixel")
+
+    return ""
 
 
 def _html_page(title: str, body: str, extra_css: str = "") -> str:
@@ -685,6 +791,17 @@ def _generate_task_page(tid, tdata, task, env, back_link="../index.html",
     explanation = _explain_program(prog_str, env)
     if explanation:
         b.append(explanation)
+    # Show learned rules: from JSON data, in-memory _PRIM_RULES, or reconstructed
+    learned_rules = tdata.get("learned_rules")
+    if not learned_rules:
+        learned_rules = _reconstruct_rules(prog_str, task)
+    if learned_rules:
+        escaped_rules = html.escape(learned_rules)
+        b.append(f'<details open><summary style="color:#FF851B;cursor:pointer;">'
+                 f'Learned rules</summary>'
+                 f'<pre style="color:#7FDBFF;font-size:0.85em;margin:4px 0;'
+                 f'background:#0f3460;padding:8px;border-radius:4px;">'
+                 f'{escaped_rules}</pre></details>')
     if err < 1.0:
         b.append(f'<div class="error-info">Prediction error: {err:.4f}</div>')
     te = tdata.get("test_error")

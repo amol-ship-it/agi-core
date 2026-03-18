@@ -44,6 +44,11 @@ def from_np(arr: np.ndarray) -> Grid:
 
 _PRIM_MAP: dict[str, Primitive] = {}
 
+# Stores human-readable rule descriptions for dynamic primitives.
+# Key: primitive name, Value: string describing the learned rules.
+# Populated by environment.py when creating dynamic primitives.
+_PRIM_RULES: dict[str, str] = {}
+
 
 def register_prim(p: Primitive) -> None:
     """Register a primitive in the lookup map."""

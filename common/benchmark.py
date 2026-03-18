@@ -413,6 +413,19 @@ class ProgressTracker:
             "train_predictions": wr.train_predictions,
             "test_predictions": wr.test_predictions,
         }
+        # Include learned rule descriptions if available
+        # (populated during wake phase execution)
+        try:
+            from domains.arc.primitives import _PRIM_RULES
+            if _PRIM_RULES:
+                prog_name = record.get("program", "")
+                if prog_name:
+                    root = prog_name.split("(")[0] if "(" in prog_name else prog_name
+                    rule_desc = _PRIM_RULES.get(prog_name) or _PRIM_RULES.get(root)
+                    if rule_desc:
+                        record["learned_rules"] = rule_desc
+        except ImportError:
+            pass
         self.all_records.append(record)
 
         # Exclude predictions from JSONL (large grids bloat streaming output)

@@ -531,6 +531,12 @@ class ARCEnv(Environment):
                 name = f"half_colormap({split_name})"
                 prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
                 self.register_primitive(prim)
+                # Store learned rules for visualization
+                from .primitives import _PRIM_RULES
+                rules_desc = "Color mapping (both_nz, left, right) → output:\n"
+                for (bnz, a, b), out in sorted(color_map.items()):
+                    rules_desc += f"  ({bnz}, {a}, {b}) → {out}\n"
+                _PRIM_RULES[name] = rules_desc
                 return (name, fn)
 
         return None
@@ -1030,6 +1036,11 @@ class ARCEnv(Environment):
         name = "per_pixel_stamp"
         prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
         self.register_primitive(prim)
+        from .primitives import _PRIM_RULES
+        rules_desc = "Stamp pattern (source_color, Δrow, Δcol) → fill_color:\n"
+        for (sc, dr, dc), fc in sorted(stamp_rule.items()):
+            rules_desc += f"  color {sc} + offset ({dr:+d}, {dc:+d}) → {fc}\n"
+        _PRIM_RULES[name] = rules_desc
         return (name, fn)
 
     def _try_conditional_bbox_fill(
@@ -1979,6 +1990,15 @@ class ARCEnv(Environment):
             fn = _make_fn()
             prim = Primitive(name=rule_name, arity=0, fn=fn, domain="arc")
             self.register_primitive(prim)
+            from .primitives import _PRIM_RULES
+            n_rules = len(rule)
+            sample = list(rule.items())[:8]
+            rules_desc = f"Learned {n_rules} rules: key → output_pixel\n"
+            for k, v in sample:
+                rules_desc += f"  {k} → {v}\n"
+            if n_rules > 8:
+                rules_desc += f"  ... ({n_rules - 8} more)\n"
+            _PRIM_RULES[rule_name] = rules_desc
             return (rule_name, fn)
 
         # Also try: local rules on TRANSFORMED inputs (depth-2 composition)
