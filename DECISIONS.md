@@ -3428,5 +3428,13 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 
 **Current state:** 108/400 train (27.0%), 46/400 eval (11.5%), 54 atomic primitives, 436 tests.
 
+### Decision: Cell-grid colormap + visualization improvements
+
+**cell_grid_colormap:** Map separator-divided cell grids to smaller outputs. Each cell's sorted pixel content → single output pixel. Solved 6773b310. Pipeline time increased ~1.5min.
+
+**Visualization improvements:** Added program explanations (20+ primitive types) and learned rule reconstruction. Dynamic primitives now show "How this program works" + actual learned mappings on task detail pages.
+
+**Current state:** 109/400 train (27.3%), 46/400 eval (11.5%), 54 atomic primitives, 436 tests.
+
 ---
 *This document will be updated with each new session and major decision.*

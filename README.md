@@ -176,7 +176,7 @@ Rounds are auto-derived: 2 for budget ≥200K, 3 for ≥20M. Results are fully d
 | Mode | Tasks | Cap | Training | Eval | Wall time |
 |------|-------|-----|----------|------|-----------|
 | quick | 50 | 1M | 14/50 (28%) | 4/50 (8%) | 18s |
-| quick --max-tasks 0 | 400 | 1M | **108/400 (27.0%)** | **46/400 (11.5%)** | ~2 min |
+| quick --max-tasks 0 | 400 | 1M | **109/400 (27.3%)** | **46/400 (11.5%)** | ~2 min |
 
 Both modes use 2 rounds with culture transfer.
 
@@ -192,7 +192,7 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 | Mode | Training (400) | Eval (400) | Library | Overfit | Wall time |
 |------|---------------|------------|---------|---------|-----------|
-| quick --max-tasks 0 | **108/400 (27.0%)** | **46/400 (11.5%)** | ~30 | ~7 / ~2 | ~2 min |
+| quick --max-tasks 0 | **109/400 (27.3%)** | **46/400 (11.5%)** | ~30 | ~7 / ~2 | ~2 min |
 
 Solve criterion uses max-example-error (all examples must be solved, not just average) — this is stricter than avg-based, so numbers reflect genuine all-example solves.
 
@@ -294,7 +294,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 ### Current status
 
-**ARC-AGI-1: 108/400 training (27.0%), 46/400 eval (11.5%)** with 75 atomic primitives and 10 wake phases. Per-object recolor (10 strategies) contributes ~15% of training solves. Procedural object DSL adds object-level reasoning (fill, movement, extraction). Library entries transfer to eval. Solve criterion uses max-example-error (stricter than avg) so all numbers are genuine all-example solves.
+**ARC-AGI-1: 109/400 training (27.3%), 46/400 eval (11.5%)** with 75 atomic primitives and 10 wake phases. Per-object recolor (10 strategies) contributes ~15% of training solves. Procedural object DSL adds object-level reasoning (fill, movement, extraction). Library entries transfer to eval. Solve criterion uses max-example-error (stricter than avg) so all numbers are genuine all-example solves.
 
 **Ten wake phases** compose the same atomic primitives differently:
 1. **Exhaustive enumeration** — depth 1-3 sequential pipelines + mixed parameterized/transform compositions
@@ -313,7 +313,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 ### Current limitations
 
 - **Composition depth bottleneck.** Depth-4+ compositions are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds builds up to depth-4+ but saturates quickly.
-- **Overfit gap.** Training 27.0% vs eval 11.5% — some structural strategies (per-object recolor, local rules) learn task-specific rules that don't transfer.
+- **Overfit gap.** Training 27.3% vs eval 11.5% — some structural strategies (per-object recolor, local rules) learn task-specific rules that don't transfer.
 - **Search space dilution.** Adding primitives that don't solve new tasks is harmful (confirmed: 3 unnecessary prims caused -3 regression). Each new primitive must be pre-tested on unsolved tasks.
 - **Remaining tasks need complex reasoning.** ~295 unsolved training tasks need object-relationship logic, relative positioning, pattern completion, or multi-step conditional operations beyond current template matching.
 
