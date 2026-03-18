@@ -637,6 +637,12 @@ Bulk-restored structural strategies from pre-strip git history. Result: 22→28 
 
 **Response:** Dynamic primitives (per_pixel_stamp, half_colormap, per_object_recolor, etc.) are created at runtime during wake phases with learned rules captured in closures. Added to visualization: (1) "How this program works" section with pattern-based explanations for 20+ primitive types, (2) "Learned rules" section showing actual mapping data reconstructed from task training examples. Added `description` field to Primitive dataclass and `_PRIM_RULES` metadata store.
 
+### Prompt 10: Debug Viz Mismatch
+
+> I am confused by the viz in this example: 2013d3e2. The intermediate transform outputs a larger grid than the expected output. The program only has depth 1.
+
+**Response:** Found naming collision bug: `_try_subgrid_selection` registered a dynamic `most_colorful_subgrid` (arity=0, produces correct 3x3) that OVERWROTE the atomic `most_colorful_subgrid` (arity=1, produces 6x6). The viz loaded the atomic version and showed wrong intermediate. Fix: dynamic subgrid prims now use unique names like `most_colorful_subgrid_3x3`. Also added viz explanations for these names.
+
 ---
 
 *This document will be updated with each new session.*
