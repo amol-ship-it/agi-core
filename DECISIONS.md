@@ -3391,7 +3391,20 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 
 **Conditional phase** (`_phase_conditional_search`): Re-enabled after fixing multiprocessing crash (output validation + lazy registration). Tests `if(predicate, A, B)` for 12 predicates × top-10 primitives. Finds 136 conditional programs but none solve. Minimal overhead (~3s per 400 tasks).
 
-**Current state:** 95/400 train (23.8%), 32/400 eval (8.0%), 54 atomic primitives, 436 tests.
+### Decision: Half-colormap cross-reference (BIGGEST WIN)
+
+**What:** Split grid into halves (horizontal, vertical, or by separator), learn a pixel-level mapping: `(both_nonzero, a_pixel, b_pixel) → output_pixel`. LOOCV validated.
+
+**Why:** Many ARC tasks present two halves of information that must be combined. The existing boolean half operations (XOR, AND, OR) only handle non-zero/zero logic. The colormap learns ARBITRARY combinations — e.g., "if left=1 and right=2, output=3".
+
+**Results:** +10 train, +9 eval (19 new solves, 0 losses). Single biggest gain of the entire project.
+
+**Extensions tried:**
+- N-way (3/4 section) colormap: 3 pre-test matches but all fail LOOCV. Added but 0 new solves.
+- 2×2 quadrant colormap: 1 pre-test match but fails LOOCV. Added but 0 new solves.
+- Extended boolean ops (xor_color, diff_a, diff_b, same): 0 new solves.
+
+**Current state:** 105/400 train (26.2%), 41/400 eval (10.2%), 54 atomic primitives, 436 tests.
 
 ---
 *This document will be updated with each new session and major decision.*

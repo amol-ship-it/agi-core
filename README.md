@@ -176,10 +176,9 @@ Rounds are auto-derived: 2 for budget ≥200K, 3 for ≥20M. Results are fully d
 | Mode | Tasks | Cap | Training | Eval | Wall time |
 |------|-------|-----|----------|------|-----------|
 | quick | 50 | 1M | 14/50 (28%) | 4/50 (8%) | 18s |
-| quick --max-tasks 0 | 400 | 1M | **94/400 (23.5%)** | 30/400 (7.5%) | ~2 min |
-| default | 400 | 3M | 91/400 (22.8%) | **32/400 (8.0%)** | ~4 min |
+| quick --max-tasks 0 | 400 | 1M | **105/400 (26.2%)** | **41/400 (10.2%)** | ~2 min |
 
-Quick mode (1M cap) maximizes training solves via targeted primitives. Default mode (3M cap) finds 2 more eval solves with wider search, at the cost of 3 training solves from search space dilution. Both modes use 2 rounds with culture transfer.
+Both modes use 2 rounds with culture transfer.
 
 **Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
@@ -193,8 +192,7 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 | Mode | Training (400) | Eval (400) | Library | Overfit | Wall time |
 |------|---------------|------------|---------|---------|-----------|
-| quick --max-tasks 0 | **94/400 (23.5%)** | 30/400 (7.5%) | 31 | 7 / 2 | ~2 min |
-| default | 91/400 (22.8%) | **32/400 (8.0%)** | 29 | 6 / 2 | ~4 min |
+| quick --max-tasks 0 | **105/400 (26.2%)** | **41/400 (10.2%)** | ~30 | ~7 / ~2 | ~2 min |
 
 Solve criterion uses max-example-error (all examples must be solved, not just average) — this is stricter than avg-based, so numbers reflect genuine all-example solves.
 
@@ -296,7 +294,7 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 ### Current status
 
-**ARC-AGI-1: 94/400 training (23.5%), 30/400 eval (7.5%)** with 75 atomic primitives and 9 wake phases. Per-object recolor (10 strategies) contributes ~15% of training solves. Procedural object DSL adds object-level reasoning (fill, movement, extraction). Library entries transfer to eval. Solve criterion uses max-example-error (stricter than avg) so all numbers are genuine all-example solves.
+**ARC-AGI-1: 105/400 training (26.2%), 41/400 eval (10.2%)** with 75 atomic primitives and 10 wake phases. Per-object recolor (10 strategies) contributes ~15% of training solves. Procedural object DSL adds object-level reasoning (fill, movement, extraction). Library entries transfer to eval. Solve criterion uses max-example-error (stricter than avg) so all numbers are genuine all-example solves.
 
 **Nine wake phases** compose the same atomic primitives differently:
 1. **Exhaustive enumeration** — depth 1-3 sequential pipelines + mixed parameterized/transform compositions
