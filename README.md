@@ -171,7 +171,7 @@ All runs use **atomic vocabulary** — 75 primitives (54 atomic transforms + 12 
 
 Rounds are auto-derived: 2 for budget ≥200K, 3 for ≥20M. Results are fully deterministic with **seed 42** (`PYTHONHASHSEED=0` is enforced automatically).
 
-**Performance by mode** (measured 2026-03-17):
+**Performance by mode** (measured 2026-03-18):
 
 | Mode | Tasks | Cap | Training | Eval | Wall time |
 |------|-------|-----|----------|------|-----------|
@@ -188,7 +188,7 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 ### Expected performance
 
-**ARC-AGI-1** (measured 2026-03-17):
+**ARC-AGI-1** (measured 2026-03-18):
 
 | Mode | Training (400) | Eval (400) | Library | Overfit | Wall time |
 |------|---------------|------------|---------|---------|-----------|
@@ -210,7 +210,7 @@ Quick mode (50 tasks, ~18s): 14/50 (28%) train, 4/50 (8%) eval.
 
 **Depth-3 exhaustive enumeration** with no-op pruning and binary near-miss refinement.
 
-**9 wake phases:** exhaustive enumeration, object decomposition, for-each-object, cross-reference, local rules (cellular automata), procedural object DSL (per-object action rules, movement, extraction), color fix, cell-wise patch, input-pred correction.
+**10 wake phases:** exhaustive enumeration, object decomposition, for-each-object, cross-reference (boolean halves, half-colormap, separator ops, scale/tile, quadrant), local rules (cellular automata + position-modular + ncolors), procedural object DSL (per-object action rules, movement, extraction), conditional search, color fix + cell-wise patch, input-pred correction.
 
 **Sleep learning** extracts subtrees from ALL programs (solved + unsolved), quality-weighted by accuracy. Promotes transferable compositions to a bounded library with eviction — reused entries are immune, weak entries displaced by better ones.
 
@@ -286,8 +286,8 @@ The core loop (`core/learner.py`) depends **only** on these interfaces. It never
 COMPOUNDING CURVE (train / eval per round):
 Round         Train  Overfit  Library          Eval  Overfit
 ─────  ────────────  ───────  ───────  ────────────  ───────
-    1   90/400 (22.5%)       5       31    28/400 (7.0%)        2
-    2   94/400 (23.5%)       7       31    30/400 (7.5%)        2
+    1  100/400 (25.0%)       6       30    39/400 (9.8%)        2
+    2  105/400 (26.2%)       7       30    41/400 (10.2%)       2
 ```
 
 If solve rate increases across rounds without new hand-coded primitives, the framework is working.
@@ -296,25 +296,26 @@ If solve rate increases across rounds without new hand-coded primitives, the fra
 
 **ARC-AGI-1: 105/400 training (26.2%), 41/400 eval (10.2%)** with 75 atomic primitives and 10 wake phases. Per-object recolor (10 strategies) contributes ~15% of training solves. Procedural object DSL adds object-level reasoning (fill, movement, extraction). Library entries transfer to eval. Solve criterion uses max-example-error (stricter than avg) so all numbers are genuine all-example solves.
 
-**Nine wake phases** compose the same atomic primitives differently:
+**Ten wake phases** compose the same atomic primitives differently:
 1. **Exhaustive enumeration** — depth 1-3 sequential pipelines + mixed parameterized/transform compositions
 2. **Object decomposition** — per-object transforms, conditional recolor by 10 property strategies
 3. **For-each-object** — apply top-K candidates per connected component
-4. **Cross-reference** — boolean ops on grid halves, separator-based cell extraction, scale/tile detection
-5. **Local rules** — learned cellular automaton rules with LOOCV validation
+4. **Cross-reference** — boolean halves, half-colormap (learn pixel-tuple→output mapping from grid halves), separator ops, scale/tile detection, quadrant colormap
+5. **Local rules** — cellular automaton rules (compact, count, raw 3×3, position-modular, ncolors) with LOOCV
 6. **Procedural object DSL** — per-object action rules (fill bbox, extend rays, movement, extraction) learned from pixel diffs
-7. **Color fix** — learn color remapping from near-miss program outputs
-8. **Cell-wise patch** — learn fixed pixel corrections for near-miss outputs (<15% difference)
-9. **Input-pred correction** — learn (input_pixel, prediction_pixel) → output_pixel rules with LOOCV
+7. **Conditional search** — if(predicate, A, B) programs using 12 input predicates
+8. **Color fix** — learn color remapping from near-miss program outputs
+9. **Cell-wise patch** — learn fixed pixel corrections for near-miss outputs (<15% difference)
+10. **Input-pred correction** — learn (input_pixel, prediction_pixel) → output_pixel rules with LOOCV
 
 **Three primitive kinds:** transforms (Grid→Grid), perception (Grid→Value), and parameterized ((Value,...) → Grid→Grid factory). All compositions are fully transferable across tasks. **12 predicates** enable conditional branching (if/else programs).
 
 ### Current limitations
 
 - **Composition depth bottleneck.** Depth-4+ compositions are verified to work manually but can't be found by depth-3 exhaustive search. Compounding across rounds builds up to depth-4+ but saturates quickly.
-- **Overfit gap.** Training 23.5% vs eval 7.5% — many structural strategies (per-object recolor, local rules) learn task-specific rules that don't transfer. 7 training overfit + 2 eval overfit.
+- **Overfit gap.** Training 26.2% vs eval 10.2% — some structural strategies (per-object recolor, local rules) learn task-specific rules that don't transfer.
 - **Search space dilution.** Adding primitives that don't solve new tasks is harmful (confirmed: 3 unnecessary prims caused -3 regression). Each new primitive must be pre-tested on unsolved tasks.
-- **Remaining tasks need complex reasoning.** 306 unsolved training tasks need object-relationship logic, relative positioning, pattern completion, or conditional operations beyond current template matching.
+- **Remaining tasks need complex reasoning.** ~295 unsolved training tasks need object-relationship logic, relative positioning, pattern completion, or multi-step conditional operations beyond current template matching.
 
 ## Structure
 

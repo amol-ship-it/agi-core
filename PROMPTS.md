@@ -607,6 +607,18 @@ Bulk-restored structural strategies from pre-strip git history. Result: 22→28 
 
 **Response:** Updated README.md (presets, expected performance, current status, limitations, structure, roadmap), DECISIONS.md, benchmark.py comments. All numbers now reflect: train 94/400 (23.5%), eval 30/400 (7.5%), 75 primitives, 436 tests.
 
+### Prompt 5: Keep Going — Major Improvements Needed (round 2)
+
+> Keep going. We are still at very low accuracy, and need to make major improvements.
+
+**Response:** Deep analysis revealed conditional phase was missing from pipeline. Fixed it (multiprocessing crash from unpicklable closures). Then: position-modular local rules (+1 train, +1 eval), ncolors local rules (+1 eval). BREAKTHROUGH: half_colormap cross-reference (+10 train, +9 eval) — split grid in half, learn pixel-tuple→output color mapping. Extended to N-way and quadrant colormaps. Train 94→105 (+11), eval 30→41 (+11).
+
+### Prompt 6: Keep Going + Verify Docs
+
+> Did you push changes to github on the main branch? Did you update all documentation including README, PROMPTS and DECISIONS? Make sure there is no stale information in the README. Follow the instructions in CLAUDE.md. Keep going. We are still at very low accuracy, and need to make major improvements.
+
+**Response:** Verified all pushed to main. Fixed stale README items (wake phase count 9→10, overfit gap numbers, unsolved count). Updated PROMPTS.md. Continuing with improvements.
+
 ---
 
 *This document will be updated with each new session.*
