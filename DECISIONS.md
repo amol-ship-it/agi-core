@@ -3334,19 +3334,34 @@ Each rule is LOOCV-validated: learned from N-1 examples, verified on the held-ou
 - Rule learning: attribute diffs to objects → match templates → learn property→action mapping → LOOCV validate
 - Also includes global patterns: fill all enclosed regions (single color or neighbor-majority)
 
-**Results:**
-- Train: 84 → 86 (+2) — solved c0f76784 (compactness_bin:fill_object_bbox), 6d75e8bb (all:fill_object_bbox)
-- Eval: 24 → 23 (-1, noise from library renumbering, not a regression)
-- 60b61512 trains perfectly (size_gt_1:fill_object_bbox) but fails on test
-- 24 unit tests, 435 total tests pass
+**Results (final):**
+- Train: 84 → 87 (+3) — solved c0f76784, 6d75e8bb (fill_object_bbox), 25ff71a9 (movement)
+- Eval: 24 → 24 (net 0: lost bf89d739 to library renumbering, gained f45f5ca7 via color-based movement)
+- 25 unit tests, 435 total tests pass
+
+**What worked:**
+- `fill_object_bbox` template with property-based rule learning: +2 train
+- Object movement detection (match objects by shape signature, learn displacement): +1 train, +1 eval
+- 8-directional rays (cardinal + diagonal) for extend_ray and project_to_border
+- Color-aware diff attribution (preferring color-matching objects)
+- `_try_global_fill_enclosed` (fill all enclosed regions) — matched 2 tasks already solved by other phases
 
 **Analysis of remaining tasks:**
 - 247 tasks have diffs that don't match any template
 - Biggest unmatched patterns: fill_outside_bbox_other_color (409 objects), erase_object (307), recolor_all_pixels (273), extend_outside_bbox (112)
+- 25 move-candidate tasks identified but only 1 solved — rest need relative positioning (gravity toward objects, alignment)
+- 59 tasks have non-zero backgrounds; bg-remapping found 0 additional matches
 - 6 tasks match templates but have inconsistent property→action mappings (e.g., fill_color depends on parity of bbox size)
-- 138 tasks have dimension changes (not supported yet)
+- 138 tasks have dimension changes (not supported)
 
-**What didn't help:** fill_enclosed and gravity templates matched in unit tests but didn't solve additional benchmark tasks. The remaining tasks need more complex spatial reasoning.
+**What didn't help:**
+- fill_enclosed template — matched in unit tests but all matching tasks already solved by existing `fill_enclosed` primitive
+- gravity template — too strict (requires full object erase+replace in diff); the more flexible movement detection superseded it
+- Non-zero background detection — 0 additional matches
+- Diagonal rays — broadened template coverage but no new task solves
+- Copy-pattern detection — only 6 tasks, too few to justify dedicated template
+
+**Current state:** 87/400 train (21.8%), 24/400 eval (6.0%), ~1300 lines in procedural.py, 25 procedural tests.
 
 ---
 *This document will be updated with each new session and major decision.*
