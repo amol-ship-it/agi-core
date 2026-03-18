@@ -391,29 +391,61 @@ class ARCEnv(Environment):
         h, w = len(first_inp), len(first_inp[0]) if first_inp else 0
         oh, ow = len(first_out), len(first_out[0]) if first_out else 0
 
+        # Helper: make a split function with optional pre-transform
+        def _make_split(pre_fn, split_type, sep_idx=None):
+            """Build a split function: pre_fn → split."""
+            def split_fn(grid):
+                t = pre_fn(grid)
+                th, tw = len(t), len(t[0])
+                if split_type == "v":
+                    return ([t[r][:] for r in range(th // 2)],
+                            [t[r][:] for r in range(th // 2, th)])
+                elif split_type == "h":
+                    return ([row[:tw // 2] for row in t],
+                            [row[tw // 2:] for row in t])
+                elif split_type == "vs":
+                    mid = th // 2
+                    return ([t[r][:] for r in range(mid)],
+                            [t[r][:] for r in range(mid + 1, th)])
+                elif split_type == "hs":
+                    mid = tw // 2
+                    return ([row[:mid] for row in t],
+                            [row[mid + 1:] for row in t])
+                return (t, t)
+            return split_fn
+
+        # Try with original input and also with pre-transforms
+        from .transformation_primitives import trim_rows, trim_cols, crop_to_content
+        input_variants = [("", lambda g: g, first_inp)]
+        for pname, pfn in [("trim_rows_", trim_rows), ("trim_cols_", trim_cols),
+                           ("crop_", crop_to_content)]:
+            try:
+                ti = pfn(first_inp)
+                if isinstance(ti, list) and ti and isinstance(ti[0], list):
+                    if (len(ti), len(ti[0])) != (h, w):
+                        input_variants.append((pname, pfn, ti))
+            except Exception:
+                pass
+
         splits = []
-        # Exact halves
-        if h == oh * 2 and w == ow:
-            splits.append(("vsplit", lambda g: (
-                [g[r][:] for r in range(len(g) // 2)],
-                [g[r][:] for r in range(len(g) // 2, len(g))])))
-        if w == ow * 2 and h == oh:
-            splits.append(("hsplit", lambda g: (
-                [row[:len(row) // 2] for row in g],
-                [row[len(row) // 2:] for row in g])))
-        # Separator halves
-        if h == oh * 2 + 1 and w == ow:
-            mid = h // 2
-            if len(set(first_inp[mid])) == 1:
-                splits.append(("vsplit_sep", lambda g: (
-                    [g[r][:] for r in range(len(g) // 2)],
-                    [g[r][:] for r in range(len(g) // 2 + 1, len(g))])))
-        if w == ow * 2 + 1 and h == oh:
-            mid = w // 2
-            if len(set(first_inp[r][mid] for r in range(h))) == 1:
-                splits.append(("hsplit_sep", lambda g: (
-                    [row[:len(row) // 2] for row in g],
-                    [row[len(row) // 2 + 1:] for row in g])))
+        for prefix, pre_fn, pre_inp in input_variants:
+            ph, pw = len(pre_inp), len(pre_inp[0]) if pre_inp else 0
+            if ph == oh * 2 and pw == ow:
+                splits.append((f"{prefix}vsplit",
+                               _make_split(pre_fn, "v")))
+            if pw == ow * 2 and ph == oh:
+                splits.append((f"{prefix}hsplit",
+                               _make_split(pre_fn, "h")))
+            if ph == oh * 2 + 1 and pw == ow:
+                mid = ph // 2
+                if len(set(pre_inp[mid])) == 1:
+                    splits.append((f"{prefix}vsplit_sep",
+                                   _make_split(pre_fn, "vs")))
+            if pw == ow * 2 + 1 and ph == oh:
+                mid = pw // 2
+                if len(set(pre_inp[r][mid] for r in range(ph))) == 1:
+                    splits.append((f"{prefix}hsplit_sep",
+                                   _make_split(pre_fn, "hs")))
 
         for split_name, split_fn in splits:
             color_map: dict[tuple, int] = {}
