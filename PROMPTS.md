@@ -613,11 +613,17 @@ Bulk-restored structural strategies from pre-strip git history. Result: 22→28 
 
 **Response:** Deep analysis revealed conditional phase was missing from pipeline. Fixed it (multiprocessing crash from unpicklable closures). Then: position-modular local rules (+1 train, +1 eval), ncolors local rules (+1 eval). BREAKTHROUGH: half_colormap cross-reference (+10 train, +9 eval) — split grid in half, learn pixel-tuple→output color mapping. Extended to N-way and quadrant colormaps. Train 94→105 (+11), eval 30→41 (+11).
 
-### Prompt 6: Keep Going + Verify Docs
+### Prompt 6: Keep Going + Verify Docs (round 1)
 
 > Did you push changes to github on the main branch? Did you update all documentation including README, PROMPTS and DECISIONS? Make sure there is no stale information in the README. Follow the instructions in CLAUDE.md. Keep going. We are still at very low accuracy, and need to make major improvements.
 
-**Response:** Verified all pushed to main. Fixed stale README items (wake phase count 9→10, overfit gap numbers, unsolved count). Updated PROMPTS.md. Continuing with improvements.
+**Response:** Fixed colormap ordering bug (methods unreachable from `_try_boolean_halves`): +1 train, +3 eval. Added pixel_to_tile, transform_colormap, pre-transform colormap variants. Total: train 94→106 (+12), eval 30→45 (+15).
+
+### Prompt 7: Keep Going + Verify Docs (round 2)
+
+> Did you push changes to github on the main branch? Did you update all documentation including README, PROMPTS and DECISIONS? Make sure there is no stale information in the README. Follow the instructions in CLAUDE.md. Keep going. We are still at very low accuracy, and need to make major improvements.
+
+**Response:** Verified all pushed, fixed remaining stale README numbers. Tried: repair_section (0), symmetry completion (0), majority/nearest fill (0), more transform colormaps (0), tile-based rules (0). The remaining ~294 train and ~355 eval tasks need object-level reasoning beyond pixel/grid-level operations. All easy structural patterns have been exhausted.
 
 ---
 
