@@ -489,10 +489,50 @@ def _pred_border(prediction, expected) -> tuple[str, Optional[list]]:
 # Program parsing & step-by-step execution
 # --------------------------------------------------------------------------
 
+# Dynamic primitive name prefixes — these use parentheses as part of the
+# name (e.g., "half_colormap(vsplit_sep)") NOT as composition syntax.
+_DYNAMIC_PRIM_PREFIXES = (
+    "half_colormap(", "nway_colormap(", "quad_colormap(",
+    "transform_colormap(", "per_object_recolor(", "per_pixel_stamp",
+    "procedural(", "procedural_move(", "procedural_extract(",
+    "procedural_extract_at(", "procedural_global_",
+    "cross_ref(", "cell_patch(", "color_remap(",
+    "input_pred_correct(", "input_pred_nbr_correct(",
+    "compact_local_rule", "count_local_rule", "raw3x3_local_rule",
+    "pos_mod", "ncolors_local_rule",
+    "recolor_markers_", "slide_markers_",
+    "cell_grid_colormap", "cond_bbox_fill(",
+    "if_", "densest_subgrid_", "most_colorful_subgrid_",
+    "pixel_to_tile(", "local_rule(",
+)
+
+
 def parse_program_tree(prog_str: str) -> Optional[Program]:
+    """Parse a program string into a Program tree.
+
+    Handles dynamic primitive names that contain parentheses as part of
+    their name (e.g., 'half_colormap(vsplit_sep)') by recognizing known
+    prefixes and treating them as leaf nodes.
+    """
     s = prog_str.strip()
     if not s:
         return None
+
+    # Check if this is a dynamic primitive (name includes parentheses)
+    for prefix in _DYNAMIC_PRIM_PREFIXES:
+        if s.startswith(prefix):
+            # Check if the ENTIRE string is just this dynamic prim name
+            # (no additional composition wrapping it)
+            depth = 0
+            for i, ch in enumerate(s):
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+            if depth == 0:
+                # Balanced parentheses — treat entire string as leaf
+                return Program(root=s)
+
     pi = s.find('(')
     if pi == -1:
         return Program(root=s)
@@ -509,7 +549,19 @@ def parse_program_tree(prog_str: str) -> Optional[Program]:
             start = i + 1
     children_strs.append(inner[start:].strip())
     children = [parse_program_tree(cs) for cs in children_strs if cs]
-    return Program(root=name, children=[c for c in children if c])
+    children = [c for c in children if c]
+
+    # If the root is an unknown name and there's exactly one child that
+    # looks like a dynamic prim argument (not a real primitive), this might
+    # be a dynamic prim parsed incorrectly. Check if root(child) is a known
+    # dynamic prim pattern.
+    if children and len(children) == 1:
+        full_name = f"{name}({children[0].root})"
+        for prefix in _DYNAMIC_PRIM_PREFIXES:
+            if full_name.startswith(prefix):
+                return Program(root=full_name)
+
+    return Program(root=name, children=children)
 
 
 def _expand_learned(prog: Program, library_map: dict) -> Program:
