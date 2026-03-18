@@ -753,6 +753,95 @@ def extend_right_and_down(grid: Grid) -> Grid:
     return result
 
 
+def extract_unique_quadrant(grid: Grid) -> Grid:
+    """Split grid by separator lines and extract the unique quadrant.
+
+    Detects horizontal and vertical separator lines (rows/cols of one color),
+    splits into sections, and returns the one that differs from the majority.
+
+    Justified by tasks 2dc579da, 88a62173.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    # Find separator rows (all same non-zero color)
+    sep_rows = []
+    for r in range(h):
+        vals = set(grid[r])
+        if len(vals) == 1 and 0 not in vals:
+            sep_rows.append(r)
+
+    # Find separator cols
+    sep_cols = []
+    for c in range(w):
+        vals = set(grid[r][c] for r in range(h))
+        if len(vals) == 1 and 0 not in vals:
+            sep_cols.append(c)
+
+    # Also try: separator = row where all pixels match AND that color appears in every position
+    # Find potential separator color
+    if not sep_rows and not sep_cols:
+        # Try rows where all pixels are the same color
+        for r in range(h):
+            if len(set(grid[r])) == 1:
+                sep_rows.append(r)
+        for c in range(w):
+            col_vals = set(grid[r][c] for r in range(h))
+            if len(col_vals) == 1:
+                sep_cols.append(c)
+
+    if not sep_rows and not sep_cols:
+        return grid
+
+    # Build row boundaries and col boundaries
+    row_bounds = []
+    prev = 0
+    for r in sorted(set(sep_rows)):
+        if r > prev:
+            row_bounds.append((prev, r))
+        prev = r + 1
+    if prev < h:
+        row_bounds.append((prev, h))
+
+    col_bounds = []
+    prev = 0
+    for c in sorted(set(sep_cols)):
+        if c > prev:
+            col_bounds.append((prev, c))
+        prev = c + 1
+    if prev < w:
+        col_bounds.append((prev, w))
+
+    if not row_bounds or not col_bounds:
+        return grid
+
+    # Extract all sections
+    sections = []
+    for r0, r1 in row_bounds:
+        for c0, c1 in col_bounds:
+            section = tuple(tuple(grid[r][c] for c in range(c0, c1)) for r in range(r0, r1))
+            sections.append((r0, c0, r1, c1, section))
+
+    if len(sections) < 2:
+        return grid
+
+    # Find the unique section (differs from majority)
+    section_data = [s[4] for s in sections]
+    from collections import Counter
+    counts = Counter(section_data)
+    if len(counts) < 2:
+        return grid  # All sections are the same
+
+    # Find the section that appears least (the unique one)
+    least_common = counts.most_common()[-1][0]
+    for r0, c0, r1, c1, section in sections:
+        if section == least_common:
+            return [list(grid[r][c0:c1]) for r in range(r0, r1)]
+
+    return grid
+
+
 def crop_to_content(grid: Grid) -> Grid:
     """Crop to minimal bounding box containing all non-zero pixels.
 
@@ -1094,6 +1183,8 @@ def build_atomic_primitives() -> list[Primitive]:
         ("flood_fill_by_neighbor",      flood_fill_by_neighbor),
         # L-shape extension (1)
         ("extend_right_and_down",       extend_right_and_down),
+        # Quadrant extraction (1)
+        ("extract_unique_quadrant",     extract_unique_quadrant),
         # Tiling (1)
         ("tile_v",                      tile_v),
     ]
