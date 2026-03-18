@@ -896,6 +896,27 @@ def overlay_all_sections(grid: Grid) -> Grid:
     return result
 
 
+def remove_separators(grid: Grid) -> Grid:
+    """Remove separator rows and columns (rows/cols where all pixels are same color).
+
+    Keeps only rows and columns with mixed content.
+    Justified by task 68b67ca3.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    kept_rows = [r for r in range(h) if len(set(grid[r])) > 1]
+    if not kept_rows:
+        return grid
+    intermediate = [grid[r] for r in kept_rows]
+    h2 = len(intermediate)
+    w2 = len(intermediate[0])
+    kept_cols = [c for c in range(w2) if len(set(intermediate[r][c] for r in range(h2))) > 1]
+    if not kept_cols:
+        return intermediate
+    return [[intermediate[r][c] for c in kept_cols] for r in range(h2)]
+
+
 def crop_to_content(grid: Grid) -> Grid:
     """Crop to minimal bounding box containing all non-zero pixels.
 
@@ -1237,9 +1258,10 @@ def build_atomic_primitives() -> list[Primitive]:
         ("flood_fill_by_neighbor",      flood_fill_by_neighbor),
         # L-shape extension (1)
         ("extend_right_and_down",       extend_right_and_down),
-        # Quadrant extraction (2)
+        # Quadrant/separator operations (3)
         ("extract_unique_quadrant",     extract_unique_quadrant),
         ("overlay_all_sections",        overlay_all_sections),
+        ("remove_separators",           remove_separators),
         # Tiling (1)
         ("tile_v",                      tile_v),
     ]
