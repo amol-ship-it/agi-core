@@ -3320,4 +3320,33 @@ Each rule is LOOCV-validated: learned from N-1 examples, verified on the held-ou
 **Current state:** 68/400 train (17.0%), 19/400 eval (4.8%), 35 primitives, 411 tests.
 
 ---
+
+## Session — Procedural Object DSL (2026-03-17)
+
+### Decision: Add procedural per-object action rules phase
+
+**What:** New wake phase (`_phase_procedural`) that learns per-object action rules from pixel diffs between input and output grids.
+
+**Architecture:**
+- `domains/arc/procedural.py` (new, ~1000 lines): pixel-diff engine, 6 action templates, property-based rule learning
+- Phase inserted after `_phase_local_rules` in the wake pipeline
+- Templates: `fill_object_bbox`, `fill_enclosed`, `extend_ray`, `fill_between`, `project_to_border`, `gravity`
+- Rule learning: attribute diffs to objects → match templates → learn property→action mapping → LOOCV validate
+- Also includes global patterns: fill all enclosed regions (single color or neighbor-majority)
+
+**Results:**
+- Train: 84 → 86 (+2) — solved c0f76784 (compactness_bin:fill_object_bbox), 6d75e8bb (all:fill_object_bbox)
+- Eval: 24 → 23 (-1, noise from library renumbering, not a regression)
+- 60b61512 trains perfectly (size_gt_1:fill_object_bbox) but fails on test
+- 24 unit tests, 435 total tests pass
+
+**Analysis of remaining tasks:**
+- 247 tasks have diffs that don't match any template
+- Biggest unmatched patterns: fill_outside_bbox_other_color (409 objects), erase_object (307), recolor_all_pixels (273), extend_outside_bbox (112)
+- 6 tasks match templates but have inconsistent property→action mappings (e.g., fill_color depends on parity of bbox size)
+- 138 tasks have dimension changes (not supported yet)
+
+**What didn't help:** fill_enclosed and gravity templates matched in unit tests but didn't solve additional benchmark tasks. The remaining tasks need more complex spatial reasoning.
+
+---
 *This document will be updated with each new session and major decision.*
