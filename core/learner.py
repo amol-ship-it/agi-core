@@ -324,7 +324,8 @@ class Learner:
             return None
         t = time.time()
         result, n_evals = self._try_conditional_search(
-            predicates, ctx.enum_candidates, ctx.all_prims, ctx.task)
+            predicates, ctx.enum_candidates, ctx.all_prims, ctx.task,
+            top_k=10)
         ctx.n_evals += n_evals
         if result is not None:
             self._update_pareto_front(ctx.pareto, result)
@@ -1280,6 +1281,7 @@ class Learner:
         """
         n_evals = 0
         solve_thresh = self.search_cfg.solve_threshold
+        t_start = time.time()
 
         # Build candidate pool from top depth-1 programs
         depth1 = sorted(
@@ -1300,7 +1302,30 @@ class Learner:
 
         best_result: Optional[ScoredProgram] = None
 
+        # Pre-cache all prim outputs ONCE (the expensive part)
+        prim_cache: dict[str, tuple] = {}  # name -> (prim, [(out, exp), ...])
+        for prim in top_prims:
+            if time.time() - t_start > 0.3:
+                break
+            outputs = []
+            ok = True
+            for inp, exp in task.train_examples:
+                try:
+                    out = prim.fn(inp)
+                    outputs.append((out, exp))
+                except Exception:
+                    ok = False
+                    break
+            if ok:
+                prim_cache[prim.name] = (prim, outputs)
+
+        if len(prim_cache) < 2:
+            return None, 0
+
         for pred_name, pred_fn in predicates:
+            if time.time() - t_start > 0.5:
+                break
+
             true_idx, false_idx = [], []
             for idx, (inp, _) in enumerate(task.train_examples):
                 try:
@@ -1311,16 +1336,13 @@ class Learner:
             if not true_idx or not false_idx:
                 continue
 
-            # Score each candidate on each group
             true_scores = []
             false_scores = []
-            for prim in top_prims:
-                te = sum(self.drive.prediction_error(
-                    prim.fn(task.train_examples[i][0]), task.train_examples[i][1])
-                    for i in true_idx) / len(true_idx)
-                fe = sum(self.drive.prediction_error(
-                    prim.fn(task.train_examples[i][0]), task.train_examples[i][1])
-                    for i in false_idx) / len(false_idx)
+            for name, (prim, outputs) in prim_cache.items():
+                te = sum(self.drive.prediction_error(outputs[i][0], outputs[i][1])
+                         for i in true_idx) / len(true_idx)
+                fe = sum(self.drive.prediction_error(outputs[i][0], outputs[i][1])
+                         for i in false_idx) / len(false_idx)
                 true_scores.append((te, prim))
                 false_scores.append((fe, prim))
 
