@@ -27,6 +27,7 @@ class Primitive:
     domain: str = ""  # which domain contributed this primitive
     learned: bool = False  # True if discovered by sleep phase, False if hand-coded
     kind: str = "transform"  # "transform", "perception", or "parameterized"
+    description: str = ""  # human-readable description of learned rules/logic
 
     def __repr__(self):
         tag = " [learned]" if self.learned else ""

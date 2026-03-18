@@ -100,11 +100,180 @@ INDEX_CSS = """
 """
 
 
+EXPLANATION_CSS = """
+.program-explanation { background:#1a2744; border:1px solid #334; border-radius:6px;
+    padding:12px 16px; margin:8px 0; font-size:0.85em; line-height:1.5; }
+.program-explanation h3 { color:#FF851B; margin:0 0 8px 0; font-size:0.95em; }
+.program-explanation .rule-table { width:100%; border-collapse:collapse; margin:4px 0; }
+.program-explanation .rule-table td { padding:2px 8px; border-bottom:1px solid #222; }
+.program-explanation .rule-table td:first-child { color:#7FDBFF; font-weight:bold; }
+.program-explanation code { background:#0f3460; padding:2px 6px; border-radius:3px; }
+"""
+
+
+def _explain_program(prog_str: str, env=None) -> str:
+    """Generate a human-readable HTML explanation of a program.
+
+    Handles dynamic primitives (per_pixel_stamp, half_colormap, etc.)
+    by describing what they do and showing learned rules when available.
+    """
+    from domains.arc.primitives import _PRIM_MAP
+
+    parts: list[str] = []
+
+    # Extract the root primitive name
+    root = prog_str.split("(")[0] if "(" in prog_str else prog_str
+
+    # Look up the primitive to get its description
+    prim = _PRIM_MAP.get(prog_str) or _PRIM_MAP.get(root)
+    if prim and prim.description:
+        parts.append(f'<p>{html.escape(prim.description)}</p>')
+
+    # Pattern-based explanations for dynamic primitives
+    explanations = {
+        "half_colormap": (
+            "Split the input grid in half (horizontally or vertically, "
+            "possibly by a separator line), then learn a pixel-level color mapping: "
+            "for each position, map <code>(left_pixel, right_pixel)</code> → "
+            "<code>output_pixel</code>. The mapping is learned from training examples "
+            "and LOOCV-validated."
+        ),
+        "nway_colormap": (
+            "Split the input grid into 3+ sections (by separator lines), "
+            "then learn a mapping from the tuple of corresponding pixels across "
+            "all sections to the output pixel color."
+        ),
+        "quad_colormap": (
+            "Split the input grid into 2×2 quadrants, then learn a mapping "
+            "from <code>(top_left, top_right, bottom_left, bottom_right)</code> → "
+            "<code>output_pixel</code>."
+        ),
+        "transform_colormap": (
+            "Apply a transform T to the input, then learn a mapping "
+            "<code>(original_pixel, T(original)_pixel)</code> → "
+            "<code>output_pixel</code>. The transform reveals structure "
+            "that the color mapping can exploit."
+        ),
+        "per_pixel_stamp": (
+            "Each non-zero pixel in the input acts as an anchor. A stamp pattern "
+            "is learned: <code>(anchor_color, Δrow, Δcol)</code> → "
+            "<code>fill_color</code>. The pattern is stamped around each anchor, "
+            "filling only zero-valued positions."
+        ),
+        "per_object_recolor": (
+            "Detect connected components (objects) in the input. Learn a "
+            "property-based rule that maps each object's property to a new color. "
+            "Properties tried: size, shape, compactness, has_hole, position, etc."
+        ),
+        "cond_bbox_fill": (
+            "For each connected component, optionally fill zeros inside its "
+            "bounding box with a learned color. Which objects get filled is "
+            "determined by a property (compactness, has_hole, etc.)."
+        ),
+        "procedural": (
+            "Pixel-diff engine: compute what changed between input and output, "
+            "attribute changes to objects, match action templates (fill_bbox, "
+            "extend_ray, fill_between, etc.), learn property→action mapping."
+        ),
+        "procedural_move": (
+            "Match objects between input and output by shape signature, "
+            "learn displacement rules: each object moves by a (Δrow, Δcol) "
+            "determined by its properties (color, size, etc.)."
+        ),
+        "procedural_extract": (
+            "Extract a subgrid from the input at the position of a selected object. "
+            "The object is identified by a property (is_largest, has_hole, unique_color, etc.)."
+        ),
+        "pixel_to_tile": (
+            "Upscale: each input pixel maps to a k×k output tile. "
+            "The tile pattern is determined by the pixel's color."
+        ),
+        "compact_local_rule": (
+            "Cellular automaton: <code>(center_pixel, n_nonzero_4neighbors, "
+            "majority_4neighbor_color)</code> → <code>output_pixel</code>. "
+            "Learned from training, LOOCV-validated."
+        ),
+        "count_local_rule": (
+            "Cellular automaton: <code>(center_pixel, n_nonzero_8neighbors)</code> "
+            "→ <code>output_pixel</code>."
+        ),
+        "raw3x3_local_rule": (
+            "Cellular automaton using the full raw 3×3 neighborhood (9 pixels) "
+            "as the rule key → <code>output_pixel</code>."
+        ),
+        "pos_mod": (
+            "Position-modular rule: <code>(center_pixel, row % period, "
+            "col % period)</code> → <code>output_pixel</code>. "
+            "Captures periodic position-dependent patterns."
+        ),
+        "ncolors_local_rule": (
+            "Neighborhood diversity rule: <code>(center_pixel, "
+            "n_distinct_4neighbor_colors)</code> → <code>output_pixel</code>."
+        ),
+        "input_pred_correct": (
+            "Two-stage correction: first apply a base program, then correct "
+            "each pixel using <code>(original_input_pixel, predicted_pixel)</code> "
+            "→ <code>corrected_pixel</code>. LOOCV-validated."
+        ),
+        "color_remap": (
+            "Global color remapping: learn a consistent "
+            "<code>predicted_color → corrected_color</code> mapping "
+            "from near-miss program outputs."
+        ),
+        "cell_patch": (
+            "Fixed position-based correction: for specific <code>(row, col)</code> "
+            "positions where the prediction differs from expected, apply a "
+            "learned patch. Only works when patches are consistent across examples."
+        ),
+        "cross_ref": (
+            "Split the grid in half (horizontally or vertically) and apply a "
+            "boolean operation (XOR, AND, OR, subtract) between the two halves."
+        ),
+        "extract_unique_quadrant": (
+            "Split the grid by separator lines into sections, find the one "
+            "section that differs from the majority, and extract it."
+        ),
+        "overlay_all_sections": (
+            "Split the grid by separator lines into sections, overlay all "
+            "sections (non-zero pixels from any section win)."
+        ),
+        "recolor_markers_by_nearest_sep": (
+            "Recolor each non-separator pixel to the color of the nearest "
+            "separator line (horizontal or vertical)."
+        ),
+        "slide_markers_to_matching_sep": (
+            "Move each colored marker pixel toward the separator line "
+            "that matches its color."
+        ),
+        "if_": (
+            "Conditional program: evaluate a predicate on the input grid "
+            "(e.g., is_tall, has_symmetry, is_square), then apply one of "
+            "two different transforms based on the result."
+        ),
+    }
+
+    # Match against known patterns
+    for pattern, explanation in explanations.items():
+        if pattern in prog_str:
+            parts.append(f'<p>{explanation}</p>')
+            break
+
+    # For learned library entries, show expansion
+    # (already handled by _format_expanded_program)
+
+    if not parts:
+        return ""
+
+    return (f'<div class="program-explanation">'
+            f'<h3>How this program works</h3>'
+            f'{"".join(parts)}</div>')
+
+
 def _html_page(title: str, body: str, extra_css: str = "") -> str:
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <title>{html.escape(title)}</title>
-<style>{SHARED_CSS}{extra_css}</style>
+<style>{SHARED_CSS}{EXPLANATION_CSS}{extra_css}</style>
 </head><body>
 {body}
 </body></html>"""
@@ -513,6 +682,9 @@ def _generate_task_page(tid, tdata, task, env, back_link="../index.html",
     b.append(f'<h1>{html.escape(tid)} <span class="status {status}">'
              f'{status.upper()}</span></h1>')
     b.append(f'<div class="program">Program: {html.escape(display_str)}</div>')
+    explanation = _explain_program(prog_str, env)
+    if explanation:
+        b.append(explanation)
     if err < 1.0:
         b.append(f'<div class="error-info">Prediction error: {err:.4f}</div>')
     te = tdata.get("test_error")
