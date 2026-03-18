@@ -8,6 +8,8 @@ from domains.arc.procedural import (
     _check_extend_ray,
     _check_fill_between_aligned,
     _check_project_to_border,
+    _check_fill_enclosed,
+    _check_gravity,
     _object_properties,
     _learn_object_action_rules,
     try_procedural,
@@ -281,6 +283,43 @@ class TestEndToEnd(unittest.TestCase):
             ([[3, 4]], [[3], [4]]),
         ])
         self.assertIsNone(try_procedural(task))
+
+
+class TestFillEnclosed(unittest.TestCase):
+    """Test fill_enclosed template matching."""
+
+    def test_enclosed_hole(self):
+        # Object forms a ring, hole in center is enclosed
+        obj = {
+            "pixels": {(0, 0), (0, 1), (0, 2),
+                       (1, 0),          (1, 2),
+                       (2, 0), (2, 1), (2, 2)},
+            "color": 1, "bbox": (0, 0, 2, 2), "size": 8,
+            "subgrid": [[1, 1, 1], [1, 0, 1], [1, 1, 1]],
+        }
+        diff = {(1, 1): 1}
+        grid = [[1, 1, 1], [1, 0, 1], [1, 1, 1]]
+        result = _check_fill_enclosed(obj, diff, grid)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["template"], "fill_enclosed")
+
+
+class TestGravity(unittest.TestCase):
+    """Test gravity template matching."""
+
+    def test_gravity_down(self):
+        # Object at (0,1) falls to (2,1) — stopped by wall
+        obj = {
+            "pixels": {(0, 1)}, "color": 3, "bbox": (0, 1, 0, 1), "size": 1,
+        }
+        all_objects = [obj]
+        # Diff: (0,1) → 0 (removed), (2,1) → 3 (added)
+        diff = {(0, 1): 0, (2, 1): 3}
+        grid = [[0, 3, 0], [0, 0, 0], [0, 0, 0]]
+        result = _check_gravity(obj, diff, grid, all_objects, 0)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["template"], "gravity")
+        self.assertEqual(result["direction"], "down")
 
 
 class TestObjectProperties(unittest.TestCase):

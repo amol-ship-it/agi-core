@@ -107,8 +107,10 @@ def _object_properties(obj: dict, all_objects: list[dict],
     center_r, center_c = (r0 + r1) / 2.0, (c0 + c1) / 2.0
 
     props = {
+        "all": True,  # Constant key — matches if all objects get same action
         "color": obj["color"],
         "size": obj["size"],
+        "size_gt_1": obj["size"] > 1,
         "is_largest": obj["size"] == max(o["size"] for o in all_objects),
         "is_smallest": obj["size"] == min(o["size"] for o in all_objects),
         "compactness_bin": round(_compactness(obj), 1),
@@ -320,6 +322,126 @@ def _check_project_to_border(obj: dict, diff_pixels: dict[tuple[int, int], int],
     return None
 
 
+def _check_fill_enclosed(obj: dict, diff_pixels: dict[tuple[int, int], int],
+                          grid: Grid) -> Optional[dict]:
+    """Template 5: Fill enclosed zeros (holes) within an object.
+
+    Uses flood fill from grid border — any zero NOT reachable from border
+    that is within/near the object is considered enclosed.
+    """
+    if not diff_pixels:
+        return None
+
+    h, w = len(grid), len(grid[0])
+    colors = set(diff_pixels.values())
+    if len(colors) != 1:
+        return None
+    fill_color = colors.pop()
+
+    # Flood fill from border to find all exterior zeros
+    exterior = set()
+    queue = []
+    for r in range(h):
+        for c in range(w):
+            if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and grid[r][c] == 0:
+                if (r, c) not in exterior:
+                    exterior.add((r, c))
+                    queue.append((r, c))
+    while queue:
+        r, c = queue.pop()
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in exterior and grid[nr][nc] == 0:
+                exterior.add((nr, nc))
+                queue.append((nr, nc))
+
+    # Interior zeros = all zeros not in exterior
+    # Filter to zeros near this object's bbox (expanded by 1)
+    r0, c0, r1, c1 = obj["bbox"]
+    expected = {}
+    for r in range(max(0, r0 - 1), min(h, r1 + 2)):
+        for c in range(max(0, c0 - 1), min(w, c1 + 2)):
+            if grid[r][c] == 0 and (r, c) not in exterior:
+                expected[(r, c)] = fill_color
+
+    if expected and expected == diff_pixels:
+        return {"template": "fill_enclosed", "fill_color": fill_color}
+
+    return None
+
+
+def _check_gravity(obj: dict, diff_pixels: dict[tuple[int, int], int],
+                    grid: Grid, all_objects: list[dict],
+                    obj_idx: int) -> Optional[dict]:
+    """Template 6: Object moves in a direction (gravity) until hitting obstacle.
+
+    Diff should show: object pixels at old position become 0,
+    and new object pixels appear at new position.
+    """
+    if not diff_pixels:
+        return None
+
+    h, w = len(grid), len(grid[0])
+    obj_pixels = obj["pixels"]
+
+    # Check if the diff removes the object (old pixels → 0) and adds it elsewhere
+    removed = {(r, c) for (r, c), v in diff_pixels.items() if v == 0 and (r, c) in obj_pixels}
+    added = {(r, c) for (r, c), v in diff_pixels.items() if v == obj["color"] and (r, c) not in obj_pixels}
+
+    if not removed or not added:
+        return None
+    if len(removed) != len(obj_pixels) or len(removed) != len(added):
+        return None
+
+    # Compute displacement
+    old_min_r = min(r for r, c in obj_pixels)
+    old_min_c = min(c for r, c in obj_pixels)
+    new_min_r = min(r for r, c in added)
+    new_min_c = min(c for r, c in added)
+    dr = new_min_r - old_min_r
+    dc = new_min_c - old_min_c
+
+    # Verify all pixels shifted consistently
+    expected_new = {(r + dr, c + dc) for r, c in obj_pixels}
+    if expected_new != added:
+        return None
+
+    # Verify this is a valid gravity direction (single axis)
+    if dr != 0 and dc != 0:
+        return None
+
+    if dr > 0:
+        direction = "down"
+    elif dr < 0:
+        direction = "up"
+    elif dc > 0:
+        direction = "right"
+    else:
+        direction = "left"
+
+    # Verify gravity: object should stop at first obstacle
+    dir_dr = 1 if dr > 0 else (-1 if dr < 0 else 0)
+    dir_dc = 1 if dc > 0 else (-1 if dc < 0 else 0)
+
+    # Check that the object can't move one more step
+    other_pixels = set()
+    for i, o in enumerate(all_objects):
+        if i != obj_idx:
+            other_pixels.update(o["pixels"])
+
+    for r, c in expected_new:
+        nr, nc = r + dir_dr, c + dir_dc
+        if not (0 <= nr < h and 0 <= nc < w):
+            break  # Hit wall
+        if (nr, nc) in other_pixels or grid[nr][nc] != 0:
+            break  # Hit obstacle
+    else:
+        # Could move further — not gravity
+        return None
+
+    return {"template": "gravity", "direction": direction, "fill_color": obj["color"]}
+
+
 # =============================================================================
 # Action application (for generating output)
 # =============================================================================
@@ -414,17 +536,116 @@ def _apply_project_to_border(obj: dict, grid: Grid,
     return result
 
 
+def _apply_fill_enclosed(obj: dict, grid: Grid, params: dict) -> dict[tuple[int, int], int]:
+    """Apply fill_enclosed action, return pixels to set."""
+    h, w = len(grid), len(grid[0])
+    fill_color = params["fill_color"]
+
+    # Flood fill from border
+    exterior = set()
+    queue = []
+    for r in range(h):
+        for c in range(w):
+            if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and grid[r][c] == 0:
+                if (r, c) not in exterior:
+                    exterior.add((r, c))
+                    queue.append((r, c))
+    while queue:
+        r, c = queue.pop()
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in exterior and grid[nr][nc] == 0:
+                exterior.add((nr, nc))
+                queue.append((nr, nc))
+
+    r0, c0, r1, c1 = obj["bbox"]
+    result = {}
+    for r in range(max(0, r0 - 1), min(h, r1 + 2)):
+        for c in range(max(0, c0 - 1), min(w, c1 + 2)):
+            if grid[r][c] == 0 and (r, c) not in exterior:
+                result[(r, c)] = fill_color
+    return result
+
+
+def _apply_gravity(obj: dict, grid: Grid, params: dict,
+                    all_objects: list[dict] = None,
+                    obj_idx: int = -1) -> dict[tuple[int, int], int]:
+    """Apply gravity action, return pixels to set (including clearing old position)."""
+    h, w = len(grid), len(grid[0])
+    dir_map = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
+    dr, dc = dir_map[params["direction"]]
+    color = params["fill_color"]
+
+    # Collect obstacle pixels (other objects)
+    obstacles = set()
+    if all_objects:
+        for i, o in enumerate(all_objects):
+            if i != obj_idx:
+                obstacles.update(o["pixels"])
+
+    # Move object in direction until hitting wall or obstacle
+    shift = 0
+    while True:
+        shift += 1
+        # Check if all pixels can move to shift position
+        can_move = True
+        for pr, pc in obj["pixels"]:
+            nr, nc = pr + dr * shift, pc + dc * shift
+            if not (0 <= nr < h and 0 <= nc < w):
+                can_move = False
+                break
+            if (nr, nc) in obstacles:
+                can_move = False
+                break
+            if grid[nr][nc] != 0 and (nr, nc) not in obj["pixels"]:
+                can_move = False
+                break
+        if not can_move:
+            shift -= 1
+            break
+
+    if shift == 0:
+        return {}
+
+    result = {}
+    # Clear old pixels
+    for r, c in obj["pixels"]:
+        result[(r, c)] = 0
+    # Place at new position
+    for r, c in obj["pixels"]:
+        result[(r + dr * shift, c + dc * shift)] = color
+    return result
+
+
 _APPLY_FNS = {
     "fill_object_bbox": _apply_fill_object_bbox,
     "extend_ray": _apply_extend_ray,
     "fill_between": _apply_fill_between,
     "project_to_border": _apply_project_to_border,
+    "fill_enclosed": _apply_fill_enclosed,
+    "gravity": _apply_gravity,
 }
 
 
 # =============================================================================
 # Rule learning: which objects get which action
 # =============================================================================
+
+def _try_all_templates(obj, obj_idx, all_objects, obj_diff, grid):
+    """Try all action templates on an object's diff. Returns action or None."""
+    action = _check_fill_object_bbox(obj, obj_diff, grid)
+    if action is None:
+        action = _check_fill_enclosed(obj, obj_diff, grid)
+    if action is None:
+        action = _check_extend_ray(obj, obj_diff, grid)
+    if action is None:
+        action = _check_fill_between_aligned(obj, obj_idx, all_objects, obj_diff, grid)
+    if action is None:
+        action = _check_project_to_border(obj, obj_diff, grid)
+    if action is None:
+        action = _check_gravity(obj, obj_diff, grid, all_objects, obj_idx)
+    return action
+
 
 def _learn_object_action_rules(
     examples: list[tuple[Grid, Grid]],
@@ -486,14 +707,7 @@ def _learn_object_action_rules(
                 continue
 
             # Try each template
-            action = None
-            action = _check_fill_object_bbox(obj, obj_diff, inp)
-            if action is None:
-                action = _check_extend_ray(obj, obj_diff, inp)
-            if action is None:
-                action = _check_fill_between_aligned(obj, i, objects, obj_diff, inp)
-            if action is None:
-                action = _check_project_to_border(obj, obj_diff, inp)
+            action = _try_all_templates(obj, i, objects, obj_diff, inp)
             if action is None:
                 return None  # Diff not explained by any template
 
@@ -504,9 +718,11 @@ def _learn_object_action_rules(
     # Phase 2: Find a property key that consistently predicts action template
     # Try various property keys to distinguish which objects get which action
     property_keys = [
+        "all",  # Every object gets the same action
         "color", "is_largest", "is_smallest", "has_hole",
         "compactness_bin", "quadrant", "size",
         "touches_top", "touches_bottom", "touches_left", "touches_right",
+        "size_gt_1",  # Distinguishes singletons from multi-pixel objects
     ]
 
     for prop_key in property_keys:
@@ -564,8 +780,10 @@ def _learn_object_action_rules(
                     if apply_fn is None:
                         continue
 
-                    if action["template"] == "fill_between":
+                    if action["template"] in ("fill_between",):
                         pixels = apply_fn(obj, i, objects, grid, action)
+                    elif action["template"] == "gravity":
+                        pixels = apply_fn(obj, grid, action, all_objects=objects, obj_idx=i)
                     else:
                         pixels = apply_fn(obj, grid, action)
 
@@ -654,13 +872,7 @@ def _learn_rule_for_key(
             if not obj_diff:
                 action = {"template": "none"}
             else:
-                action = _check_fill_object_bbox(obj, obj_diff, inp)
-                if action is None:
-                    action = _check_extend_ray(obj, obj_diff, inp)
-                if action is None:
-                    action = _check_fill_between_aligned(obj, i, objects, obj_diff, inp)
-                if action is None:
-                    action = _check_project_to_border(obj, obj_diff, inp)
+                action = _try_all_templates(obj, i, objects, obj_diff, inp)
                 if action is None:
                     return None
 
