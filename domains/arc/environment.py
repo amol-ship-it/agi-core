@@ -960,12 +960,41 @@ class ARCEnv(Environment):
                 result.append(row)
             return result
 
+        # Rule type 4: position-modular (handles periodic patterns)
+        def _learn_pos_mod(exs, period):
+            """Rule: (center, r%period, c%period) → output."""
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        key = (inp[r][c], r % period, c % period)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_pos_mod(grid, rule, period):
+            h, w = len(grid), len(grid[0])
+            return [[rule.get((grid[r][c], r % period, c % period), grid[r][c])
+                      for c in range(w)] for r in range(h)]
+
         # Try each rule type with LOOCV
-        for rule_name, learn_fn, apply_fn in [
+        rule_types = [
             ("compact_local_rule", _learn_compact, _apply_compact),
             ("count_local_rule", _learn_v2, _apply_v2),
             ("raw3x3_local_rule", _learn_raw3, _apply_raw3),
-        ]:
+        ]
+        # Add position-modular rules for small periods
+        for period in [2, 3, 4, 5]:
+            rule_types.append((
+                f"pos_mod{period}_rule",
+                lambda exs, p=period: _learn_pos_mod(exs, p),
+                lambda grid, rule, p=period: _apply_pos_mod(grid, rule, p),
+            ))
+
+        for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
             rule = learn_fn(examples)
             if rule is None:
