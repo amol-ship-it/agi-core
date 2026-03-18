@@ -994,6 +994,34 @@ class ARCEnv(Environment):
                 lambda grid, rule, p=period: _apply_pos_mod(grid, rule, p),
             ))
 
+        # Rule type 5: (center, n_distinct_4neighbor_colors) → output
+        def _learn_ncolors(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        nc = len(set(inp[r+dr][c+dc]
+                                     for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]
+                                     if 0 <= r+dr < h and 0 <= c+dc < w))
+                        key = (inp[r][c], nc)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_ncolors(grid, rule):
+            h, w = len(grid), len(grid[0])
+            return [[rule.get((grid[r][c], len(set(
+                        grid[r+dr][c+dc]
+                        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]
+                        if 0 <= r+dr < h and 0 <= c+dc < w))),
+                     grid[r][c])
+                     for c in range(w)] for r in range(h)]
+
+        rule_types.append(("ncolors_local_rule", _learn_ncolors, _apply_ncolors))
+
         for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
             rule = learn_fn(examples)
