@@ -207,6 +207,7 @@ class Learner:
             self._phase_cross_reference,
             self._phase_local_rules,
             self._phase_procedural,
+            self._phase_conditional_search,
             self._phase_color_fix,
             self._phase_input_pred_correction,
         ]
@@ -1312,6 +1313,10 @@ class Learner:
             for inp, exp in task.train_examples:
                 try:
                     out = prim.fn(inp)
+                    # Validate: must be a 2D grid
+                    if not isinstance(out, list) or not out or not isinstance(out[0], list):
+                        ok = False
+                        break
                     outputs.append((out, exp))
                 except Exception:
                     ok = False
@@ -1354,24 +1359,51 @@ class Learner:
                     if then_p.name == else_p.name:
                         continue
 
-                    def _make(pf, tf, ef):
-                        def fn(g):
-                            try:
-                                return tf(g) if pf(g) else ef(g)
-                            except Exception:
-                                return g
-                        return fn
-
-                    cond_fn = _make(pred_fn, then_p.fn, else_p.fn)
+                    # Evaluate without registering (avoids multiprocessing pickling issues)
                     cond_name = f"if_{pred_name}_{then_p.name}_else_{else_p.name}"
-                    cond_prim = Primitive(
-                        name=cond_name, arity=1, fn=cond_fn, domain="arc")
-                    self.env.register_primitive(cond_prim)
-
-                    sp = self._evaluate_program(Program(root=cond_name), task)
-                    n_evals += 1
-                    if sp.prediction_error <= solve_thresh:
+                    total_error = 0.0
+                    max_err = 0.0
+                    all_ok = True
+                    solve_score = 0
+                    for inp, expected in task.train_examples:
+                        try:
+                            pred = then_p.fn(inp) if pred_fn(inp) else else_p.fn(inp)
+                        except Exception:
+                            pred = inp
+                        err = self.drive.prediction_error(pred, expected)
+                        total_error += err
+                        max_err = max(max_err, err)
+                        if err <= solve_thresh:
+                            solve_score += 1
+                    n_ex = len(task.train_examples)
+                    avg_error = total_error / n_ex if n_ex else 1.0
+                    if avg_error <= solve_thresh:
+                        # Register only if it actually solves
+                        def _make(pf, tf, ef):
+                            def fn(g):
+                                try:
+                                    return tf(g) if pf(g) else ef(g)
+                                except Exception:
+                                    return g
+                            return fn
+                        cond_fn = _make(pred_fn, then_p.fn, else_p.fn)
+                        cond_prim = Primitive(
+                            name=cond_name, arity=0, fn=cond_fn, domain="arc")
+                        self.env.register_primitive(cond_prim)
+                        sp = self._evaluate_program(Program(root=cond_name), task)
+                        n_evals += 1
                         return sp, n_evals
+                    complexity = 0.003  # 3 nodes
+                    energy = avg_error + self.search_cfg.energy_beta * complexity
+                    sp = ScoredProgram(
+                        program=Program(root=cond_name),
+                        energy=energy,
+                        prediction_error=avg_error,
+                        complexity_cost=complexity,
+                        max_example_error=max_err,
+                        example_solve_score=(solve_score / n_ex) ** 2 if n_ex else 0,
+                    )
+                    n_evals += 1
                     if best_result is None or sp.energy < best_result.energy:
                         best_result = sp
 
