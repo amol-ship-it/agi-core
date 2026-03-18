@@ -285,6 +285,9 @@ class ARCEnv(Environment):
         result = self._try_transform_colormap(task)
         if result is not None:
             return result
+        result = self._try_per_pixel_stamp(task)
+        if result is not None:
+            return result
         return None
 
     def _try_boolean_halves(
@@ -908,6 +911,123 @@ class ARCEnv(Environment):
             return (name, fn)
 
         return None
+
+    def _try_per_pixel_stamp(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Learn a stamp pattern per input pixel color.
+
+        For fill-only tasks where non-zero input pixels stay unchanged,
+        learns (source_color, delta_row, delta_col) → fill_color mapping.
+        Each non-zero pixel stamps a learned pattern around itself.
+        """
+        from .objects import _test_on_examples
+        examples = task.train_examples
+        if not examples or len(examples) < 2:
+            return None
+        fi, fo = examples[0]
+        if len(fi) != len(fo) or len(fi[0]) != len(fo[0]):
+            return None
+
+        # Verify fill-only: non-zero pixels don't change
+        for inp, out in examples:
+            for r in range(len(inp)):
+                for c in range(len(inp[0])):
+                    if inp[r][c] != 0 and inp[r][c] != out[r][c]:
+                        return None
+
+        stamp_rule: dict[tuple[int, int, int], int] = {}
+        consistent = True
+        for inp, out in examples:
+            h, w = len(inp), len(inp[0])
+            sources = [(r, c, inp[r][c]) for r in range(h) for c in range(w) if inp[r][c] != 0]
+            for r in range(h):
+                for c in range(w):
+                    if inp[r][c] == 0 and out[r][c] != 0:
+                        best_d, best_src = float('inf'), None
+                        for sr, sc, scolor in sources:
+                            d = abs(r - sr) + abs(c - sc)
+                            if d < best_d:
+                                best_d = d
+                                best_src = (sr, sc, scolor)
+                        if best_src is None:
+                            consistent = False
+                            break
+                        key = (best_src[2], r - best_src[0], c - best_src[1])
+                        if key in stamp_rule and stamp_rule[key] != out[r][c]:
+                            consistent = False
+                            break
+                        stamp_rule[key] = out[r][c]
+                if not consistent:
+                    break
+            if not consistent:
+                break
+
+        if not consistent or not stamp_rule:
+            return None
+
+        def _make_fn(rule=dict(stamp_rule)):
+            def fn(grid):
+                h, w = len(grid), len(grid[0])
+                result = [row[:] for row in grid]
+                for r in range(h):
+                    for c in range(w):
+                        if grid[r][c] != 0:
+                            for (sc, dr, dc), fc in rule.items():
+                                if sc == grid[r][c]:
+                                    nr, nc = r + dr, c + dc
+                                    if 0 <= nr < h and 0 <= nc < w and result[nr][nc] == 0:
+                                        result[nr][nc] = fc
+                return result
+            return fn
+
+        fn = _make_fn()
+        if not _test_on_examples(fn, examples):
+            return None
+
+        # LOOCV
+        for hold_idx in range(len(examples)):
+            train_sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+            sub_rule: dict[tuple[int, int, int], int] = {}
+            sub_ok = True
+            for inp, out in train_sub:
+                h, w = len(inp), len(inp[0])
+                sources = [(r, c, inp[r][c]) for r in range(h) for c in range(w) if inp[r][c] != 0]
+                for r in range(h):
+                    for c in range(w):
+                        if inp[r][c] == 0 and out[r][c] != 0:
+                            best_d, best_src = float('inf'), None
+                            for sr, sc, scolor in sources:
+                                d = abs(r - sr) + abs(c - sc)
+                                if d < best_d:
+                                    best_d = d
+                                    best_src = (sr, sc, scolor)
+                            if best_src is None:
+                                sub_ok = False
+                                break
+                            key = (best_src[2], r - best_src[0], c - best_src[1])
+                            if key in sub_rule and sub_rule[key] != out[r][c]:
+                                sub_ok = False
+                                break
+                            sub_rule[key] = out[r][c]
+                    if not sub_ok:
+                        break
+                if not sub_ok:
+                    break
+            if not sub_ok:
+                return None
+            sub_fn = _make_fn(sub_rule)
+            held_inp, held_exp = examples[hold_idx]
+            try:
+                if sub_fn(held_inp) != held_exp:
+                    return None
+            except Exception:
+                return None
+
+        name = "per_pixel_stamp"
+        prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+        self.register_primitive(prim)
+        return (name, fn)
 
     def _try_separator_cross_ref(
         self, task: Task,
