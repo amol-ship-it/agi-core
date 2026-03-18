@@ -643,6 +643,12 @@ Bulk-restored structural strategies from pre-strip git history. Result: 22→28 
 
 **Response:** Found naming collision bug: `_try_subgrid_selection` registered a dynamic `most_colorful_subgrid` (arity=0, produces correct 3x3) that OVERWROTE the atomic `most_colorful_subgrid` (arity=1, produces 6x6). The viz loaded the atomic version and showed wrong intermediate. Fix: dynamic subgrid prims now use unique names like `most_colorful_subgrid_3x3`. Also added viz explanations for these names.
 
+### Prompt 11: Fix Viz + Verify Solve Numbers
+
+> The visualization is incomplete or wrong for 1b2d62fb. Also, inspect whether we might be inflating solve numbers.
+
+**Response:** Found systematic bug: dynamic primitive names contain parentheses (e.g., `half_colormap(hsplit_sep)`) which the viz parser treated as function composition. Fixed `parse_program_tree` with `_DYNAMIC_PRIM_PREFIXES` list to recognize 25+ dynamic prim patterns as leaf nodes. Also verified ALL 155 solved tasks: stored predictions match expected outputs exactly — solve numbers are NOT inflated.
+
 ---
 
 *This document will be updated with each new session.*
