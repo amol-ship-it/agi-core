@@ -1261,6 +1261,209 @@ def _try_object_movement(examples):
     return None
 
 
+def _try_extract_object(examples):
+    """Try to learn: output = extract subgrid around a specific object.
+
+    For dimension-change tasks where the output is smaller than input.
+    Identifies which object to extract by property (is_largest, is_smallest,
+    has_hole, unique_color, etc.) and extracts its bounding box from the input.
+    """
+    if not examples or len(examples) < 2:
+        return None
+
+    # Must be dimension-change (output smaller)
+    for inp, out in examples:
+        if not inp or not out:
+            return None
+        h_out, w_out = len(out), len(out[0])
+        h_in, w_in = len(inp), len(inp[0])
+        if h_out >= h_in and w_out >= w_in:
+            return None  # Not a shrink task
+
+    # Strategy 1: Output = bbox content of a specific object
+    property_selectors = [
+        ("is_largest", lambda objs: max(objs, key=lambda o: o["size"])),
+        ("is_smallest", lambda objs: min(objs, key=lambda o: o["size"])),
+        ("has_hole", lambda objs: next((o for o in objs if _has_hole(o)), None)),
+        ("unique_color", lambda objs: _find_unique_color_object(objs)),
+    ]
+
+    for prop_name, selector_fn in property_selectors:
+        all_match = True
+        for inp, out in examples:
+            objects = _find_connected_components(inp)
+            if not objects:
+                all_match = False
+                break
+
+            # Add subgrids for has_hole check
+            for obj in objects:
+                r0, c0, r1, c1 = obj["bbox"]
+                sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+                for r, c in obj["pixels"]:
+                    sg[r-r0][c-c0] = obj["color"]
+                obj["subgrid"] = sg
+
+            target = selector_fn(objects)
+            if target is None:
+                all_match = False
+                break
+
+            r0, c0, r1, c1 = target["bbox"]
+            extracted = [[inp[r][c] for c in range(c0, c1 + 1)]
+                         for r in range(r0, r1 + 1)]
+            if extracted != out:
+                all_match = False
+                break
+
+        if not all_match:
+            continue
+
+        # Build applicator
+        def _make_extract_fn(sel_fn):
+            def apply_extract(grid):
+                objects = _find_connected_components(grid)
+                if not objects:
+                    return grid
+                for obj in objects:
+                    r0, c0, r1, c1 = obj["bbox"]
+                    sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+                    for r, c in obj["pixels"]:
+                        sg[r-r0][c-c0] = obj["color"]
+                    obj["subgrid"] = sg
+                target = sel_fn(objects)
+                if target is None:
+                    return grid
+                r0, c0, r1, c1 = target["bbox"]
+                return [[grid[r][c] for c in range(c0, c1 + 1)]
+                        for r in range(r0, r1 + 1)]
+            return apply_extract
+
+        fn = _make_extract_fn(selector_fn)
+        if _test_on_examples(fn, examples):
+            # LOOCV
+            if len(examples) > 2:
+                loocv_pass = True
+                for hold_idx in range(len(examples)):
+                    train_sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+                    # Verify same property works on subset
+                    sub_ok = True
+                    for inp, out in train_sub:
+                        objs = _find_connected_components(inp)
+                        if not objs:
+                            sub_ok = False
+                            break
+                        for obj in objs:
+                            r0, c0, r1, c1 = obj["bbox"]
+                            sg = [[0]*(c1-c0+1) for _ in range(r1-r0+1)]
+                            for r, c in obj["pixels"]:
+                                sg[r-r0][c-c0] = obj["color"]
+                            obj["subgrid"] = sg
+                        t = selector_fn(objs)
+                        if t is None:
+                            sub_ok = False
+                            break
+                        r0, c0, r1, c1 = t["bbox"]
+                        ext = [[inp[r][c] for c in range(c0, c1+1)] for r in range(r0, r1+1)]
+                        if ext != out:
+                            sub_ok = False
+                            break
+                    if not sub_ok:
+                        loocv_pass = False
+                        break
+                    # Test on held-out
+                    held_inp, held_exp = examples[hold_idx]
+                    try:
+                        if fn(held_inp) != held_exp:
+                            loocv_pass = False
+                            break
+                    except Exception:
+                        loocv_pass = False
+                        break
+                if not loocv_pass:
+                    continue
+
+            return (f"procedural_extract({prop_name})", fn)
+
+    # Strategy 2: Output = subgrid at the position of a specific object
+    # (output might not match the object's content — it's just WHERE to extract)
+    for prop_name, selector_fn in property_selectors:
+        all_match = True
+        for inp, out in examples:
+            objects = _find_connected_components(inp)
+            if not objects:
+                all_match = False
+                break
+            for obj in objects:
+                r0, c0, r1, c1 = obj["bbox"]
+                sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+                for r, c in obj["pixels"]:
+                    sg[r-r0][c-c0] = obj["color"]
+                obj["subgrid"] = sg
+
+            target = selector_fn(objects)
+            if target is None:
+                all_match = False
+                break
+
+            h_out, w_out = len(out), len(out[0])
+            r0, c0, _, _ = target["bbox"]
+            # Extract from (r0, c0) with output dimensions
+            if r0 + h_out > len(inp) or c0 + w_out > len(inp[0]):
+                all_match = False
+                break
+            extracted = [[inp[r0 + dr][c0 + dc] for dc in range(w_out)]
+                         for dr in range(h_out)]
+            if extracted != out:
+                all_match = False
+                break
+
+        if not all_match:
+            continue
+
+        def _make_pos_extract_fn(sel_fn, h, w):
+            def apply_extract(grid):
+                objects = _find_connected_components(grid)
+                if not objects:
+                    return grid
+                for obj in objects:
+                    r0, c0, r1, c1 = obj["bbox"]
+                    sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+                    for r, c in obj["pixels"]:
+                        sg[r-r0][c-c0] = obj["color"]
+                    obj["subgrid"] = sg
+                target = sel_fn(objects)
+                if target is None:
+                    return grid
+                r0, c0, _, _ = target["bbox"]
+                if r0 + h > len(grid) or c0 + w > len(grid[0]):
+                    return grid
+                return [[grid[r0 + dr][c0 + dc] for dc in range(w)]
+                        for dr in range(h)]
+            return apply_extract
+
+        # Need consistent output dimensions
+        out_dims = set((len(out), len(out[0])) for _, out in examples)
+        if len(out_dims) != 1:
+            continue
+        h_out, w_out = out_dims.pop()
+
+        fn = _make_pos_extract_fn(selector_fn, h_out, w_out)
+        if _test_on_examples(fn, examples):
+            return (f"procedural_extract_at({prop_name})", fn)
+
+    return None
+
+
+def _find_unique_color_object(objects):
+    """Find the object whose color appears only once."""
+    color_counts = Counter(o["color"] for o in objects)
+    for obj in objects:
+        if color_counts[obj["color"]] == 1:
+            return obj
+    return None
+
+
 def try_procedural(
     task,
 ) -> Optional[tuple[str, Callable]]:
@@ -1285,6 +1488,11 @@ def try_procedural(
 
     # Then try object movement detection
     result = _try_object_movement(examples)
+    if result is not None:
+        return result
+
+    # Try object/subgrid extraction (dimension-change tasks)
+    result = _try_extract_object(examples)
     if result is not None:
         return result
 
