@@ -29,6 +29,46 @@ from .objects import (
 )
 
 
+def _detect_bg_color(grid: Grid) -> int:
+    """Detect the background color (most common pixel value)."""
+    counts: dict[int, int] = {}
+    for row in grid:
+        for v in row:
+            counts[v] = counts.get(v, 0) + 1
+    if not counts:
+        return 0
+    return max(counts, key=counts.get)
+
+
+def _find_objects_with_bg(grid: Grid, bg_color: int) -> list[dict]:
+    """Find connected components treating bg_color as background."""
+    if bg_color == 0:
+        return _find_connected_components(grid)
+    # Remap: swap 0 and bg_color, then find components, then swap back
+    h, w = len(grid), len(grid[0])
+    remapped = [[0] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            v = grid[r][c]
+            if v == bg_color:
+                remapped[r][c] = 0
+            elif v == 0:
+                remapped[r][c] = bg_color
+            else:
+                remapped[r][c] = v
+    components = _find_connected_components(remapped)
+    # Fix colors back
+    for comp in components:
+        if comp["color"] == bg_color:
+            comp["color"] = 0
+        # Colors in components are from remapped grid, fix them
+        # Actually, re-read the color from original grid
+        for r, c in comp["pixels"]:
+            comp["color"] = grid[r][c]
+            break
+    return components
+
+
 # =============================================================================
 # Pixel-diff engine
 # =============================================================================
@@ -1244,4 +1284,41 @@ def try_procedural(
         return result
 
     # Then try object movement detection
-    return _try_object_movement(examples)
+    result = _try_object_movement(examples)
+    if result is not None:
+        return result
+
+    # Try with non-zero background detection
+    # Some tasks use a non-zero background color; remap to 0-background
+    bg_colors = set()
+    for inp, _ in examples:
+        bg = _detect_bg_color(inp)
+        bg_colors.add(bg)
+    if len(bg_colors) == 1:
+        bg = bg_colors.pop()
+        if bg != 0:
+            # Remap examples: swap bg↔0
+            def _remap(grid, bg_color):
+                return [[0 if v == bg_color else (bg_color if v == 0 else v)
+                         for v in row] for row in grid]
+            remapped = [(_remap(inp, bg), _remap(out, bg))
+                        for inp, out in examples]
+
+            for try_fn in [_learn_object_action_rules, _try_object_movement]:
+                inner_result = try_fn(remapped)
+                if inner_result is not None:
+                    inner_name, inner_fn = inner_result
+                    # Wrap: remap input, apply, remap back
+                    def _make_wrapper(fn_inner, bg_c):
+                        def wrapped(grid):
+                            r = [[0 if v == bg_c else (bg_c if v == 0 else v)
+                                  for v in row] for row in grid]
+                            out = fn_inner(r)
+                            return [[0 if v == bg_c else (bg_c if v == 0 else v)
+                                     for v in row] for row in out]
+                        return wrapped
+                    fn = _make_wrapper(inner_fn, bg)
+                    if _test_on_examples(fn, examples):
+                        return (f"bg{bg}_{inner_name}", fn)
+
+    return None

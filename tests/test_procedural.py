@@ -322,6 +322,41 @@ class TestGravity(unittest.TestCase):
         self.assertEqual(result["direction"], "down")
 
 
+class TestObjectMovement(unittest.TestCase):
+    """Test object movement detection."""
+
+    def _make_task(self, examples):
+        class MockTask:
+            def __init__(self, train):
+                self.train_examples = train
+        return MockTask(examples)
+
+    def test_uniform_movement(self):
+        """All objects move down by 2."""
+        inp1 = [[0, 1, 0, 0, 2, 0],
+                 [0, 0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0, 0]]
+        out1 = [[0, 0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0, 0],
+                 [0, 1, 0, 0, 2, 0],
+                 [0, 0, 0, 0, 0, 0]]
+        inp2 = [[0, 0, 0, 0, 0, 0],
+                 [0, 1, 0, 2, 0, 0],
+                 [0, 0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0, 0]]
+        out2 = [[0, 0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0, 0],
+                 [0, 1, 0, 2, 0, 0]]
+        result = try_procedural(self._make_task([(inp1, out1), (inp2, out2)]))
+        self.assertIsNotNone(result)
+        name, fn = result
+        self.assertIn("move", name)
+        self.assertEqual(fn(inp1), out1)
+        self.assertEqual(fn(inp2), out2)
+
+
 class TestObjectProperties(unittest.TestCase):
     """Test object property computation."""
 
