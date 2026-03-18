@@ -842,6 +842,60 @@ def extract_unique_quadrant(grid: Grid) -> Grid:
     return grid
 
 
+def overlay_all_sections(grid: Grid) -> Grid:
+    """Split grid by separator lines, overlay all sections (non-zero wins).
+
+    Combines all quadrants/sections by keeping non-zero pixels from any.
+    Justified by task a68b268e.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    sep_rows = sorted(set(r for r in range(h) if len(set(grid[r])) == 1))
+    sep_cols = sorted(set(c for c in range(w) if len(set(grid[r][c] for r in range(h))) == 1))
+
+    row_bounds = []
+    prev = 0
+    for r in sep_rows:
+        if r > prev:
+            row_bounds.append((prev, r))
+        prev = r + 1
+    if prev < h:
+        row_bounds.append((prev, h))
+
+    col_bounds = []
+    prev = 0
+    for c in sep_cols:
+        if c > prev:
+            col_bounds.append((prev, c))
+        prev = c + 1
+    if prev < w:
+        col_bounds.append((prev, w))
+
+    if not row_bounds or not col_bounds or len(row_bounds) * len(col_bounds) < 2:
+        return grid
+
+    sh = row_bounds[0][1] - row_bounds[0][0]
+    sw = col_bounds[0][1] - col_bounds[0][0]
+    for r0, r1 in row_bounds:
+        if r1 - r0 != sh:
+            return grid
+    for c0, c1 in col_bounds:
+        if c1 - c0 != sw:
+            return grid
+
+    result = [[0] * sw for _ in range(sh)]
+    for r0, r1 in row_bounds:
+        for c0, c1 in col_bounds:
+            for dr in range(sh):
+                for dc in range(sw):
+                    v = grid[r0 + dr][c0 + dc]
+                    if v != 0 and result[dr][dc] == 0:
+                        result[dr][dc] = v
+    return result
+
+
 def crop_to_content(grid: Grid) -> Grid:
     """Crop to minimal bounding box containing all non-zero pixels.
 
@@ -1183,8 +1237,9 @@ def build_atomic_primitives() -> list[Primitive]:
         ("flood_fill_by_neighbor",      flood_fill_by_neighbor),
         # L-shape extension (1)
         ("extend_right_and_down",       extend_right_and_down),
-        # Quadrant extraction (1)
+        # Quadrant extraction (2)
         ("extract_unique_quadrant",     extract_unique_quadrant),
+        ("overlay_all_sections",        overlay_all_sections),
         # Tiling (1)
         ("tile_v",                      tile_v),
     ]
