@@ -726,6 +726,211 @@ def inpaint_periodic(grid: Grid) -> Grid:
 
 # --- Binary transforms ---
 
+def crop_to_content(grid: Grid) -> Grid:
+    """Crop to minimal bounding box containing all non-zero pixels.
+
+    Combines trim_rows and trim_cols in one operation.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    # Find bounds
+    top, bot, left, right = h, -1, w, -1
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                top = min(top, r)
+                bot = max(bot, r)
+                left = min(left, c)
+                right = max(right, c)
+    if bot < 0:
+        return grid
+    return [grid[r][left:right + 1] for r in range(top, bot + 1)]
+
+
+def flood_fill_by_neighbor(grid: Grid) -> Grid:
+    """Fill each enclosed zero-region with its surrounding border color.
+
+    Unlike fill_enclosed (which uses the object's own color), this uses
+    the most common color bordering each enclosed region.
+    """
+    if not grid or not grid[0]:
+        return grid
+    from collections import Counter
+    h, w = len(grid), len(grid[0])
+
+    # Find exterior zeros via flood fill from border
+    exterior = set()
+    queue = []
+    for r in range(h):
+        for c in range(w):
+            if (r == 0 or r == h - 1 or c == 0 or c == w - 1) and grid[r][c] == 0:
+                if (r, c) not in exterior:
+                    exterior.add((r, c))
+                    queue.append((r, c))
+    while queue:
+        r, c = queue.pop()
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in exterior and grid[nr][nc] == 0:
+                exterior.add((nr, nc))
+                queue.append((nr, nc))
+
+    # Find connected interior regions and fill each with neighbor color
+    visited = set()
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == 0 and (r, c) not in exterior and (r, c) not in visited:
+                region = set()
+                q = [(r, c)]
+                while q:
+                    cr, cc = q.pop()
+                    if (cr, cc) in visited:
+                        continue
+                    if cr < 0 or cr >= h or cc < 0 or cc >= w:
+                        continue
+                    if grid[cr][cc] != 0 or (cr, cc) in exterior:
+                        continue
+                    visited.add((cr, cc))
+                    region.add((cr, cc))
+                    q.extend([(cr-1,cc),(cr+1,cc),(cr,cc-1),(cr,cc+1)])
+                # Find majority border color
+                border_colors = Counter()
+                for pr, pc in region:
+                    for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                        nr, nc = pr+dr, pc+dc
+                        if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] != 0:
+                            border_colors[grid[nr][nc]] += 1
+                if border_colors:
+                    fc = border_colors.most_common(1)[0][0]
+                    for pr, pc in region:
+                        result[pr][pc] = fc
+    return result
+
+
+def subtract_grid(grid1: Grid, grid2: Grid) -> Grid:
+    """Subtract grid2 from grid1: keep grid1 where grid2 is zero.
+
+    Where grid2 has non-zero pixels, the result becomes 0.
+    Like an inverse mask.
+    """
+    if not grid1 or not grid2:
+        return grid1 or []
+    h = min(len(grid1), len(grid2))
+    w = min(len(grid1[0]), len(grid2[0])) if grid1[0] and grid2[0] else 0
+    return [[grid1[r][c] if grid2[r][c] == 0 else 0
+             for c in range(w)] for r in range(h)]
+
+
+def xor_grid(grid1: Grid, grid2: Grid) -> Grid:
+    """XOR of two grids: keep pixels that exist in one but not both.
+
+    If both grids have non-zero at (r,c), result is 0.
+    If only one has non-zero, keep that value.
+    """
+    if not grid1 or not grid2:
+        return grid1 or grid2 or []
+    h = min(len(grid1), len(grid2))
+    w = min(len(grid1[0]), len(grid2[0])) if grid1[0] and grid2[0] else 0
+    result = [[0] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            a, b = grid1[r][c], grid2[r][c]
+            if a != 0 and b == 0:
+                result[r][c] = a
+            elif b != 0 and a == 0:
+                result[r][c] = b
+    return result
+
+
+def tile_v(grid: Grid) -> Grid:
+    """Repeat grid vertically: grid on top, grid on bottom."""
+    if not grid:
+        return grid
+    return grid + [row[:] for row in grid]
+
+
+def densest_subgrid(grid: Grid) -> Grid:
+    """Extract the densest rectangular subgrid.
+
+    Finds the subgrid with the highest ratio of non-zero pixels,
+    trying all connected component bounding boxes.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    visited = [[False] * w for _ in range(h)]
+    best_grid = grid
+    best_density = -1.0
+
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0 and not visited[r][c]:
+                comp = []
+                stack = [(r, c)]
+                visited[r][c] = True
+                while stack:
+                    cr, cc = stack.pop()
+                    comp.append((cr, cc))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr][nc] and grid[nr][nc] != 0:
+                            visited[nr][nc] = True
+                            stack.append((nr, nc))
+                if len(comp) < 2:
+                    continue
+                r0 = min(p[0] for p in comp)
+                c0 = min(p[1] for p in comp)
+                r1 = max(p[0] for p in comp)
+                c1 = max(p[1] for p in comp)
+                area = (r1 - r0 + 1) * (c1 - c0 + 1)
+                density = len(comp) / area
+                if density > best_density:
+                    best_density = density
+                    best_grid = [grid[rr][c0:c1 + 1] for rr in range(r0, r1 + 1)]
+    return best_grid
+
+
+def most_colorful_subgrid(grid: Grid) -> Grid:
+    """Extract the connected component with the most distinct colors in its bbox."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    visited = [[False] * w for _ in range(h)]
+    best_grid = grid
+    best_colors = -1
+
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0 and not visited[r][c]:
+                comp = []
+                stack = [(r, c)]
+                visited[r][c] = True
+                while stack:
+                    cr, cc = stack.pop()
+                    comp.append((cr, cc))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1),
+                                   (-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr][nc] and grid[nr][nc] != 0:
+                            visited[nr][nc] = True
+                            stack.append((nr, nc))
+                r0 = min(p[0] for p in comp)
+                c0 = min(p[1] for p in comp)
+                r1 = max(p[0] for p in comp)
+                c1 = max(p[1] for p in comp)
+                colors = set()
+                for rr in range(r0, r1 + 1):
+                    for cc in range(c0, c1 + 1):
+                        if grid[rr][cc] != 0:
+                            colors.add(grid[rr][cc])
+                if len(colors) > best_colors:
+                    best_colors = len(colors)
+                    best_grid = [grid[rr][c0:c1 + 1] for rr in range(r0, r1 + 1)]
+    return best_grid
+
+
 def overlay(grid1: Grid, grid2: Grid) -> Grid:
     """Overlay two grids: non-zero pixels from grid1 take priority."""
     if not grid1:
@@ -814,11 +1019,21 @@ def build_atomic_primitives() -> list[Primitive]:
         # Inpainting (2)
         ("inpaint_by_symmetry",         inpaint_by_symmetry),
         ("inpaint_periodic",            inpaint_periodic),
+        # Content extraction (3)
+        ("crop_to_content",             crop_to_content),
+        ("densest_subgrid",             densest_subgrid),
+        ("most_colorful_subgrid",       most_colorful_subgrid),
+        # Fill variants (1)
+        ("flood_fill_by_neighbor",      flood_fill_by_neighbor),
+        # Tiling (1)
+        ("tile_v",                      tile_v),
     ]
     prims = [Primitive(name=name, arity=1, fn=fn, domain="arc")
              for name, fn in unary_ops]
     prims.append(Primitive(name="overlay", arity=2, fn=overlay, domain="arc"))
     prims.append(Primitive(name="mask_by", arity=2, fn=mask_by, domain="arc"))
+    prims.append(Primitive(name="subtract_grid", arity=2, fn=subtract_grid, domain="arc"))
+    prims.append(Primitive(name="xor_grid", arity=2, fn=xor_grid, domain="arc"))
     return prims
 
 
