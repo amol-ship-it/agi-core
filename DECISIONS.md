@@ -3404,7 +3404,19 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 - 2×2 quadrant colormap: 1 pre-test match but fails LOOCV. Added but 0 new solves.
 - Extended boolean ops (xor_color, diff_a, diff_b, same): 0 new solves.
 
-**Current state:** 105/400 train (26.2%), 41/400 eval (10.2%), 54 atomic primitives, 436 tests.
+### Decision: Fix colormap method ordering + new colormap variants
+
+**Bug found:** half_colormap, nway_colormap, quad_colormap, transform_colormap were all called from inside `_try_boolean_halves`, which early-returns if no half-splits exist. Same-dimension tasks NEVER reached the colormaps. Moving all colormap calls to `try_cross_reference` directly fixed this.
+
+**New colormaps added:**
+- `transform_colormap(T)`: (input_pixel, T(input)_pixel) → output_pixel for transforms T ∈ {fill_enclosed, dilate, erode, connect_h, connect_v, flood_fill}
+- `pixel_to_tile(k×k)`: each input pixel maps to a learned k×k output tile by color
+
+**Results from fix:** +1 train (a699fb00), +3 eval (ea9794b1, 84db8fc4, 6a11f6da)
+**Results from pixel_to_tile:** +1 eval (2072aba6)
+**Results from pos_mod + ncolors rules:** +1 train (ba26e723), +2 eval (332efdb3, e0fb7511)
+
+**Current state:** 106/400 train (26.5%), 45/400 eval (11.2%), 54 atomic primitives, 436 tests.
 
 ---
 *This document will be updated with each new session and major decision.*
