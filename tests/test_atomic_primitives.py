@@ -246,5 +246,68 @@ class TestInpaintPeriodic(unittest.TestCase):
         self.assertNotEqual(result, task['train'][0]['output'])
 
 
+class TestNoDynamicPrimNameCollision(unittest.TestCase):
+    """Dynamic primitives must not overwrite atomic primitives.
+
+    Bug found: _try_subgrid_selection registered 'most_colorful_subgrid'
+    (arity=0) which overwrote the atomic 'most_colorful_subgrid' (arity=1).
+    Fix: dynamic subgrid prims use unique names like 'most_colorful_subgrid_3x3'.
+    """
+
+    def test_subgrid_selection_uses_unique_names(self):
+        """Verify _try_subgrid_selection creates uniquely-named prims."""
+        from domains.arc.primitives import _PRIM_MAP, register_atomic_primitives
+        from domains.arc.environment import ARCEnv
+        from core.types import Task
+
+        register_atomic_primitives()
+        env = ARCEnv()
+        from domains.arc.grammar import ARCGrammar
+        for p in ARCGrammar().base_primitives():
+            env.register_primitive(p)
+
+        # Remember the atomic primitive
+        atomic_prim = _PRIM_MAP.get("most_colorful_subgrid")
+        self.assertIsNotNone(atomic_prim)
+        self.assertEqual(atomic_prim.arity, 1)
+
+        # Create a task where subgrid selection would fire
+        # (output smaller than input, matching a subgrid)
+        inp = [[1, 2, 0, 0], [3, 4, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+        out = [[1, 2], [3, 4]]
+        task = Task(task_id="test", train_examples=[(inp, out), (inp, out)],
+                    test_inputs=[inp])
+
+        env._try_subgrid_selection(task)
+
+        # Atomic primitive must NOT be overwritten
+        after_prim = _PRIM_MAP.get("most_colorful_subgrid")
+        self.assertEqual(after_prim.arity, 1,
+                         "Atomic most_colorful_subgrid (arity=1) was overwritten by dynamic version")
+
+    def test_dynamic_subgrid_names_include_dimensions(self):
+        """Dynamic subgrid prims should include output dimensions in name."""
+        from domains.arc.primitives import _PRIM_MAP, register_atomic_primitives
+        from domains.arc.environment import ARCEnv
+        from core.types import Task
+
+        register_atomic_primitives()
+        env = ARCEnv()
+        from domains.arc.grammar import ARCGrammar
+        for p in ARCGrammar().base_primitives():
+            env.register_primitive(p)
+
+        inp = [[1, 2, 0, 0], [3, 4, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+        out = [[1, 2], [3, 4]]
+        task = Task(task_id="test", train_examples=[(inp, out), (inp, out)],
+                    test_inputs=[inp])
+
+        result = env._try_subgrid_selection(task)
+        if result is not None:
+            name, _ = result
+            self.assertIn("2x2", name,
+                          f"Dynamic subgrid name '{name}' should include dimensions")
+
+
 if __name__ == "__main__":
     unittest.main()

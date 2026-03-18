@@ -44,6 +44,47 @@ class TestParseProgram(unittest.TestCase):
         self.assertIsNone(parse_program_tree(""))
         self.assertIsNone(parse_program_tree("   "))
 
+    def test_dynamic_prim_leaf(self):
+        """Dynamic primitives with parenthesized names should be leaf nodes."""
+        cases = [
+            "half_colormap(hsplit_sep)",
+            "per_object_recolor(by_size)",
+            "cell_patch(14_cells)",
+            "procedural(color:fill_object_bbox)",
+            "input_pred_correct(trim_cols(gravity_down))",
+            "transform_colormap(flood_fill)",
+            "cond_bbox_fill(compactness)",
+            "nway_colormap(vsplit3_nosep)",
+            "quad_colormap(quad)",
+            "pixel_to_tile(2x2)",
+        ]
+        for name in cases:
+            p = parse_program_tree(name)
+            self.assertEqual(p.root, name, f"Expected leaf for {name}")
+            self.assertEqual(p.children, [], f"Expected no children for {name}")
+
+    def test_dynamic_prim_inside_composition(self):
+        """Dynamic prims used as children of real compositions."""
+        p = parse_program_tree("overlay(half_colormap(vsplit), extract_unique_quadrant)")
+        self.assertEqual(p.root, "overlay")
+        self.assertEqual(len(p.children), 2)
+        self.assertEqual(p.children[0].root, "half_colormap(vsplit)")
+        self.assertEqual(p.children[0].children, [])
+        self.assertEqual(p.children[1].root, "extract_unique_quadrant")
+
+    def test_conditional_leaf(self):
+        """if_ programs are leaf nodes."""
+        p = parse_program_tree("if_is_tall_trim_rows_else_trim_cols")
+        self.assertEqual(p.root, "if_is_tall_trim_rows_else_trim_cols")
+        self.assertEqual(p.children, [])
+
+    def test_regular_composition_unchanged(self):
+        """Standard compositions should still parse normally."""
+        p = parse_program_tree("crop_half_left(learned_14)")
+        self.assertEqual(p.root, "crop_half_left")
+        self.assertEqual(len(p.children), 1)
+        self.assertEqual(p.children[0].root, "learned_14")
+
 
 class TestBuildLibraryMap(unittest.TestCase):
     """Test _build_library_map from results JSON structure."""

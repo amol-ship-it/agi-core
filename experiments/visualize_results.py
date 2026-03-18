@@ -783,12 +783,16 @@ def _render_perception_value(name: str, value) -> str:
 
 
 def _render_derivation(inp, prog, env,
-                       library_map: Optional[dict] = None) -> str:
+                       library_map: Optional[dict] = None,
+                       stored_prediction=None) -> str:
     """Show step-by-step execution: input --prim→ ... --prim→ predicted.
 
     Shows perception values inline (with color swatches for color prims),
     parameterized prims with their perception arguments, and grid transforms
     with intermediate outputs.
+
+    If stored_prediction is provided and a step produces the input unchanged
+    (dynamic primitive not available), substitutes the stored prediction.
     """
     has_steps = prog.children or prog.root != "identity"
     if not has_steps:
@@ -822,10 +826,19 @@ def _render_derivation(inp, prog, env,
             parts.append(_grid_with_label(output, f"after {label}"))
 
         else:  # grid transform
+            # If the output equals the input, the prim likely wasn't available
+            # (dynamic primitive). Use stored prediction if available.
+            display_output = output
+            label_suffix = ""
+            if (stored_prediction is not None and
+                    isinstance(output, list) and output == inp):
+                display_output = stored_prediction
+                label_suffix = " (from stored prediction)"
             parts.append(f'<div class="step-stage">'
                          f'<div class="step-prim-name">{html.escape(name)}</div>'
                          f'<div class="arrow">&rarr;</div></div>')
-            parts.append(_grid_with_label(output, f"after {name}"))
+            parts.append(_grid_with_label(display_output,
+                                          f"after {name}{label_suffix}"))
 
     parts.append('</div>')
     return '\n'.join(parts)
@@ -877,7 +890,8 @@ def _generate_task_page(tid, tdata, task, env, back_link="../index.html",
     for i, (inp, exp) in enumerate(task.train_examples):
         prediction = _get_prediction(train_preds, i, prog, inp, env)
         b.append(_render_example_row(f"Train {i+1}", inp, exp, prediction))
-        b.append(_render_derivation(inp, prog, env, library_map=library_map))
+        b.append(_render_derivation(inp, prog, env, library_map=library_map,
+                                    stored_prediction=prediction))
 
     # Test examples
     if task.test_inputs:
@@ -886,7 +900,8 @@ def _generate_task_page(tid, tdata, task, env, back_link="../index.html",
             test_exp = task.test_outputs[i] if i < len(task.test_outputs) else None
             prediction = _get_prediction(test_preds, i, prog, test_inp, env)
             b.append(_render_example_row(f"Test {i+1}", test_inp, test_exp, prediction))
-            b.append(_render_derivation(test_inp, prog, env, library_map=library_map))
+            b.append(_render_derivation(test_inp, prog, env, library_map=library_map,
+                                        stored_prediction=prediction))
 
     return _html_page(f"Task {tid}", '\n'.join(b))
 
