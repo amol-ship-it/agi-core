@@ -66,6 +66,7 @@ def attribute_to_objects(
             pixel_to_obj[p] = i
 
     # For each diff pixel, find nearest object
+    # Prefer color-matching objects (with a distance bonus)
     result: dict[int, dict[tuple[int, int], int]] = {}
 
     for (r, c), color in diff.items():
@@ -73,19 +74,22 @@ def attribute_to_objects(
         if (r, c) in pixel_to_obj:
             obj_idx = pixel_to_obj[(r, c)]
         else:
-            # Find nearest object by manhattan distance to any pixel
-            best_dist = float('inf')
+            # Find nearest object, with color-match bonus
+            best_score = float('inf')
             best_idx = 0
             for i, obj in enumerate(objects):
+                min_dist = float('inf')
                 for pr, pc in obj["pixels"]:
                     d = abs(r - pr) + abs(c - pc)
-                    if d < best_dist:
-                        best_dist = d
-                        best_idx = i
+                    if d < min_dist:
+                        min_dist = d
                         if d <= 1:
                             break
-                if best_dist <= 1:
-                    break
+                # Color-matching objects get a bonus (halved distance)
+                score = min_dist * (0.5 if obj.get("color") == color else 1.0)
+                if score < best_score:
+                    best_score = score
+                    best_idx = i
             obj_idx = best_idx
 
         if obj_idx not in result:
@@ -189,9 +193,11 @@ def _check_extend_ray(obj: dict, diff_pixels: dict[tuple[int, int], int],
         return None
     fill_color = colors.pop()
 
-    # Try each direction
+    # Try each direction (4 cardinal + 4 diagonal)
     for direction, dr, dc in [("up", -1, 0), ("down", 1, 0),
-                               ("left", 0, -1), ("right", 0, 1)]:
+                               ("left", 0, -1), ("right", 0, 1),
+                               ("up_left", -1, -1), ("up_right", -1, 1),
+                               ("down_left", 1, -1), ("down_right", 1, 1)]:
         # Find boundary pixels (object pixels with no neighbor in direction)
         boundary = set()
         for pr, pc in obj_pixels:
@@ -305,7 +311,9 @@ def _check_project_to_border(obj: dict, diff_pixels: dict[tuple[int, int], int],
     obj_pixels = obj["pixels"]
 
     for direction, dr, dc in [("up", -1, 0), ("down", 1, 0),
-                               ("left", 0, -1), ("right", 0, 1)]:
+                               ("left", 0, -1), ("right", 0, 1),
+                               ("up_left", -1, -1), ("up_right", -1, 1),
+                               ("down_left", 1, -1), ("down_right", 1, 1)]:
         expected = {}
         for pr, pc in obj_pixels:
             r, c = pr + dr, pc + dc
@@ -460,7 +468,9 @@ def _apply_fill_object_bbox(obj: dict, grid: Grid, params: dict) -> dict[tuple[i
 def _apply_extend_ray(obj: dict, grid: Grid, params: dict) -> dict[tuple[int, int], int]:
     """Apply extend_ray action, return pixels to set."""
     h, w = len(grid), len(grid[0])
-    dir_map = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
+    dir_map = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1),
+               "up_left": (-1, -1), "up_right": (-1, 1),
+               "down_left": (1, -1), "down_right": (1, 1)}
     dr, dc = dir_map[params["direction"]]
     fill_color = params["fill_color"]
 
@@ -521,7 +531,9 @@ def _apply_project_to_border(obj: dict, grid: Grid,
                               params: dict) -> dict[tuple[int, int], int]:
     """Apply project_to_border action, return pixels to set."""
     h, w = len(grid), len(grid[0])
-    dir_map = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
+    dir_map = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1),
+               "up_left": (-1, -1), "up_right": (-1, 1),
+               "down_left": (1, -1), "down_right": (1, 1)}
     dr, dc = dir_map[params["direction"]]
     fill_color = params["fill_color"]
 
