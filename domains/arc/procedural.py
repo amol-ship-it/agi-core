@@ -1286,6 +1286,9 @@ def _try_extract_object(examples):
         ("is_smallest", lambda objs: min(objs, key=lambda o: o["size"])),
         ("has_hole", lambda objs: next((o for o in objs if _has_hole(o)), None)),
         ("unique_color", lambda objs: _find_unique_color_object(objs)),
+        ("unique_size", lambda objs: _find_unique_size_object(objs)),
+        ("most_compact", lambda objs: max(objs, key=lambda o: _compactness(o))),
+        ("least_compact", lambda objs: min(objs, key=lambda o: _compactness(o))),
     ]
 
     for prop_name, selector_fn in property_selectors:
@@ -1460,6 +1463,15 @@ def _find_unique_color_object(objects):
     color_counts = Counter(o["color"] for o in objects)
     for obj in objects:
         if color_counts[obj["color"]] == 1:
+            return obj
+    return None
+
+
+def _find_unique_size_object(objects):
+    """Find the object whose size appears only once."""
+    size_counts = Counter(o["size"] for o in objects)
+    for obj in objects:
+        if size_counts[obj["size"]] == 1:
             return obj
     return None
 
