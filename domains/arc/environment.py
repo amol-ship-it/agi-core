@@ -1004,6 +1004,88 @@ class ARCEnv(Environment):
                     self.register_primitive(prim)
                     return (name, ds_fn)
 
+        # Pixel-to-tile: each input pixel maps to a k×k output tile by color
+        if oh >= ih * 2 and ow >= iw * 2 and oh % ih == 0 and ow % iw == 0:
+            kh, kw = oh // ih, ow // iw
+            if kh == kw and 2 <= kh <= 5:
+                k = kh
+                color_to_tile: dict[int, tuple] = {}
+                consistent = True
+                for inp, out in examples:
+                    h_i, w_i = len(inp), len(inp[0])
+                    if len(out) != h_i * k or len(out[0]) != w_i * k:
+                        consistent = False
+                        break
+                    for r in range(h_i):
+                        for c in range(w_i):
+                            tile = tuple(tuple(out[r*k+dr][c*k+dc] for dc in range(k))
+                                         for dr in range(k))
+                            color = inp[r][c]
+                            if color in color_to_tile and color_to_tile[color] != tile:
+                                consistent = False
+                                break
+                            color_to_tile[color] = tile
+                        if not consistent:
+                            break
+                    if not consistent:
+                        break
+
+                if consistent and color_to_tile:
+                    def _make_tile_fn(ct=dict(color_to_tile), kk=k):
+                        def fn(grid):
+                            h_g, w_g = len(grid), len(grid[0])
+                            result = [[0] * (w_g * kk) for _ in range(h_g * kk)]
+                            for r in range(h_g):
+                                for c in range(w_g):
+                                    tile = ct.get(grid[r][c])
+                                    if tile:
+                                        for dr in range(kk):
+                                            for dc in range(kk):
+                                                result[r*kk+dr][c*kk+dc] = tile[dr][dc]
+                            return result
+                        return fn
+
+                    tile_fn = _make_tile_fn()
+                    if _test_on_examples(tile_fn, examples):
+                        # LOOCV
+                        loocv_pass = True
+                        for hold_idx in range(len(examples)):
+                            sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+                            sub_ct: dict[int, tuple] = {}
+                            sub_ok = True
+                            for inp, out in sub:
+                                for r in range(len(inp)):
+                                    for c in range(len(inp[0])):
+                                        tile = tuple(tuple(out[r*k+dr][c*k+dc]
+                                                           for dc in range(k)) for dr in range(k))
+                                        color = inp[r][c]
+                                        if color in sub_ct and sub_ct[color] != tile:
+                                            sub_ok = False
+                                            break
+                                        sub_ct[color] = tile
+                                    if not sub_ok:
+                                        break
+                                if not sub_ok:
+                                    break
+                            if not sub_ok:
+                                loocv_pass = False
+                                break
+                            sub_fn = _make_tile_fn(sub_ct, k)
+                            held_inp, held_exp = examples[hold_idx]
+                            try:
+                                if sub_fn(held_inp) != held_exp:
+                                    loocv_pass = False
+                                    break
+                            except Exception:
+                                loocv_pass = False
+                                break
+
+                        if loocv_pass:
+                            name = f"pixel_to_tile({k}x{k})"
+                            prim = Primitive(name=name, arity=0, fn=tile_fn, domain="arc")
+                            self.register_primitive(prim)
+                            return (name, tile_fn)
+
         return None
 
     def _try_template_stamp(
