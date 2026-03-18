@@ -1049,6 +1049,178 @@ def _try_global_fill_enclosed(examples):
     return None
 
 
+def _try_object_movement(examples):
+    """Try to detect consistent object movement patterns.
+
+    Matches objects between input and output by shape signature,
+    then learns displacement rules based on object properties.
+    """
+    if not examples or len(examples) < 2:
+        return None
+
+    # All must be same dimensions
+    for inp, out in examples:
+        if not inp or not out:
+            return None
+        if len(inp) != len(out) or len(inp[0]) != len(out[0]):
+            return None
+
+    # For each example, match objects by shape
+    per_example_moves = []
+
+    for inp, out in examples:
+        inp_objects = _find_connected_components(inp)
+        out_objects = _find_connected_components(out)
+        if not inp_objects:
+            return None
+
+        # Add subgrids and signatures
+        for obj in inp_objects:
+            r0, c0, r1, c1 = obj["bbox"]
+            sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+            for r, c in obj["pixels"]:
+                sg[r-r0][c-c0] = obj["color"]
+            obj["subgrid"] = sg
+            obj["sig"] = _shape_signature(obj)
+
+        for obj in out_objects:
+            r0, c0, r1, c1 = obj["bbox"]
+            sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+            for r, c in obj["pixels"]:
+                sg[r-r0][c-c0] = obj["color"]
+            obj["subgrid"] = sg
+            obj["sig"] = _shape_signature(obj)
+
+        # Match by (color, shape_signature)
+        used_out = set()
+        moves = []
+        for i, iobj in enumerate(inp_objects):
+            key = (iobj["color"], iobj["sig"])
+            best_j = None
+            best_dist = float('inf')
+            for j, oobj in enumerate(out_objects):
+                if j in used_out:
+                    continue
+                if (oobj["color"], oobj["sig"]) == key:
+                    # Manhattan distance between positions
+                    d = abs(iobj["bbox"][0] - oobj["bbox"][0]) + abs(iobj["bbox"][1] - oobj["bbox"][1])
+                    if d < best_dist:
+                        best_dist = d
+                        best_j = j
+            if best_j is not None:
+                used_out.add(best_j)
+                oobj = out_objects[best_j]
+                dr = oobj["bbox"][0] - iobj["bbox"][0]
+                dc = oobj["bbox"][1] - iobj["bbox"][1]
+                props = _object_properties(iobj, inp_objects, inp)
+                moves.append((props, dr, dc))
+            else:
+                # Object disappeared — treat as erase (dr=None)
+                props = _object_properties(iobj, inp_objects, inp)
+                moves.append((props, None, None))
+
+        # Check: any unmatched output objects? (new objects appeared)
+        if len(used_out) < len(out_objects):
+            return None  # Can't handle new objects yet
+
+        per_example_moves.append(moves)
+
+    # Try to find a property that predicts (dr, dc) consistently
+    property_keys = [
+        "all", "color", "is_largest", "is_smallest", "has_hole",
+        "compactness_bin", "size", "size_gt_1",
+    ]
+
+    for prop_key in property_keys:
+        prop_to_delta: dict = {}
+        consistent = True
+
+        for ex_moves in per_example_moves:
+            for props, dr, dc in ex_moves:
+                pv = props.get(prop_key)
+                delta = (dr, dc)
+                if pv in prop_to_delta:
+                    if prop_to_delta[pv] != delta:
+                        consistent = False
+                        break
+                else:
+                    prop_to_delta[pv] = delta
+            if not consistent:
+                break
+
+        if not consistent:
+            continue
+
+        # Check that all deltas are concrete (no None)
+        if any(d[0] is None for d in prop_to_delta.values()):
+            continue
+
+        # Build applicator
+        def _make_move_fn(rule_map, pk):
+            def apply_move(grid):
+                objects = _find_connected_components(grid)
+                if not objects:
+                    return grid
+                for obj in objects:
+                    r0, c0, r1, c1 = obj["bbox"]
+                    sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+                    for r, c in obj["pixels"]:
+                        sg[r-r0][c-c0] = obj["color"]
+                    obj["subgrid"] = sg
+
+                h, w = len(grid), len(grid[0])
+                result = [[0] * w for _ in range(h)]
+
+                for obj in objects:
+                    props = _object_properties(obj, objects, grid)
+                    pv = props.get(pk)
+                    if pv not in rule_map:
+                        # Keep in place
+                        for r, c in obj["pixels"]:
+                            if 0 <= r < h and 0 <= c < w:
+                                result[r][c] = obj["color"]
+                        continue
+                    dr, dc = rule_map[pv]
+                    for r, c in obj["pixels"]:
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < h and 0 <= nc < w:
+                            result[nr][nc] = obj["color"]
+                return result
+            return apply_move
+
+        fn = _make_move_fn(prop_to_delta, prop_key)
+
+        if not _test_on_examples(fn, examples):
+            continue
+
+        # LOOCV — only if enough examples (movement can't learn from 1)
+        if len(examples) > 2:
+            loocv_pass = True
+            for hold_idx in range(len(examples)):
+                train_sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+                sub_result = _try_object_movement(train_sub)
+                if sub_result is None:
+                    loocv_pass = False
+                    break
+                _, sub_fn = sub_result
+                held_inp, held_exp = examples[hold_idx]
+                try:
+                    if sub_fn(held_inp) != held_exp:
+                        loocv_pass = False
+                        break
+                except Exception:
+                    loocv_pass = False
+                    break
+            if not loocv_pass:
+                continue
+
+        deltas = set(d for d in prop_to_delta.values() if d != (0, 0))
+        name = f"procedural_move({prop_key}:{deltas})"
+        return (name, fn)
+
+    return None
+
+
 def try_procedural(
     task,
 ) -> Optional[tuple[str, Callable]]:
@@ -1066,5 +1238,10 @@ def try_procedural(
     if result is not None:
         return result
 
-    # Then try per-object action rules
-    return _learn_object_action_rules(examples)
+    # Then try per-object action rules (fill/extend/etc)
+    result = _learn_object_action_rules(examples)
+    if result is not None:
+        return result
+
+    # Then try object movement detection
+    return _try_object_movement(examples)
