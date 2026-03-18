@@ -171,14 +171,15 @@ All runs use **atomic vocabulary** — 75 primitives (54 atomic transforms + 12 
 
 Rounds are auto-derived: 2 for budget ≥200K, 3 for ≥20M. Results are fully deterministic with **seed 42** (`PYTHONHASHSEED=0` is enforced automatically).
 
-**Quick mode** (measured 2026-03-17):
+**Performance by mode** (measured 2026-03-17):
 
-| Mode | Tasks | Training | Eval | Wall time |
-|------|-------|----------|------|-----------|
-| quick | 50 | 14/50 (28%) | 4/50 (8%) | 18s |
-| quick --max-tasks 0 | 400 | 94/400 (23.5%) | 30/400 (7.5%) | ~2 min |
+| Mode | Tasks | Cap | Training | Eval | Wall time |
+|------|-------|-----|----------|------|-----------|
+| quick | 50 | 1M | 14/50 (28%) | 4/50 (8%) | 18s |
+| quick --max-tasks 0 | 400 | 1M | **94/400 (23.5%)** | 30/400 (7.5%) | ~2 min |
+| default | 400 | 3M | 91/400 (22.8%) | **32/400 (8.0%)** | ~4 min |
 
-Round 2 adds a few percent. Most gains come from the combination of atomic search + structural phases (local rules, procedural DSL, input-pred correction).
+Quick mode (1M cap) maximizes training solves via targeted primitives. Default mode (3M cap) finds 2 more eval solves with wider search, at the cost of 3 training solves from search space dilution. Both modes use 2 rounds with culture transfer.
 
 **Compute cap** is cell-normalized (larger grids get proportionally fewer evals). Override with `--compute-cap`:
 
@@ -192,7 +193,8 @@ python -m common --domain arc-agi-1 --compute-cap 100M    # override preset cap
 
 | Mode | Training (400) | Eval (400) | Library | Overfit | Wall time |
 |------|---------------|------------|---------|---------|-----------|
-| quick --max-tasks 0 | **94/400 (23.5%)** | **30/400 (7.5%)** | 31 | 7 / 2 | ~2 min |
+| quick --max-tasks 0 | **94/400 (23.5%)** | 30/400 (7.5%) | 31 | 7 / 2 | ~2 min |
+| default | 91/400 (22.8%) | **32/400 (8.0%)** | 29 | 6 / 2 | ~4 min |
 
 Solve criterion uses max-example-error (all examples must be solved, not just average) — this is stricter than avg-based, so numbers reflect genuine all-example solves.
 
