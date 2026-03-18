@@ -3383,7 +3383,15 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 
 **Reverted (negative impact):** tile_both, scale_up_2x, scale_up_3x (diluted search, -3)
 
-**Current state:** 94/400 train (23.5%), 29/400 eval (7.2%), 53 primitives.
+### Decision: Extended local rules + conditional phase
+
+**New local rule types:**
+- `pos_mod{N}_rule`: (center, row%N, col%N) → output. Handles periodic position patterns. Solved ba26e723 (period-3), 332efdb3 eval (period-2).
+- `ncolors_local_rule`: (center, n_distinct_4neighbor_colors) → output. Captures neighborhood diversity patterns. Solved e0fb7511 (eval).
+
+**Conditional phase** (`_phase_conditional_search`): Re-enabled after fixing multiprocessing crash (output validation + lazy registration). Tests `if(predicate, A, B)` for 12 predicates × top-10 primitives. Finds 136 conditional programs but none solve. Minimal overhead (~3s per 400 tasks).
+
+**Current state:** 95/400 train (23.8%), 32/400 eval (8.0%), 54 atomic primitives, 436 tests.
 
 ---
 *This document will be updated with each new session and major decision.*
