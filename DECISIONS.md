@@ -3416,7 +3416,17 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 **Results from pixel_to_tile:** +1 eval (2072aba6)
 **Results from pos_mod + ncolors rules:** +1 train (ba26e723), +2 eval (332efdb3, e0fb7511)
 
-**Current state:** 106/400 train (26.5%), 45/400 eval (11.2%), 54 atomic primitives, 436 tests.
+### Decision: Object-level reasoning phase
+
+**Per-pixel stamp:** For fill-only tasks, learn `(source_color, dr, dc) → fill_color` — each non-zero pixel stamps a pattern around itself. Solved 0ca9ddb6, d364b489 (train), 72a961c9 (eval). +2 train, +1 eval.
+
+**Conditional bbox fill:** Learn which objects get their bbox filled based on compactness/has_hole. Found 2 matches but both fail LOOCV. Added ~1.5min overhead.
+
+**Investigated but 0 matches:** per-object fill pattern (center-based), two-color fill (nearest pair), count-based dimensions, 1x1 output properties, tile-based rules.
+
+**Key finding:** 109 fill-only tasks remain the biggest unsolved cluster. They need complex spatial reasoning about WHERE to fill based on multi-object relationships, not simple per-pixel or per-object rules.
+
+**Current state:** 108/400 train (27.0%), 46/400 eval (11.5%), 54 atomic primitives, 436 tests.
 
 ---
 *This document will be updated with each new session and major decision.*

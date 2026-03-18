@@ -625,6 +625,12 @@ Bulk-restored structural strategies from pre-strip git history. Result: 22→28 
 
 **Response:** Verified all pushed, fixed remaining stale README numbers. Tried: repair_section (0), symmetry completion (0), majority/nearest fill (0), more transform colormaps (0), tile-based rules (0). The remaining ~294 train and ~355 eval tasks need object-level reasoning beyond pixel/grid-level operations. All easy structural patterns have been exhausted.
 
+### Prompt 8: Object-Level Reasoning
+
+> Go ahead with the object level reasoning. Feel free to take a fundamentally different approach.
+
+**Response:** Built per-pixel stamp (learn color-relative fill pattern, +2 train, +1 eval), conditional bbox fill (LOOCV blocks). Investigated per-object fill, two-color fill, count-based dims, 1x1 output — all 0. 109 fill-only tasks remain as biggest unsolved cluster. Train 106→108 (+2), eval 45→46 (+1).
+
 ---
 
 *This document will be updated with each new session.*
