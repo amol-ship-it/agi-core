@@ -631,6 +631,12 @@ Bulk-restored structural strategies from pre-strip git history. Result: 22→28 
 
 **Response:** Built per-pixel stamp (learn color-relative fill pattern, +2 train, +1 eval), conditional bbox fill (LOOCV blocks). Investigated per-object fill, two-color fill, count-based dims, 1x1 output — all 0. 109 fill-only tasks remain as biggest unsolved cluster. Train 106→108 (+2), eval 45→46 (+1).
 
+### Prompt 9: Improve Visualization
+
+> Looking at the viz output, I am seeing strange programs which are not present in the primitives. For example, per_pixel_stamp, per_object_recolor, etc. Where are these programs coming from? Can you make the visualization output more intuitive by actually expanding the program, or even print the code in the detailed task html file?
+
+**Response:** Dynamic primitives (per_pixel_stamp, half_colormap, per_object_recolor, etc.) are created at runtime during wake phases with learned rules captured in closures. Added to visualization: (1) "How this program works" section with pattern-based explanations for 20+ primitive types, (2) "Learned rules" section showing actual mapping data reconstructed from task training examples. Added `description` field to Primitive dataclass and `_PRIM_RULES` metadata store.
+
 ---
 
 *This document will be updated with each new session.*
