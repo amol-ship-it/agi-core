@@ -291,6 +291,9 @@ class ARCEnv(Environment):
         result = self._try_conditional_bbox_fill(task)
         if result is not None:
             return result
+        result = self._try_cell_grid_colormap(task)
+        if result is not None:
+            return result
         return None
 
     def _try_boolean_halves(
@@ -1186,6 +1189,128 @@ class ARCEnv(Environment):
             return (name, fn)
 
         return None
+
+    def _try_cell_grid_colormap(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Map a separator-divided cell grid to a smaller output grid.
+
+        For grids divided by separator lines into NR×NC cells:
+        each cell's sorted pixel content maps to one output pixel.
+        Output dimensions = NR × NC.
+        """
+        from .objects import _test_on_examples
+        examples = task.train_examples
+        if not examples or len(examples) < 2:
+            return None
+        fi, fo = examples[0]
+        h, w = len(fi), len(fi[0]) if fi else 0
+        oh, ow = len(fo), len(fo[0]) if fo else 0
+        if oh >= h or ow >= w or oh == 0 or ow == 0:
+            return None
+
+        def _get_cell_grid(grid):
+            gh, gw = len(grid), len(grid[0])
+            sr = sorted(set(r for r in range(gh) if len(set(grid[r])) == 1 and grid[r][0] != 0))
+            sc = sorted(set(c for c in range(gw) if len(set(grid[r][c] for r in range(gh))) == 1 and grid[0][c] != 0))
+            rb, prev = [], 0
+            for r in sr:
+                if r > prev:
+                    rb.append((prev, r))
+                prev = r + 1
+            if prev < gh:
+                rb.append((prev, gh))
+            cb, prev = [], 0
+            for c in sc:
+                if c > prev:
+                    cb.append((prev, c))
+                prev = c + 1
+            if prev < gw:
+                cb.append((prev, gw))
+            return rb, cb
+
+        rb0, cb0 = _get_cell_grid(fi)
+        if len(rb0) != oh or len(cb0) != ow:
+            return None
+
+        color_map: dict[tuple, int] = {}
+        consistent = True
+        for inp, out in examples:
+            rb, cb = _get_cell_grid(inp)
+            if len(rb) != oh or len(cb) != ow:
+                consistent = False
+                break
+            for ri, (r0, r1) in enumerate(rb):
+                for ci, (c0, c1) in enumerate(cb):
+                    cell = tuple(sorted(inp[r][c] for r in range(r0, r1) for c in range(c0, c1)))
+                    val = out[ri][ci]
+                    if cell in color_map and color_map[cell] != val:
+                        consistent = False
+                        break
+                    color_map[cell] = val
+                if not consistent:
+                    break
+            if not consistent:
+                break
+        if not consistent or not color_map:
+            return None
+
+        def _make_fn(cm=dict(color_map), n_r=oh, n_c=ow):
+            def fn(grid):
+                rb, cb = _get_cell_grid(grid)
+                result = []
+                for ri, (r0, r1) in enumerate(rb):
+                    row = []
+                    for ci, (c0, c1) in enumerate(cb):
+                        cell = tuple(sorted(grid[r][c] for r in range(r0, r1) for c in range(c0, c1)))
+                        row.append(cm.get(cell, 0))
+                    result.append(row)
+                return result
+            return fn
+
+        fn = _make_fn()
+        if not _test_on_examples(fn, examples):
+            return None
+
+        # LOOCV
+        for hold_idx in range(len(examples)):
+            sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+            sub_map: dict[tuple, int] = {}
+            sub_ok = True
+            for inp, out in sub:
+                rb, cb = _get_cell_grid(inp)
+                if len(rb) != oh or len(cb) != ow:
+                    sub_ok = False
+                    break
+                for ri, (r0, r1) in enumerate(rb):
+                    for ci, (c0, c1) in enumerate(cb):
+                        cell = tuple(sorted(inp[r][c] for r in range(r0, r1) for c in range(c0, c1)))
+                        if cell in sub_map and sub_map[cell] != out[ri][ci]:
+                            sub_ok = False
+                            break
+                        sub_map[cell] = out[ri][ci]
+                    if not sub_ok:
+                        break
+                if not sub_ok:
+                    break
+            if not sub_ok:
+                return None
+            sub_fn = _make_fn(sub_map, oh, ow)
+            try:
+                if sub_fn(examples[hold_idx][0]) != examples[hold_idx][1]:
+                    return None
+            except Exception:
+                return None
+
+        name = "cell_grid_colormap"
+        prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+        self.register_primitive(prim)
+        from .primitives import _PRIM_RULES
+        rules_desc = f"Cell grid {oh}×{ow}: sorted_cell_content → output_pixel\n"
+        for cell, val in sorted(color_map.items(), key=lambda x: x[1]):
+            rules_desc += f"  {cell} → {val}\n"
+        _PRIM_RULES[name] = rules_desc
+        return (name, fn)
 
     def _try_separator_cross_ref(
         self, task: Task,
