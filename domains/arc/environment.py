@@ -1064,6 +1064,27 @@ class ARCEnv(Environment):
 
         return None
 
+    def try_procedural(
+        self, task,
+    ) -> Optional[tuple[str, Any]]:
+        """Learn per-object action rules from pixel diffs.
+
+        Delegates to procedural.py which:
+        1. Computes what changed between input and output
+        2. Attributes changes to input objects
+        3. Matches action templates (fill_bbox, extend_ray, etc.)
+        4. Learns which objects get which action via property-based rules
+        5. LOOCV-validates before returning
+        """
+        from .procedural import try_procedural as _try_procedural
+        result = _try_procedural(task)
+        if result is not None:
+            name, fn = result
+            prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+            self.register_primitive(prim)
+            return (name, fn)
+        return None
+
     # Maximum intermediate grid size (pixels).
     MAX_GRID_PIXELS = 10_000
 
