@@ -3361,7 +3361,29 @@ Each rule is LOOCV-validated: learned from N-1 examples, verified on the held-ou
 - Copy-pattern detection — only 6 candidates
 - Interior-of-hole extraction — only 1 candidate
 
-**Current state:** 88/400 train (22.0%), 26/400 eval (6.5%), ~1500 lines in procedural.py.
+**Current state after procedural:** 88/400 train (22.0%), 26/400 eval (6.5%).
+
+### Decision: Targeted new primitives via pre-testing
+
+**Strategy:** Pre-test candidate primitives on ALL unsolved tasks before registering.
+Only add primitives that demonstrably solve new tasks. Adding non-solving primitives
+dilutes the search space and causes regressions (confirmed: 3 tiling primitives caused -3).
+
+**New primitives added:**
+- `crop_to_content`: minimal bbox crop (no new solves directly, but useful in compositions)
+- `flood_fill_by_neighbor`: fill enclosed regions with majority border color (+0)
+- `subtract_grid` (binary): keep grid1 where grid2 is zero (+1 eval via composition)
+- `xor_grid` (binary): keep pixels in one but not both (+0 direct)
+- `tile_v`: vertical tile (+0 direct)
+- `densest_subgrid`: extract densest connected component bbox (+0 direct)
+- `most_colorful_subgrid`: extract most-colored component (+1 eval)
+- `extend_right_and_down`: L-shape ray extension (+1 train)
+- `extract_unique_quadrant`: split by separators, extract different section (+4 train, +1 eval)
+- `overlay_all_sections`: split by separators, overlay all sections (+1 train, +1 eval)
+
+**Reverted (negative impact):** tile_both, scale_up_2x, scale_up_3x (diluted search, -3)
+
+**Current state:** 94/400 train (23.5%), 29/400 eval (7.2%), 53 primitives.
 
 ---
 *This document will be updated with each new session and major decision.*
