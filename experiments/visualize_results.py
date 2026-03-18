@@ -782,6 +782,112 @@ def _render_perception_value(name: str, value) -> str:
             f'<div class="value">{val_str}{swatch}</div></div>')
 
 
+def _render_dynamic_derivation(prog_name: str, inp, stored_prediction) -> str:
+    """Render synthetic derivation steps for dynamic primitives.
+
+    Shows the logical internal steps (split, map, etc.) even though
+    the dynamic primitive is a single opaque function.
+    """
+    parts = ['<div class="step-flow">', _grid_with_label(inp, "Input")]
+
+    if "half_colormap" in prog_name or "nway_colormap" in prog_name:
+        h, w = len(inp), len(inp[0])
+        # Determine split type from name
+        is_sep = "sep" in prog_name
+        sep = 1 if is_sep else 0
+        if "vsplit" in prog_name:
+            mid = h // 2
+            top = [inp[r][:] for r in range(mid)]
+            bot = [inp[r][:] for r in range(mid + sep, h)]
+            parts.append(f'<div class="step-stage">'
+                         f'<div class="step-prim-name">split vertically{"(by separator)" if is_sep else ""}</div>'
+                         f'<div class="arrow">&rarr;</div></div>')
+            parts.append(_grid_with_label(top, "Top half"))
+            parts.append(_grid_with_label(bot, "Bottom half"))
+        elif "hsplit" in prog_name:
+            mid = w // 2
+            left = [row[:mid] for row in inp]
+            right = [row[mid + sep:] for row in inp]
+            parts.append(f'<div class="step-stage">'
+                         f'<div class="step-prim-name">split horizontally{"(by separator)" if is_sep else ""}</div>'
+                         f'<div class="arrow">&rarr;</div></div>')
+            parts.append(_grid_with_label(left, "Left half"))
+            parts.append(_grid_with_label(right, "Right half"))
+
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">apply learned color mapping</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        if stored_prediction:
+            parts.append(_grid_with_label(stored_prediction, "Output"))
+
+    elif "per_pixel_stamp" in prog_name:
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">stamp learned pattern around each pixel</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        if stored_prediction:
+            parts.append(_grid_with_label(stored_prediction, "Output"))
+
+    elif "per_object_recolor" in prog_name:
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">detect objects → recolor by learned rule</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        if stored_prediction:
+            parts.append(_grid_with_label(stored_prediction, "Output"))
+
+    elif "transform_colormap" in prog_name:
+        # Extract transform name
+        t_name = prog_name.replace("transform_colormap(", "").rstrip(")")
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">apply {html.escape(t_name)}</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        # Try to execute the inner transform
+        from domains.arc.primitives import _PRIM_MAP
+        inner_prim = _PRIM_MAP.get(t_name)
+        if inner_prim:
+            try:
+                transformed = inner_prim.fn(inp)
+                parts.append(_grid_with_label(transformed, f"after {t_name}"))
+            except Exception:
+                pass
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">apply learned color mapping</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        if stored_prediction:
+            parts.append(_grid_with_label(stored_prediction, "Output"))
+
+    elif "extract_unique_quadrant" in prog_name or "overlay_all_sections" in prog_name:
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">split by separator lines</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">{"extract unique section" if "unique" in prog_name else "overlay all sections"}</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        if stored_prediction:
+            parts.append(_grid_with_label(stored_prediction, "Output"))
+
+    elif "input_pred_correct" in prog_name:
+        base = prog_name.replace("input_pred_correct(", "").rstrip(")")
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">apply base: {html.escape(base)}</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">correct each pixel using (input, prediction) rule</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        if stored_prediction:
+            parts.append(_grid_with_label(stored_prediction, "Output"))
+
+    else:
+        # Generic fallback: just show input → output
+        parts.append(f'<div class="step-stage">'
+                     f'<div class="step-prim-name">{html.escape(prog_name)}</div>'
+                     f'<div class="arrow">&rarr;</div></div>')
+        if stored_prediction:
+            parts.append(_grid_with_label(stored_prediction, "Output"))
+
+    parts.append('</div>')
+    return '\n'.join(parts)
+
+
 def _render_derivation(inp, prog, env,
                        library_map: Optional[dict] = None,
                        stored_prediction=None) -> str:
@@ -797,6 +903,13 @@ def _render_derivation(inp, prog, env,
     has_steps = prog.children or prog.root != "identity"
     if not has_steps:
         return ''
+
+    # For dynamic primitive leaves, render synthetic derivation steps
+    # showing the logical internal structure
+    if not prog.children:
+        for prefix in _DYNAMIC_PRIM_PREFIXES:
+            if prog.root.startswith(prefix):
+                return _render_dynamic_derivation(prog.root, inp, stored_prediction)
 
     steps = _execute_steps(prog, inp, env, library_map=library_map)
     if not steps:
