@@ -581,4 +581,32 @@ Bulk-restored structural strategies from pre-strip git history. Result: 22→28 
 
 ---
 
+## Session — Procedural Object DSL + Targeted Primitives (2026-03-17)
+
+### Prompt 1: Implement the Procedural Object DSL Plan
+
+> Implement the following plan: Procedural Object DSL — Learn Per-Object Actions from Examples
+
+**Response:** Full implementation of procedural.py (~1500 lines). Pixel-diff engine, 6 action templates, property-based rule learning with LOOCV, object movement detection, object extraction. Train 84→88 (+4), eval 24→26 (+2).
+
+### Prompt 2: Continue with the Plan
+
+> continue with the plan
+
+**Response:** Continued procedural improvements — added object extraction for dimension-change tasks. Train 88→88, eval 26→26 (+0 net). Exhaustive scan confirmed procedural framework maximally exploited.
+
+### Prompt 3: Keep Going — Major Improvements Needed
+
+> Keep going. We are still at very low accuracy, and need to make major improvements.
+
+**Response:** Pivoted to targeted new primitives strategy. Pre-test candidates on ALL unsolved tasks before adding — only add if demonstrably solving new tasks. Added: crop_to_content, flood_fill_by_neighbor, subtract_grid, xor_grid, tile_v, densest_subgrid, most_colorful_subgrid, extend_right_and_down, extract_unique_quadrant, overlay_all_sections, remove_separators. Discovered that adding non-solving primitives is actively harmful (3 tiling prims caused -3). Train 88→94 (+6), eval 26→30 (+4).
+
+### Prompt 4: Update Documentation
+
+> update README and all documentation to not be stale. Especially the presets and expected performance sections. Then continue with the plan
+
+**Response:** Updated README.md (presets, expected performance, current status, limitations, structure, roadmap), DECISIONS.md, benchmark.py comments. All numbers now reflect: train 94/400 (23.5%), eval 30/400 (7.5%), 75 primitives, 436 tests.
+
+---
+
 *This document will be updated with each new session.*
