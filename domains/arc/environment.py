@@ -1885,8 +1885,8 @@ class ARCEnv(Environment):
                            for dr in range(oh) for dc in range(ow)))
 
         for strat_name, score_fn in [
-            ("densest_subgrid", _densest),
-            ("most_colorful_subgrid", _most_colorful),
+            (f"densest_subgrid_{oh}x{ow}", _densest),
+            (f"most_colorful_subgrid_{oh}x{ow}", _most_colorful),
         ]:
             def _make_fn(sf=score_fn, h=oh, w=ow):
                 def fn(grid):

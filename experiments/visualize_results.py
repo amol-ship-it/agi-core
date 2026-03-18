@@ -225,6 +225,18 @@ def _explain_program(prog_str: str, env=None) -> str:
             "positions where the prediction differs from expected, apply a "
             "learned patch. Only works when patches are consistent across examples."
         ),
+        "densest_subgrid_": (
+            "Select the subgrid with the highest density of non-zero pixels. "
+            "Output dimensions are fixed; the position is chosen to maximize density."
+        ),
+        "most_colorful_subgrid_": (
+            "Select the subgrid with the most distinct colors. "
+            "Output dimensions are fixed; the position is chosen to maximize color diversity."
+        ),
+        "cell_grid_colormap": (
+            "Grid divided by separator lines into cells. Each cell's sorted pixel "
+            "content maps to a single output pixel. Output = one pixel per cell."
+        ),
         "cross_ref": (
             "Split the grid in half (horizontally or vertically) and apply a "
             "boolean operation (XOR, AND, OR, subtract) between the two halves."
