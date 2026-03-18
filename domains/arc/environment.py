@@ -296,6 +296,20 @@ class ARCEnv(Environment):
                 [row[:len(row) // 2] for row in g],
                 [row[len(row) // 2:] for row in g])))
 
+        # Also try: split by separator row/col (single-color row/col)
+        if w == ow and h == oh * 2 + 1:
+            mid = h // 2
+            if len(set(first_inp[mid])) == 1:
+                splits.append(("vsplit_sep", lambda g: (
+                    [g[r][:] for r in range(len(g) // 2)],
+                    [g[r][:] for r in range(len(g) // 2 + 1, len(g))])))
+        if h == oh and w == ow * 2 + 1:
+            mid = w // 2
+            if len(set(first_inp[r][mid] for r in range(h))) == 1:
+                splits.append(("hsplit_sep", lambda g: (
+                    [row[:len(row) // 2] for row in g],
+                    [row[len(row) // 2 + 1:] for row in g])))
+
         if not splits:
             return None
 
@@ -315,6 +329,24 @@ class ARCEnv(Environment):
             ("b_minus_a", lambda a, b, h, w: [
                 [b[r][c] if a[r][c] == 0 else 0
                  for c in range(w)] for r in range(h)]),
+            # Color-preserving XOR: keep the pixel from whichever half has it
+            ("xor_color", lambda a, b, h, w: [
+                [a[r][c] if a[r][c] != 0 and b[r][c] == 0
+                 else b[r][c] if b[r][c] != 0 and a[r][c] == 0
+                 else 0
+                 for c in range(w)] for r in range(h)]),
+            # Diff: where halves disagree (both nonzero but different), keep a
+            ("diff_a", lambda a, b, h, w: [
+                [a[r][c] if a[r][c] != b[r][c] else 0
+                 for c in range(w)] for r in range(h)]),
+            # Diff: where halves disagree, keep b
+            ("diff_b", lambda a, b, h, w: [
+                [b[r][c] if a[r][c] != b[r][c] else 0
+                 for c in range(w)] for r in range(h)]),
+            # Same: where halves agree, keep value
+            ("same", lambda a, b, h, w: [
+                [a[r][c] if a[r][c] == b[r][c] else 0
+                 for c in range(w)] for r in range(h)]),
         ]
 
         for split_name, split_fn in splits:
@@ -332,6 +364,129 @@ class ARCEnv(Environment):
                     prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
                     self.register_primitive(prim)
                     return (name, fn)
+
+        # Also try: split halves + learned color mapping
+        result = self._try_half_colormap(task)
+        if result is not None:
+            return result
+
+        return None
+
+    def _try_half_colormap(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Split grid in half, learn (both_nonzero, a_val, b_val) → output mapping."""
+        from .objects import _test_on_examples
+        examples = task.train_examples
+        if not examples or len(examples) < 2:
+            return None
+        first_inp, first_out = examples[0]
+        h, w = len(first_inp), len(first_inp[0]) if first_inp else 0
+        oh, ow = len(first_out), len(first_out[0]) if first_out else 0
+
+        splits = []
+        # Exact halves
+        if h == oh * 2 and w == ow:
+            splits.append(("vsplit", lambda g: (
+                [g[r][:] for r in range(len(g) // 2)],
+                [g[r][:] for r in range(len(g) // 2, len(g))])))
+        if w == ow * 2 and h == oh:
+            splits.append(("hsplit", lambda g: (
+                [row[:len(row) // 2] for row in g],
+                [row[len(row) // 2:] for row in g])))
+        # Separator halves
+        if h == oh * 2 + 1 and w == ow:
+            mid = h // 2
+            if len(set(first_inp[mid])) == 1:
+                splits.append(("vsplit_sep", lambda g: (
+                    [g[r][:] for r in range(len(g) // 2)],
+                    [g[r][:] for r in range(len(g) // 2 + 1, len(g))])))
+        if w == ow * 2 + 1 and h == oh:
+            mid = w // 2
+            if len(set(first_inp[r][mid] for r in range(h))) == 1:
+                splits.append(("hsplit_sep", lambda g: (
+                    [row[:len(row) // 2] for row in g],
+                    [row[len(row) // 2 + 1:] for row in g])))
+
+        for split_name, split_fn in splits:
+            color_map: dict[tuple, int] = {}
+            consistent = True
+            for inp, out in examples:
+                a, b = split_fn(inp)
+                rh = min(len(a), len(b), len(out))
+                rw = min(len(a[0]) if a else 0, len(b[0]) if b else 0,
+                         len(out[0]) if out else 0)
+                for r in range(rh):
+                    for c in range(rw):
+                        key = (int(a[r][c] != 0 and b[r][c] != 0), a[r][c], b[r][c])
+                        val = out[r][c]
+                        if key in color_map and color_map[key] != val:
+                            consistent = False
+                            break
+                        color_map[key] = val
+                    if not consistent:
+                        break
+                if not consistent:
+                    break
+
+            if not consistent:
+                continue
+
+            def _make_fn(sf=split_fn, cm=dict(color_map)):
+                def fn(grid):
+                    a, b = sf(grid)
+                    rh = min(len(a), len(b))
+                    rw = min(len(a[0]) if a else 0, len(b[0]) if b else 0)
+                    return [[cm.get((int(a[r][c] != 0 and b[r][c] != 0),
+                                     a[r][c], b[r][c]), 0)
+                             for c in range(rw)] for r in range(rh)]
+                return fn
+
+            fn = _make_fn()
+            if _test_on_examples(fn, examples):
+                # LOOCV
+                loocv_pass = True
+                for hold_idx in range(len(examples)):
+                    train_sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+                    sub_map: dict[tuple, int] = {}
+                    sub_ok = True
+                    for inp, out in train_sub:
+                        a, b = split_fn(inp)
+                        rh = min(len(a), len(b), len(out))
+                        rw = min(len(a[0]) if a else 0, len(b[0]) if b else 0,
+                                 len(out[0]) if out else 0)
+                        for r in range(rh):
+                            for c in range(rw):
+                                key = (int(a[r][c] != 0 and b[r][c] != 0),
+                                       a[r][c], b[r][c])
+                                if key in sub_map and sub_map[key] != out[r][c]:
+                                    sub_ok = False
+                                    break
+                                sub_map[key] = out[r][c]
+                            if not sub_ok:
+                                break
+                        if not sub_ok:
+                            break
+                    if not sub_ok:
+                        loocv_pass = False
+                        break
+                    sub_fn = _make_fn(split_fn, sub_map)
+                    held_inp, held_exp = examples[hold_idx]
+                    try:
+                        if sub_fn(held_inp) != held_exp:
+                            loocv_pass = False
+                            break
+                    except Exception:
+                        loocv_pass = False
+                        break
+
+                if not loocv_pass:
+                    continue
+
+                name = f"half_colormap({split_name})"
+                prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                self.register_primitive(prim)
+                return (name, fn)
 
         return None
 
