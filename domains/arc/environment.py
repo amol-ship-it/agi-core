@@ -374,6 +374,10 @@ class ARCEnv(Environment):
         if result is not None:
             return result
 
+        result = self._try_quadrant_colormap(task)
+        if result is not None:
+            return result
+
         return None
 
     def _try_half_colormap(
@@ -641,6 +645,115 @@ class ARCEnv(Environment):
                 self.register_primitive(prim)
                 return (name, fn)
 
+        return None
+
+    def _try_quadrant_colormap(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Split grid into 2x2 quadrants, learn 4-pixel-tuple → output mapping."""
+        from .objects import _test_on_examples
+        examples = task.train_examples
+        if not examples or len(examples) < 2:
+            return None
+        fi, fo = examples[0]
+        h, w = len(fi), len(fi[0]) if fi else 0
+        oh, ow = len(fo), len(fo[0]) if fo else 0
+
+        configs = []
+        if h == oh * 2 and w == ow * 2:
+            configs.append(("quad", oh, ow, 0))
+        if h == oh * 2 + 1 and w == ow * 2 + 1:
+            if len(set(fi[oh])) == 1 and len(set(fi[r][ow] for r in range(h))) == 1:
+                configs.append(("quad_sep", oh, ow, 1))
+
+        for cfg_name, sh, sw, sep in configs:
+            color_map: dict[tuple, int] = {}
+            consistent = True
+            for inp, out in examples:
+                try:
+                    tl = [[inp[r][c] for c in range(sw)] for r in range(sh)]
+                    tr = [[inp[r][c] for c in range(sw + sep, 2 * sw + sep)] for r in range(sh)]
+                    bl = [[inp[r][c] for c in range(sw)] for r in range(sh + sep, 2 * sh + sep)]
+                    br = [[inp[r][c] for c in range(sw + sep, 2 * sw + sep)]
+                          for r in range(sh + sep, 2 * sh + sep)]
+                except IndexError:
+                    consistent = False
+                    break
+                rh, rw = min(sh, len(out)), min(sw, len(out[0]) if out else 0)
+                for r in range(rh):
+                    for c in range(rw):
+                        key = (tl[r][c], tr[r][c], bl[r][c], br[r][c])
+                        val = out[r][c]
+                        if key in color_map and color_map[key] != val:
+                            consistent = False
+                            break
+                        color_map[key] = val
+                    if not consistent:
+                        break
+                if not consistent:
+                    break
+            if not consistent:
+                continue
+
+            def _make_fn(cm=dict(color_map), s_h=sh, s_w=sw, s=sep):
+                def fn(grid):
+                    tl = [[grid[r][c] for c in range(s_w)] for r in range(s_h)]
+                    tr = [[grid[r][c] for c in range(s_w + s, 2 * s_w + s)] for r in range(s_h)]
+                    bl = [[grid[r][c] for c in range(s_w)] for r in range(s_h + s, 2 * s_h + s)]
+                    br = [[grid[r][c] for c in range(s_w + s, 2 * s_w + s)]
+                          for r in range(s_h + s, 2 * s_h + s)]
+                    return [[cm.get((tl[r][c], tr[r][c], bl[r][c], br[r][c]), 0)
+                             for c in range(s_w)] for r in range(s_h)]
+                return fn
+
+            fn = _make_fn()
+            if _test_on_examples(fn, examples):
+                # LOOCV
+                loocv_pass = True
+                for hold_idx in range(len(examples)):
+                    train_sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+                    sub_map: dict[tuple, int] = {}
+                    sub_ok = True
+                    for inp, out in train_sub:
+                        try:
+                            tl = [[inp[r][c] for c in range(sw)] for r in range(sh)]
+                            tr = [[inp[r][c] for c in range(sw + sep, 2 * sw + sep)] for r in range(sh)]
+                            bl = [[inp[r][c] for c in range(sw)] for r in range(sh + sep, 2 * sh + sep)]
+                            br = [[inp[r][c] for c in range(sw + sep, 2 * sw + sep)]
+                                  for r in range(sh + sep, 2 * sh + sep)]
+                        except IndexError:
+                            sub_ok = False
+                            break
+                        rh, rw = min(sh, len(out)), min(sw, len(out[0]) if out else 0)
+                        for r in range(rh):
+                            for c in range(rw):
+                                key = (tl[r][c], tr[r][c], bl[r][c], br[r][c])
+                                if key in sub_map and sub_map[key] != out[r][c]:
+                                    sub_ok = False
+                                    break
+                                sub_map[key] = out[r][c]
+                            if not sub_ok:
+                                break
+                        if not sub_ok:
+                            break
+                    if not sub_ok:
+                        loocv_pass = False
+                        break
+                    sub_fn = _make_fn(sub_map, sh, sw, sep)
+                    held_inp, held_exp = examples[hold_idx]
+                    try:
+                        if sub_fn(held_inp) != held_exp:
+                            loocv_pass = False
+                            break
+                    except Exception:
+                        loocv_pass = False
+                        break
+                if not loocv_pass:
+                    continue
+                name = f"quad_colormap({cfg_name})"
+                prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+                self.register_primitive(prim)
+                return (name, fn)
         return None
 
     def _try_separator_cross_ref(
