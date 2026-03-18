@@ -288,6 +288,9 @@ class ARCEnv(Environment):
         result = self._try_per_pixel_stamp(task)
         if result is not None:
             return result
+        result = self._try_conditional_bbox_fill(task)
+        if result is not None:
+            return result
         return None
 
     def _try_boolean_halves(
@@ -1028,6 +1031,150 @@ class ARCEnv(Environment):
         prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
         self.register_primitive(prim)
         return (name, fn)
+
+    def _try_conditional_bbox_fill(
+        self, task: Task,
+    ) -> Optional[tuple[str, Any]]:
+        """Fill object bounding boxes based on object properties.
+
+        For fill-only tasks, learns which objects get their bbox filled
+        based on a property (color, has_hole, compactness, etc.).
+        """
+        from .objects import (
+            _test_on_examples, _find_connected_components,
+            _has_hole, _compactness,
+        )
+        examples = task.train_examples
+        if not examples or len(examples) < 2:
+            return None
+        fi, fo = examples[0]
+        if len(fi) != len(fo) or len(fi[0]) != len(fo[0]):
+            return None
+        # Verify fill-only
+        for inp, out in examples:
+            for r in range(len(inp)):
+                for c in range(len(inp[0])):
+                    if inp[r][c] != 0 and inp[r][c] != out[r][c]:
+                        return None
+
+        prop_fns = [
+            ("color", lambda o, objs, g: o["color"]),
+            ("has_hole", lambda o, objs, g: _has_hole(o)),
+            ("is_largest", lambda o, objs, g: o["size"] == max(x["size"] for x in objs)),
+            ("compactness", lambda o, objs, g: round(_compactness(o), 1)),
+        ]
+
+        for prop_name, prop_fn in prop_fns:
+            rule: dict = {}
+            consistent = True
+            for inp, out in examples:
+                objects = _find_connected_components(inp)
+                if not objects:
+                    consistent = False
+                    break
+                for obj in objects:
+                    r0, c0, r1, c1 = obj["bbox"]
+                    sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+                    for r, c in obj["pixels"]:
+                        sg[r-r0][c-c0] = obj["color"]
+                    obj["subgrid"] = sg
+
+                    pv = prop_fn(obj, objects, inp)
+                    fills = set()
+                    for r in range(r0, r1 + 1):
+                        for c in range(c0, c1 + 1):
+                            if inp[r][c] == 0 and out[r][c] != 0:
+                                fills.add(out[r][c])
+                    fill_val = fills.pop() if len(fills) == 1 else (None if not fills else -1)
+                    if fill_val == -1:
+                        consistent = False
+                        break
+                    if pv in rule and rule[pv] != fill_val:
+                        consistent = False
+                        break
+                    rule[pv] = fill_val
+                if not consistent:
+                    break
+            if not consistent or not any(v is not None for v in rule.values()):
+                continue
+
+            def _make_fn(r=dict(rule), pfn=prop_fn):
+                def fn(grid):
+                    objects = _find_connected_components(grid)
+                    result = [row[:] for row in grid]
+                    for obj in objects:
+                        r0, c0, r1, c1 = obj["bbox"]
+                        sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+                        for rr, cc in obj["pixels"]:
+                            sg[rr-r0][cc-c0] = obj["color"]
+                        obj["subgrid"] = sg
+                        pv = pfn(obj, objects, grid)
+                        fc = r.get(pv)
+                        if fc is not None:
+                            for rr in range(r0, r1 + 1):
+                                for cc in range(c0, c1 + 1):
+                                    if result[rr][cc] == 0:
+                                        result[rr][cc] = fc
+                    return result
+                return fn
+
+            fn = _make_fn()
+            if not _test_on_examples(fn, examples):
+                continue
+
+            # LOOCV
+            loocv_pass = True
+            for hold_idx in range(len(examples)):
+                sub = [ex for i, ex in enumerate(examples) if i != hold_idx]
+                sub_rule: dict = {}
+                sub_ok = True
+                for inp, out in sub:
+                    objects = _find_connected_components(inp)
+                    if not objects:
+                        sub_ok = False
+                        break
+                    for obj in objects:
+                        r0, c0, r1, c1 = obj["bbox"]
+                        sg = [[0] * (c1-c0+1) for _ in range(r1-r0+1)]
+                        for r, c in obj["pixels"]:
+                            sg[r-r0][c-c0] = obj["color"]
+                        obj["subgrid"] = sg
+                        pv = prop_fn(obj, objects, inp)
+                        fills = set()
+                        for r in range(r0, r1 + 1):
+                            for c in range(c0, c1 + 1):
+                                if inp[r][c] == 0 and out[r][c] != 0:
+                                    fills.add(out[r][c])
+                        fill_val = fills.pop() if len(fills) == 1 else (None if not fills else -1)
+                        if fill_val == -1:
+                            sub_ok = False
+                            break
+                        if pv in sub_rule and sub_rule[pv] != fill_val:
+                            sub_ok = False
+                            break
+                        sub_rule[pv] = fill_val
+                    if not sub_ok:
+                        break
+                if not sub_ok:
+                    loocv_pass = False
+                    break
+                sub_fn = _make_fn(sub_rule, prop_fn)
+                try:
+                    if sub_fn(examples[hold_idx][0]) != examples[hold_idx][1]:
+                        loocv_pass = False
+                        break
+                except Exception:
+                    loocv_pass = False
+                    break
+            if not loocv_pass:
+                continue
+
+            name = f"cond_bbox_fill({prop_name})"
+            prim = Primitive(name=name, arity=0, fn=fn, domain="arc")
+            self.register_primitive(prim)
+            return (name, fn)
+
+        return None
 
     def _try_separator_cross_ref(
         self, task: Task,
