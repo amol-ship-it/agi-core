@@ -3519,5 +3519,40 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 
 **Key observation:** `shrink_objects` solved 1 new train task (7f4411dc). The 5 new local rules didn't produce new solves in default mode — this suggests the existing 12 rules already cover the local-rule-solvable space at this compute level. **The fundamental bottleneck is search depth, not primitive coverage.** At depth-3 exhaustive with 94 primitives, we can't reach solutions requiring 4+ steps. Priority shifts to search evolution (correction-as-composition, bidirectional search).
 
+### Decision 119: High-Impact Primitives + Bidirectional Search + 5-Round Compounding
+
+**Context:** Implemented remaining plan tasks 8-22 in a single session:
+- 6 high-impact primitives from near-miss analysis: `snap_to_column_majority`, `snap_to_row_majority`, `complete_4fold_symmetry`, `fill_concave_hull`, `extend_diag_rays`, `inpaint_from_template`
+- Bidirectional meet-in-the-middle search for depth-4+ programs (forward + inverse)
+- 5-round compounding with unsolved-only search for rounds 3-5
+- Stratum-level culture transfer (save/load which strata solved which tasks)
+- Overfit detection tagging (metadata["overfit"] = True when train solves but test fails)
+- Primitive generality scoring in eval (order by training generality)
+- Expanded local rules: 2 new types (count8_maj_rule, max_nz_nbr_rule) + 3 more depth-2 transforms (erode, connect_h, connect_v) + 2 more rules in depth-2 list
+
+**Benchmark (contest mode, 50M ops, 3-5 rounds):**
+| Round | Train | Eval | Δ Train | Δ Eval |
+|-------|-------|------|---------|--------|
+| R1 | 118/400 (29.5%) | 53/400 (13.2%) | +1 from 117 | +1 from 52 |
+| R2 | 120/400 (30.0%) | ~53/400 | +2 | ~0 |
+| R3-R4 | 120/400 (30.0%) | ~53/400 | +0 | ~0 |
+
+**Near-miss analysis (eval):**
+- 200/347 unsolved tasks have prediction_error < 0.2 (close)
+- 48 tasks have error < 0.05 (very close)
+- 4 tasks are overfits (train solved, test failed)
+- Error brackets: 7 (<0.01), 41 (0.01-0.05), 60 (0.05-0.1), 92 (0.1-0.2)
+
+**Key findings:**
+1. **Compounding saturates at +2**: Library entries from sleep don't unlock new solutions because they're combinations of already-tried primitives
+2. **Primitive expansion (54→98) yielded +2 train, +1 eval**: Most new primitives don't solve tasks alone — they need deeper compositions
+3. **Depth-3 ceiling**: The fundamental constraint. 98^3 = ~941K programs is the exhaustive search space. Tasks needing 4+ steps are unreachable
+4. **Bidirectional search**: Adds runtime overhead but didn't measurably increase solves at contest compute. The inverse primitive set is too small (6 pairs)
+5. **Local rules remain the highest-ROI addition**: They bypass the depth limit entirely by learning pixel-level patterns
+
+**Total state:** 98 primitives, 19 local rule types, 539 tests, train 120/400 (30.0%), eval 53/400 (13.2%)
+
+**Honest assessment:** The 50% eval target (200+/400) is not achievable with the current depth-3 exhaustive search architecture. The gap is ~147 eval tasks. Closing it would require fundamentally different search strategies: LLM-guided program synthesis, neural-symbolic hybrids, or dramatically deeper search (e.g., beam search with learned heuristics instead of exhaustive enumeration).
+
 ---
 *This document will be updated with each new session and major decision.*
