@@ -23,6 +23,7 @@ import random
 from typing import Any
 
 from core import Grammar, Primitive, Program, Task
+from core.types import SearchStratum
 from .primitives import _PRIM_MAP, Grid
 
 
@@ -103,6 +104,143 @@ class ARCGrammar(Grammar):
     def prepare_for_task(self, task: Task) -> None:
         """Reset task-specific state."""
         self._task_prims = []
+
+    def propose_strata(
+        self, task: Task, primitives: list[Primitive]
+    ) -> list[SearchStratum]:
+        """Propose search strata based on task fingerprint analysis.
+
+        Returns focused strata with primitive subsets and budget allocations.
+        Always includes exhaustive_core (40% budget, all primitives).
+        Triggered strata share the remaining 60% equally.
+        """
+        from .fingerprint import fingerprint_task
+
+        fp = fingerprint_task(task)
+        all_names = [p.name for p in primitives]
+
+        # --- Define stratum triggers and their primitive filters ---
+        # Each entry: (name, condition, name_substrings, metadata)
+        _STRATUM_DEFS: list[tuple[str, bool, list[str], dict]] = [
+            (
+                "inpainting",
+                fp.has_holes or fp.symmetry_broken or fp.has_periodic,
+                ["inpaint", "symmetry", "fill", "mirror"],
+                {"run_cross_ref": True},
+            ),
+            (
+                "separator_algebra",
+                fp.has_separators,
+                ["separator", "section", "overlay", "split", "remove"],
+                {"run_cross_ref": True},
+            ),
+            (
+                "object_transform",
+                fp.n_objects >= 2 and fp.dim_change == "same",
+                ["object", "rotate", "mirror", "flip", "transpose", "move", "gravity"],
+                {"run_object_decomp": True, "run_for_each_object": True, "run_procedural": True},
+            ),
+            (
+                "object_extraction",
+                fp.n_objects >= 2 and fp.dim_change == "shrink",
+                ["extract", "crop", "largest", "object", "densest", "unique", "content"],
+                {},
+            ),
+            (
+                "local_rules",
+                fp.dim_change == "same" and 0.0 <= fp.pixel_diff_ratio < 0.5,
+                ["fill", "flood", "neighbor", "connect", "extend", "dilate", "erode", "outline"],
+                {"run_local_rules": True},
+            ),
+            (
+                "tiling_scaling",
+                fp.dim_change == "grow" or fp.output_is_subgrid,
+                ["tile", "scale", "mirror_tile", "repeat", "period"],
+                {},
+            ),
+            (
+                "color_logic",
+                fp.is_recoloring or fp.colors_added > 0,
+                ["color", "recolor", "swap", "replace", "keep", "erase", "binarize", "invert"],
+                {},
+            ),
+            (
+                "pattern_completion",
+                fp.symmetry_broken or fp.has_periodic,
+                ["symmetry", "inpaint", "mirror", "period", "tile", "fill"],
+                {},
+            ),
+            (
+                "line_drawing",
+                fp.n_objects >= 2 and fp.colors_added > 0,
+                ["connect", "extend", "line", "ray", "draw"],
+                {},
+            ),
+            (
+                "template_stamping",
+                fp.n_sections >= 2 or (fp.n_objects >= 2 and fp.object_size_var < 1.0),
+                ["overlay", "stamp", "tile", "mask", "section", "template"],
+                {},
+            ),
+            (
+                "denoising",
+                0.0 <= fp.pixel_diff_ratio < 0.1 and fp.dim_change == "same",
+                ["fill", "erode", "dilate", "flood", "compress", "unique", "sort"],
+                {},
+            ),
+        ]
+
+        # --- Build triggered strata ---
+        triggered: list[tuple[str, list[str], dict]] = []
+        for name, condition, substrings, metadata in _STRATUM_DEFS:
+            if condition:
+                # Filter primitives by substring match
+                filtered = [
+                    n for n in all_names
+                    if any(sub in n.lower() for sub in substrings)
+                ]
+                # Include at least some primitives; fall back to all if filter empty
+                if filtered:
+                    triggered.append((name, filtered, metadata))
+
+        # --- Build strata list ---
+        strata: list[SearchStratum] = []
+
+        # 1. exhaustive_core: always present, 40% budget, all primitives
+        core_budget = 0.40
+        strata.append(SearchStratum(
+            name="exhaustive_core",
+            primitive_names=list(all_names),
+            budget_fraction=core_budget,
+        ))
+
+        # 2. Triggered strata share remaining 60%
+        remaining = 1.0 - core_budget
+        if triggered:
+            raw_share = remaining / len(triggered)
+            # Clamp to [0.05, 0.30]
+            clamped = max(0.05, min(0.30, raw_share))
+            total_clamped = clamped * len(triggered)
+            # Normalize so total = remaining
+            scale = remaining / total_clamped if total_clamped > 0 else 1.0
+
+            for name, prim_names, metadata in triggered:
+                budget = clamped * scale
+                strata.append(SearchStratum(
+                    name=name,
+                    primitive_names=prim_names,
+                    budget_fraction=budget,
+                    metadata=metadata,
+                ))
+        else:
+            # No triggers: give remaining budget to core
+            strata[0] = SearchStratum(
+                name="exhaustive_core",
+                primitive_names=list(all_names),
+                budget_fraction=1.0,
+            )
+
+        return strata
 
     def compose(self, outer: Primitive, inner_programs: list[Program]) -> Program:
         return Program(root=outer.name, children=inner_programs)

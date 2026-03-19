@@ -193,5 +193,66 @@ class TestVocabulary(unittest.TestCase):
         self.assertEqual(result, grid)
 
 
+class TestProposeStrata(unittest.TestCase):
+    """Test ARCGrammar.propose_strata()."""
+
+    def _make_grammar_and_prims(self):
+        grammar = ARCGrammar()
+        prims = grammar.base_primitives()
+        return grammar, prims
+
+    def test_arc_grammar_propose_strata_always_includes_core(self):
+        """Every task must get the exhaustive_core stratum."""
+        grammar, prims = self._make_grammar_and_prims()
+        # Simple same-dim task
+        task = Task(
+            task_id="t1",
+            train_examples=[
+                ([[1, 2], [3, 4]], [[5, 6], [7, 8]]),
+            ],
+            test_inputs=[],
+        )
+        strata = grammar.propose_strata(task, prims)
+        names = [s.name for s in strata]
+        self.assertIn("exhaustive_core", names)
+        # Core should have all primitives
+        core = [s for s in strata if s.name == "exhaustive_core"][0]
+        self.assertEqual(len(core.primitive_names), len(prims))
+
+    def test_arc_grammar_propose_strata_triggers_local_rules(self):
+        """Same-dim task with low diff should trigger local_rules."""
+        grammar, prims = self._make_grammar_and_prims()
+        # Same dims, low pixel diff (1/4 = 0.25 < 0.5)
+        task = Task(
+            task_id="t2",
+            train_examples=[
+                ([[1, 1], [1, 1]], [[1, 1], [1, 2]]),
+            ],
+            test_inputs=[],
+        )
+        strata = grammar.propose_strata(task, prims)
+        names = [s.name for s in strata]
+        self.assertIn("local_rules", names)
+        # Check metadata
+        local = [s for s in strata if s.name == "local_rules"][0]
+        self.assertTrue(local.metadata.get("run_local_rules"))
+
+    def test_arc_grammar_propose_strata_budget_sums_to_one(self):
+        """Budget fractions across all strata should sum to ~1.0."""
+        grammar, prims = self._make_grammar_and_prims()
+        # A task that triggers several strata
+        task = Task(
+            task_id="t3",
+            train_examples=[
+                ([[1, 0, 2], [0, 0, 0], [3, 0, 4]],
+                 [[1, 0, 2], [0, 0, 0], [3, 0, 5]]),
+            ],
+            test_inputs=[],
+        )
+        strata = grammar.propose_strata(task, prims)
+        total = sum(s.budget_fraction for s in strata)
+        self.assertAlmostEqual(total, 1.0, places=2)
+
+
 if __name__ == "__main__":
     unittest.main()
