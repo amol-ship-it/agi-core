@@ -3508,5 +3508,16 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 
 **Current state:** 116/400 train (29.0%), 52/400 eval (13.0%), 90 primitives, 12 local rule types, 500 tests.
 
+### Decision 118: Phase 2 — New Local Rules + Tier 2-3 Primitives
+
+**Context:** Added 5 new local rule types (diagonal_nbr, cross_context, dist_border, obj_membership, row_col_position) and 4 more primitives (overlay_and, overlay_xor, extrapolate_growth, shrink_objects). Total: 94 primitives, 17 local rule types, 515 tests.
+
+**Benchmark:**
+| Mode | Train | Eval | Δ Train | Δ Eval |
+|------|-------|------|---------|--------|
+| default | 117/400 (29.2%) | 52/400 (13.0%) | +1 | 0 |
+
+**Key observation:** `shrink_objects` solved 1 new train task (7f4411dc). The 5 new local rules didn't produce new solves in default mode — this suggests the existing 12 rules already cover the local-rule-solvable space at this compute level. **The fundamental bottleneck is search depth, not primitive coverage.** At depth-3 exhaustive with 94 primitives, we can't reach solutions requiring 4+ steps. Priority shifts to search evolution (correction-as-composition, bidirectional search).
+
 ---
 *This document will be updated with each new session and major decision.*
