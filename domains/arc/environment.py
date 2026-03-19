@@ -2249,6 +2249,68 @@ class ARCEnv(Environment):
 
         rule_types.append(("rowcol_nz_rule", _learn_rowcol_nz, _apply_rowcol_nz))
 
+        # Rule type 11: (center, n_distinct_colors_in_row, n_distinct_colors_in_col)
+        def _learn_ndist_rowcol(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                row_nd = [len(set(inp[r][c] for c in range(w))) for r in range(h)]
+                col_nd = [len(set(inp[r][c] for r in range(h))) for c in range(w)]
+                for r in range(h):
+                    for c in range(w):
+                        key = (inp[r][c], row_nd[r], col_nd[c])
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_ndist_rowcol(grid, rule):
+            h, w = len(grid), len(grid[0])
+            row_nd = [len(set(grid[r][c] for c in range(w))) for r in range(h)]
+            col_nd = [len(set(grid[r][c] for r in range(h))) for c in range(w)]
+            return [[rule.get((grid[r][c], row_nd[r], col_nd[c]), grid[r][c])
+                     for c in range(w)] for r in range(h)]
+
+        rule_types.append(("ndist_rowcol_rule", _learn_ndist_rowcol, _apply_ndist_rowcol))
+
+        # Rule type 12: (center, row_majority_color, col_majority_color)
+        def _learn_rowcol_maj(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                row_maj = []
+                for r in range(h):
+                    nz = [inp[r][c] for c in range(w) if inp[r][c] != 0]
+                    row_maj.append(Counter(nz).most_common(1)[0][0] if nz else 0)
+                col_maj = []
+                for c in range(w):
+                    nz = [inp[r][c] for r in range(h) if inp[r][c] != 0]
+                    col_maj.append(Counter(nz).most_common(1)[0][0] if nz else 0)
+                for r in range(h):
+                    for c in range(w):
+                        key = (inp[r][c], row_maj[r], col_maj[c])
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_rowcol_maj(grid, rule):
+            h, w = len(grid), len(grid[0])
+            row_maj = []
+            for r in range(h):
+                nz = [grid[r][c] for c in range(w) if grid[r][c] != 0]
+                row_maj.append(Counter(nz).most_common(1)[0][0] if nz else 0)
+            col_maj = []
+            for c in range(w):
+                nz = [grid[r][c] for r in range(h) if grid[r][c] != 0]
+                col_maj.append(Counter(nz).most_common(1)[0][0] if nz else 0)
+            return [[rule.get((grid[r][c], row_maj[r], col_maj[c]), grid[r][c])
+                     for c in range(w)] for r in range(h)]
+
+        rule_types.append(("rowcol_maj_rule", _learn_rowcol_maj, _apply_rowcol_maj))
+
         for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
             rule = learn_fn(examples)
