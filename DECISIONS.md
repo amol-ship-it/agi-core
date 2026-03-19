@@ -3530,12 +3530,14 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 - Primitive generality scoring in eval (order by training generality)
 - Expanded local rules: 2 new types (count8_maj_rule, max_nz_nbr_rule) + 3 more depth-2 transforms (erode, connect_h, connect_v) + 2 more rules in depth-2 list
 
-**Benchmark (contest mode, 50M ops, 3-5 rounds):**
-| Round | Train | Eval | Δ Train | Δ Eval |
-|-------|-------|------|---------|--------|
-| R1 | 118/400 (29.5%) | 53/400 (13.2%) | +1 from 117 | +1 from 52 |
-| R2 | 120/400 (30.0%) | ~53/400 | +2 | ~0 |
-| R3-R4 | 120/400 (30.0%) | ~53/400 | +0 | ~0 |
+**Benchmark (contest mode, 50M ops, 5-round pipeline, confirmed clean run):**
+| Round | Train (overfit) | Eval (overfit) | Δ Train | Δ Eval |
+|-------|----------------|----------------|---------|--------|
+| R1 | 118/400, 9 ovf | 53/400, 4 ovf | +1 from 117 | +1 from 52 |
+| R2 | 120/400, 6 ovf | 53/400, 4 ovf | +2 | +0 |
+| R3+ | ~120/400 | ~53/400 | +0 | +0 |
+
+Pipeline: 35m24s total, 20 learned abstractions.
 
 **Near-miss analysis (eval):**
 - 200/347 unsolved tasks have prediction_error < 0.2 (close)
