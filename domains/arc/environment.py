@@ -2380,6 +2380,8 @@ class ARCEnv(Environment):
 
             for rule_name, learn_fn, apply_fn in [
                 ("compact_local_rule", _learn_compact, _apply_compact),
+                ("count_local_rule", _learn_v2, _apply_v2),
+                ("rowcol_nz_rule", _learn_rowcol_nz, _apply_rowcol_nz),
             ]:
                 rule = learn_fn(transformed_examples)
                 if rule is None:
