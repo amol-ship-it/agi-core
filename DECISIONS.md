@@ -3337,7 +3337,7 @@ Each rule is LOOCV-validated: learned from N-1 examples, verified on the held-ou
 **Results (final):**
 - Train: 84 → 88 (+4) — solved c0f76784, 6d75e8bb (fill_object_bbox), 25ff71a9 (movement), b9b7f026 (extraction)
 - Eval: 24 → 26 (+2) — f45f5ca7 (color-based movement), 1a2e2828 (unique_color extraction), 358ba94e (unique_size extraction)
-- 25 unit tests, 436 total tests pass
+- 25 unit tests, 442 total tests pass
 
 **What worked:**
 - `fill_object_bbox` template with property-based rule learning: +2 train
@@ -3426,7 +3426,7 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 
 **Key finding:** 109 fill-only tasks remain the biggest unsolved cluster. They need complex spatial reasoning about WHERE to fill based on multi-object relationships, not simple per-pixel or per-object rules.
 
-**Current state:** 108/400 train (27.0%), 46/400 eval (11.5%), 54 atomic primitives, 436 tests.
+**Current state:** 108/400 train (27.0%), 46/400 eval (11.5%), 54 atomic primitives, 442 tests.
 
 ### Decision: Cell-grid colormap + visualization improvements
 
@@ -3434,7 +3434,7 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 
 **Visualization improvements:** Added program explanations (20+ primitive types) and learned rule reconstruction. Dynamic primitives now show "How this program works" + actual learned mappings on task detail pages.
 
-**Current state:** 109/400 train (27.3%), 46/400 eval (11.5%), 54 atomic primitives, 436 tests.
+**Current state:** 109/400 train (27.3%), 46/400 eval (11.5%), 54 atomic primitives, 442 tests.
 
 ---
 *This document will be updated with each new session and major decision.*

@@ -349,17 +349,53 @@ class Learner:
         return "color fix" if ctx.solved else None
 
     def _phase_input_pred_correction(self, ctx: _WakeContext) -> Optional[str]:
-        """Learn a (input_pixel, prediction_pixel) → output_pixel correction.
+        """Learn pixel-level correction rules on near-miss predictions.
 
-        For each near-miss candidate, checks if a consistent mapping from
-        (original_input[r][c], prediction[r][c]) → expected[r][c] exists
-        across all training examples, with LOOCV validation.
+        Tries multiple key strategies:
+        1. (input_pixel, pred_pixel) — original
+        2. (pred_pixel, n_nonzero_4neighbors_in_input) — neighborhood context
+
+        Each is LOOCV-validated to avoid overfitting.
         """
         if ctx.solved or not ctx.enum_candidates:
             return None
         t = time.time()
         solve_thresh = self.search_cfg.solve_threshold
         task = ctx.task
+
+        # Key strategy 1: (input_pixel, pred_pixel)
+        def key_original(inp, pred, r, c):
+            return (inp[r][c], pred[r][c])
+
+        def apply_original(grid, pred, rule):
+            return [[rule.get((grid[r][c], pred[r][c]), pred[r][c])
+                     for c in range(len(pred[0]))] for r in range(len(pred))]
+
+        # Key strategy 2: (pred_pixel, n_nonzero_4neighbors_in_input)
+        def key_nbr_count(inp, pred, r, c):
+            h, w = len(inp), len(inp[0])
+            n_nz = sum(1 for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                       if 0 <= r + dr < h and 0 <= c + dc < w
+                       and inp[r + dr][c + dc] != 0)
+            return (pred[r][c], n_nz)
+
+        def apply_nbr_count(grid, pred, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    n_nz = sum(1 for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                               if 0 <= r + dr < h and 0 <= c + dc < w
+                               and grid[r + dr][c + dc] != 0)
+                    row.append(rule.get((pred[r][c], n_nz), pred[r][c]))
+                result.append(row)
+            return result
+
+        key_strategies = [
+            ("input_pred_correct", key_original, apply_original),
+            ("nbr_pred_correct", key_nbr_count, apply_nbr_count),
+        ]
 
         # Try ALL same-dims candidates (correction only works when dims match)
         candidates = sorted(ctx.enum_candidates, key=lambda s: s.prediction_error)[:200]
@@ -386,95 +422,110 @@ class Learner:
             if not ok or len(preds) < 2:
                 continue
 
-            # Learn (input_pixel, pred_pixel) → output_pixel rule
-            rule: dict[tuple[int, int], int] = {}
-            consistent = True
-            for pred, inp, expected in preds:
-                h, w = len(pred), len(pred[0])
-                for r in range(h):
-                    for c in range(w):
-                        key = (inp[r][c], pred[r][c])
-                        val = expected[r][c]
-                        if key in rule:
-                            if rule[key] != val:
-                                consistent = False
-                                break
-                        else:
-                            rule[key] = val
-                    if not consistent:
-                        break
-                if not consistent:
-                    break
-            if not consistent:
-                continue
-
-            # Check non-trivial (at least one mapping changes something)
-            if all(rule.get((i, p), p) == p for i, p in rule):
-                continue
-
-            # LOOCV
-            loocv_pass = True
-            for hold in range(len(preds)):
-                sub = [x for i, x in enumerate(preds) if i != hold]
-                sub_rule: dict[tuple[int, int], int] = {}
-                sub_ok = True
-                for pred, inp, expected in sub:
+            for strat_name, key_fn, apply_fn in key_strategies:
+                # Learn rule
+                rule: dict[tuple, int] = {}
+                consistent = True
+                for pred, inp, expected in preds:
                     h, w = len(pred), len(pred[0])
                     for r in range(h):
                         for c in range(w):
-                            key = (inp[r][c], pred[r][c])
-                            if key in sub_rule and sub_rule[key] != expected[r][c]:
-                                sub_ok = False
+                            key = key_fn(inp, pred, r, c)
+                            val = expected[r][c]
+                            if key in rule:
+                                if rule[key] != val:
+                                    consistent = False
+                                    break
+                            else:
+                                rule[key] = val
+                        if not consistent:
+                            break
+                    if not consistent:
+                        break
+                if not consistent:
+                    continue
+
+                # Check non-trivial
+                trivial = True
+                for pred, inp, expected in preds:
+                    h, w = len(pred), len(pred[0])
+                    for r in range(h):
+                        for c in range(w):
+                            key = key_fn(inp, pred, r, c)
+                            if rule.get(key, pred[r][c]) != pred[r][c]:
+                                trivial = False
                                 break
-                            sub_rule[key] = expected[r][c]
+                        if not trivial:
+                            break
+                    if not trivial:
+                        break
+                if trivial:
+                    continue
+
+                # LOOCV
+                loocv_pass = True
+                for hold in range(len(preds)):
+                    sub = [x for i, x in enumerate(preds) if i != hold]
+                    sub_rule: dict[tuple, int] = {}
+                    sub_ok = True
+                    for pred, inp, expected in sub:
+                        h, w = len(pred), len(pred[0])
+                        for r in range(h):
+                            for c in range(w):
+                                key = key_fn(inp, pred, r, c)
+                                if key in sub_rule and sub_rule[key] != expected[r][c]:
+                                    sub_ok = False
+                                    break
+                                sub_rule[key] = expected[r][c]
+                            if not sub_ok:
+                                break
                         if not sub_ok:
                             break
                     if not sub_ok:
+                        loocv_pass = False
                         break
-                if not sub_ok:
-                    loocv_pass = False
-                    break
-                hp, hi, he = preds[hold]
-                h, w = len(hp), len(hp[0])
-                for r in range(h):
-                    for c in range(w):
-                        key = (hi[r][c], hp[r][c])
-                        if sub_rule.get(key, hp[r][c]) != he[r][c]:
-                            loocv_pass = False
+                    hp, hi, he = preds[hold]
+                    h, w = len(hp), len(hp[0])
+                    for r in range(h):
+                        for c in range(w):
+                            key = key_fn(hi, hp, r, c)
+                            if sub_rule.get(key, hp[r][c]) != he[r][c]:
+                                loocv_pass = False
+                                break
+                        if not loocv_pass:
                             break
                     if not loocv_pass:
                         break
+
                 if not loocv_pass:
-                    break
+                    continue
 
-            if not loocv_pass:
-                continue
+                # Build the corrected program
+                base_prog = nm.program
+                final_rule = dict(rule)
 
-            # Build the corrected program
-            base_prog = nm.program
-            final_rule = dict(rule)
+                def _make_correction(bp=base_prog, fr=final_rule,
+                                     env=self.env, afn=apply_fn):
+                    def fn(grid):
+                        pred = env.execute(bp, grid)
+                        if not isinstance(pred, list) or not pred:
+                            return grid
+                        return afn(grid, pred, fr)
+                    return fn
 
-            def _make_correction(bp=base_prog, fr=final_rule, env=self.env):
-                def fn(grid):
-                    pred = env.execute(bp, grid)
-                    if not isinstance(pred, list) or not pred:
-                        return grid
-                    return [[fr.get((grid[r][c], pred[r][c]), pred[r][c])
-                             for c in range(len(pred[0]))] for r in range(len(pred))]
-                return fn
-
-            corr_fn = _make_correction()
-            name = f"input_pred_correct({repr(base_prog)[:30]})"
-            prim = Primitive(name=name, arity=0, fn=corr_fn, domain="arc")
-            self.env.register_primitive(prim)
-            sp = self._evaluate_program(Program(root=name), task)
-            ctx.n_evals += 1
-            self._update_pareto_front(ctx.pareto, sp)
-            ctx.update_best(sp)
-            ctx.enum_candidates.append(sp)
-            if sp.prediction_error <= solve_thresh:
-                logger.debug(f"  [wake] Input-pred correction: {time.time()-t:.2f}s SOLVED")
-                return "input-pred correction"
+                corr_fn = _make_correction()
+                name = f"{strat_name}({repr(base_prog)[:30]})"
+                prim = Primitive(name=name, arity=0, fn=corr_fn, domain="arc")
+                self.env.register_primitive(prim)
+                sp = self._evaluate_program(Program(root=name), task)
+                ctx.n_evals += 1
+                self._update_pareto_front(ctx.pareto, sp)
+                ctx.update_best(sp)
+                ctx.enum_candidates.append(sp)
+                if sp.prediction_error <= solve_thresh:
+                    logger.debug(f"  [wake] Input-pred correction ({strat_name}): "
+                                 f"{time.time()-t:.2f}s SOLVED")
+                    return "input-pred correction"
 
         logger.debug(f"  [wake] Input-pred correction: {time.time()-t:.2f}s")
         return "input-pred correction" if ctx.solved else None

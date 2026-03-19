@@ -361,7 +361,7 @@ agi-core/
 │       ├── __init__.py      # Game engine + all 4 interfaces
 │       └── adapter.py       # ZorkAdapter
 │
-├── tests/                   # Test suite (436 tests)
+├── tests/                   # Test suite (442 tests)
 │
 ├── runs/                    # Run artifacts — timestamped, git-ignored
 ├── data/                    # External datasets (git-ignored)
@@ -380,7 +380,7 @@ python -m pytest tests/ -v
 python -m pytest tests/ -v --cov=core --cov=domains --cov-report=term-missing
 ```
 
-**436 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive, procedural DSL. Integration: pipeline, compounding, visualization, batch mode. Auto-derivation: compute budget → search params, rounds, ROI seeding.
+**442 tests.** Core modules: learner, memory, config, types 95-100%. Domain: ARC atomic primitives, environment, grammar, drive, procedural DSL. Integration: pipeline, compounding, visualization, batch mode. Auto-derivation: compute budget → search params, rounds, ROI seeding.
 
 ## Documentation
 
