@@ -2220,6 +2220,35 @@ class ARCEnv(Environment):
 
         rule_types.append(("lr_context_rule", _learn_lr, _apply_lr))
 
+        # Rule type 10: (center, n_nonzero_in_row, n_nonzero_in_col) → output
+        def _learn_rowcol_nz(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                row_nz = [sum(1 for c in range(w) if inp[r][c] != 0)
+                          for r in range(h)]
+                col_nz = [sum(1 for r in range(h) if inp[r][c] != 0)
+                          for c in range(w)]
+                for r in range(h):
+                    for c in range(w):
+                        key = (inp[r][c], row_nz[r], col_nz[c])
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_rowcol_nz(grid, rule):
+            h, w = len(grid), len(grid[0])
+            row_nz = [sum(1 for c in range(w) if grid[r][c] != 0)
+                      for r in range(h)]
+            col_nz = [sum(1 for r in range(h) if grid[r][c] != 0)
+                      for c in range(w)]
+            return [[rule.get((grid[r][c], row_nz[r], col_nz[c]), grid[r][c])
+                     for c in range(w)] for r in range(h)]
+
+        rule_types.append(("rowcol_nz_rule", _learn_rowcol_nz, _apply_rowcol_nz))
+
         for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
             rule = learn_fn(examples)
