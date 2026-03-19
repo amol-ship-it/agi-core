@@ -254,5 +254,150 @@ class TestProposeStrata(unittest.TestCase):
         self.assertAlmostEqual(total, 1.0, places=2)
 
 
+class TestColormapLOOCV(unittest.TestCase):
+    """Test that LOOCV rejects overfit colormaps."""
+
+    def test_colormap_rejects_overfit_with_loocv(self):
+        """A colormap that fits each example via unique keys should be rejected.
+
+        Setup: 2 training examples for _try_half_colormap. Each example
+        introduces a unique (both_nz, a_val, b_val) key not seen in the other.
+        Training on ALL examples gives a consistent colormap that predicts
+        both correctly. But hold out example 1 and train on just example 0 —
+        the learned rule has no entry for example 1's key, so the prediction
+        defaults to 0 ≠ expected → LOOCV rejects the candidate.
+        """
+        env = ARCEnv()
+
+        # Each example uses a 2-row×1-col input (vertical split: top/bottom)
+        # and a 1-row×1-col output.
+        # key = (int(top != 0 and bot != 0), top, bot) → output
+        #
+        # Ex0: top=[[1]], bot=[[2]], out=[[3]]  → key (1,1,2)→3
+        # Ex1: top=[[4]], bot=[[5]], out=[[6]]  → key (1,4,5)→6
+        #
+        # Both examples are independently consistent.
+        # LOOCV: hold ex1, train on ex0 → map only has (1,1,2)→3.
+        #        Apply to ex1 input [[4],[5]]: key (1,4,5) not in map → 0 ≠ 6
+        #        → LOOCV fails → candidate rejected.
+        task = Task(
+            task_id="loocv_colormap_overfit",
+            train_examples=[
+                ([[1], [2]], [[3]]),   # ex0: unique key (1,1,2)→3
+                ([[4], [5]], [[6]]),   # ex1: unique key (1,4,5)→6
+            ],
+            test_inputs=[],
+        )
+
+        result = env._try_half_colormap(task)
+        self.assertIsNone(
+            result,
+            "LOOCV should reject a colormap where each example has unique "
+            "keys not generalizable from the other examples."
+        )
+
+    def test_colormap_accepts_generalizable_mapping(self):
+        """A colormap with consistent keys across examples should be accepted.
+
+        Setup: 2 training examples for _try_half_colormap. Both examples
+        share the same key structure: (1,1,2)→3 appears in both.
+        LOOCV: hold out either example, the other still provides (1,1,2)→3,
+        so the prediction for the held-out example is correct → LOOCV passes.
+        """
+        env = ARCEnv()
+
+        # Ex0: top=[[1]], bot=[[2]], out=[[3]]  → key (1,1,2)→3
+        # Ex1: top=[[1]], bot=[[2]], out=[[3]]  → key (1,1,2)→3 (same key/value)
+        task = Task(
+            task_id="loocv_colormap_generalizable",
+            train_examples=[
+                ([[1], [2]], [[3]]),   # ex0: key (1,1,2)→3
+                ([[1], [2]], [[3]]),   # ex1: same key (1,1,2)→3
+            ],
+            test_inputs=[],
+        )
+
+        result = env._try_half_colormap(task)
+        self.assertIsNotNone(
+            result,
+            "LOOCV should accept a colormap where all examples share "
+            "consistent keys that generalize across held-out examples."
+        )
+
+
+class TestProceduralLOOCV(unittest.TestCase):
+    """Test that LOOCV rejects overfit procedural rules."""
+
+    def test_procedural_rejects_overfit_with_loocv(self):
+        """A procedural rule that fits via unique per-example color keys is rejected.
+
+        Setup: 2 training examples. Each has a single colored object that
+        extends a ray to the right. Each example uses a different object color
+        so the rule maps color→action uniquely per example.
+
+        Training on ALL examples: rule = {1: extend_ray_right, 2: extend_ray_right}
+        — consistent, predicts all correct.
+
+        LOOCV: hold out ex1, train on ex0 → rule = {1: extend_ray_right}.
+        Apply to ex1 (color=2 object): color=2 not in rule → nothing filled →
+        prediction = input ≠ expected output → LOOCV rejects.
+        """
+        env = ARCEnv()
+
+        # Ex0: object color=1 at (0,0) in 1×4 grid extends right
+        # input  = [[1, 0, 0, 0]]
+        # output = [[1, 1, 1, 1]]
+        #
+        # Ex1: object color=2 at (0,0) in 1×4 grid extends right
+        # input  = [[2, 0, 0, 0]]
+        # output = [[2, 2, 2, 2]]
+        task = Task(
+            task_id="loocv_procedural_overfit",
+            train_examples=[
+                ([[1, 0, 0, 0]], [[1, 1, 1, 1]]),   # ex0: color-1 ray
+                ([[2, 0, 0, 0]], [[2, 2, 2, 2]]),   # ex1: color-2 ray
+            ],
+            test_inputs=[],
+        )
+
+        result = env.try_procedural(task)
+        self.assertIsNone(
+            result,
+            "LOOCV should reject a procedural rule where each example "
+            "introduces a unique color key not generalizable from others."
+        )
+
+    def test_procedural_accepts_generalizable_rule(self):
+        """A procedural rule consistent across examples should be accepted.
+
+        Setup: 2 training examples, both with color=1 objects that extend
+        rays to the right (but in different grid positions/sizes). The rule
+        maps color=1 → extend_ray(right), consistent across both.
+
+        LOOCV: hold out either example, the other still provides the same
+        color=1 rule → prediction is correct → LOOCV passes.
+        """
+        env = ARCEnv()
+
+        # Ex0: color=1 at (0,0) extends right in 1×3 grid
+        # Ex1: color=1 at (0,0) extends right in 1×4 grid
+        # Both have color=1 → extend_ray_right with fill_color=1
+        task = Task(
+            task_id="loocv_procedural_generalizable",
+            train_examples=[
+                ([[1, 0, 0]], [[1, 1, 1]]),        # ex0: 1×3 ray
+                ([[1, 0, 0, 0]], [[1, 1, 1, 1]]),  # ex1: 1×4 ray
+            ],
+            test_inputs=[],
+        )
+
+        result = env.try_procedural(task)
+        self.assertIsNotNone(
+            result,
+            "LOOCV should accept a procedural rule that generalizes across "
+            "examples (same color key → same action in all examples)."
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
