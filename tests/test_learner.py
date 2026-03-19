@@ -1412,5 +1412,95 @@ class TestMaxExampleError(unittest.TestCase):
         self.assertAlmostEqual(sp.max_example_error, 2.0)
 
 
+class TestStrataIntegration(unittest.TestCase):
+    """Tests for the two-stage wake loop (strata + structural hooks)."""
+
+    def test_wake_uses_strata_from_grammar(self):
+        """Wake loop should call grammar.propose_strata() and iterate over them."""
+        from core.types import SearchStratum
+
+        call_log = []
+
+        class TrackingGrammar(StubGrammar):
+            def propose_strata(self, task, primitives):
+                call_log.append("propose_strata")
+                return [SearchStratum(
+                    name="test_stratum",
+                    primitive_names=[p.name for p in primitives],
+                    budget_fraction=1.0,
+                )]
+
+        grammar = TrackingGrammar()
+        env = StubEnv()
+        drive = StubDrive()
+        memory = InMemoryStore()
+        cfg = SearchConfig(exhaustive_depth=1, eval_budget=100)
+
+        learner = Learner(env, grammar, drive, memory, cfg)
+        task = Task("t1", [(5, 5)], [5], test_outputs=[5])
+        result = learner.wake_on_task(task)
+
+        self.assertIn("propose_strata", call_log)
+
+    def test_default_stratum_produces_same_result_as_before(self):
+        """Default single-stratum should solve the same tasks as the old loop."""
+        env = StubEnv()
+        grammar = StubGrammar()
+        drive = StubDrive()
+        memory = InMemoryStore()
+        cfg = SearchConfig(exhaustive_depth=1, eval_budget=100)
+
+        learner = Learner(env, grammar, drive, memory, cfg)
+        # identity(5) == 5 should solve
+        task = Task("t1", [(5, 5)], [5], test_outputs=[5])
+        result = learner.wake_on_task(task)
+        self.assertTrue(result.solved)
+
+    def test_stratum_filters_primitives(self):
+        """Stratum should limit enumeration to its primitive subset."""
+        from core.types import SearchStratum
+
+        class FilterGrammar(StubGrammar):
+            def propose_strata(self, task, primitives):
+                # Only include "double", not "identity"
+                return [SearchStratum(
+                    name="doubles_only",
+                    primitive_names=["double"],
+                    budget_fraction=1.0,
+                )]
+
+        env = StubEnv()
+        grammar = FilterGrammar()
+        drive = StubDrive()
+        memory = InMemoryStore()
+        cfg = SearchConfig(exhaustive_depth=1, eval_budget=100)
+
+        learner = Learner(env, grammar, drive, memory, cfg)
+        # double(5) = 10, but expected is 5. Should NOT solve.
+        task = Task("t_nosol", [(5, 5)], [5], test_outputs=[5])
+        result = learner.wake_on_task(task)
+        self.assertFalse(result.solved)
+
+    def test_structural_hooks_skipped_when_disabled(self):
+        """Structural hooks should not run when allow_structural_phases is False."""
+        from core.types import SearchStratum
+
+        class NoStructuralGrammar(StubGrammar):
+            def allow_structural_phases(self):
+                return False
+
+        env = StubEnv()
+        grammar = NoStructuralGrammar()
+        drive = StubDrive()
+        memory = InMemoryStore()
+        cfg = SearchConfig(exhaustive_depth=1, eval_budget=100)
+
+        learner = Learner(env, grammar, drive, memory, cfg)
+        task = Task("t1", [(5, 5)], [5], test_outputs=[5])
+        # Should still solve via enumeration even if structural hooks disabled
+        result = learner.wake_on_task(task)
+        self.assertTrue(result.solved)
+
+
 if __name__ == "__main__":
     unittest.main()

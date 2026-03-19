@@ -31,6 +31,7 @@ from .types import (
     ScoredProgram,
     LibraryEntry,
     Primitive,
+    SearchStratum,
 )
 from .interfaces import (
     Environment,
@@ -166,7 +167,7 @@ class Learner:
         return self._wake_core(task, record=False)
 
     def _wake_core(self, task: Task, record: bool) -> WakeResult:
-        """Shared wake logic. Runs pipeline of search phases."""
+        """Shared wake logic. Two-stage model: stratum enumeration + structural hooks."""
         cfg = self.search_cfg
         self.grammar.prepare_for_task(task)
 
@@ -187,21 +188,60 @@ class Learner:
 
         ctx = _WakeContext(task, all_prims, cfg, eval_budget, record)
 
-        for phase_fn in self._wake_phases():
-            solved_by = phase_fn(ctx)
+        # Stage 1: Stratum enumeration
+        strata = self.grammar.propose_strata(task, all_prims)
+        for stratum in strata:
+            if ctx.solved:
+                break
+            solved_by = self._run_stratum_enumeration(ctx, stratum, all_prims)
             if solved_by is not None:
                 return self._make_solved_result(ctx, solved_by)
 
+        # Stage 2: Structural hooks (run once with aggregated candidates)
+        if not ctx.solved and self.grammar.allow_structural_phases():
+            for hook_fn in self._structural_hooks():
+                solved_by = hook_fn(ctx)
+                if solved_by is not None:
+                    return self._make_solved_result(ctx, solved_by)
+
         return self._make_unsolved_result(ctx)
 
-    def _wake_phases(self):
-        """Return the ordered list of wake phase methods.
+    def _run_stratum_enumeration(self, ctx: _WakeContext, stratum: SearchStratum, all_prims: list[Primitive]) -> Optional[str]:
+        """Run exhaustive enumeration for a single stratum."""
+        if ctx.cfg.exhaustive_depth < 1:
+            return None
 
-        Each phase takes a _WakeContext and returns a phase name string
-        if the task was solved, or None to continue to the next phase.
-        """
+        # Filter primitives to this stratum's subset
+        stratum_names = set(stratum.primitive_names)
+        stratum_prims = [p for p in all_prims if p.name in stratum_names]
+        if not stratum_prims:
+            return None
+
+        # Scale eval budget by stratum's fraction
+        original_budget = ctx.eval_budget
+        if ctx.eval_budget > 0:
+            ctx.eval_budget = int(original_budget * stratum.budget_fraction)
+
+        # Run exhaustive enumeration with stratum's primitives
+        t = time.time()
+        candidates, n_evals = self._exhaustive_enumerate(
+            stratum_prims, ctx.task, min(ctx.cfg.exhaustive_depth, stratum.max_depth),
+            eval_budget=ctx.eval_budget)
+        ctx.n_evals += n_evals
+        for sp in candidates:
+            self._update_pareto_front(ctx.pareto, sp)
+            ctx.update_best(sp)
+        ctx.enum_candidates.extend(candidates)
+        logger.debug(f"  [wake] Stratum '{stratum.name}': {time.time()-t:.2f}s, {n_evals} evals, {len(candidates)} cands")
+
+        # Restore budget
+        ctx.eval_budget = original_budget
+
+        return stratum.name if ctx.solved else None
+
+    def _structural_hooks(self):
+        """Structural hook methods run once after all strata."""
         return [
-            self._phase_exhaustive,
             self._phase_object_decomposition,
             self._phase_for_each_object,
             self._phase_cross_reference,
