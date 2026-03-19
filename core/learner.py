@@ -124,6 +124,14 @@ def _wake_worker(args: tuple) -> WakeResult:
     return result
 
 
+def _extract_primitive_names(program: Program) -> list[str]:
+    """Recursively extract all primitive names from a program tree."""
+    names = [program.root]
+    for child in (program.children or []):
+        names.extend(_extract_primitive_names(child))
+    return names
+
+
 # =============================================================================
 # The Learner — the invariant core
 # =============================================================================
@@ -246,6 +254,49 @@ class Learner:
         ctx.eval_budget = original_budget
 
         return stratum.name if ctx.solved else None
+
+    def _select_guided_pool(self, ctx: _WakeContext, top_k: int) -> list[str]:
+        """Select top-K primitives for guided deep search.
+
+        Sources:
+        1. Best depth-1 performers (lowest single-primitive error)
+        2. Primitives appearing in best depth-2/3 programs from pareto front
+
+        Returns list of primitive names, ordered by expected quality.
+        """
+        if not ctx.depth1_scores:
+            return []
+
+        # Source 1: depth-1 scores ranked by error (lowest first)
+        depth1_ranked = sorted(ctx.depth1_scores.items(), key=lambda x: x[1])
+
+        # Source 2: primitives appearing in best depth-2/3 candidates
+        depth23_names: list[str] = []
+        candidates_ranked = sorted(ctx.enum_candidates,
+                                   key=lambda sp: sp.prediction_error)
+        seen_d23: set[str] = set()
+        for sp in candidates_ranked[:top_k * 2]:
+            for name in _extract_primitive_names(sp.program):
+                if name not in seen_d23:
+                    depth23_names.append(name)
+                    seen_d23.add(name)
+
+        # Merge: prioritize depth-1 ranking, fill with depth-2/3 contributors
+        pool: list[str] = []
+        seen: set[str] = set()
+        for name, _ in depth1_ranked:
+            if name not in seen:
+                pool.append(name)
+                seen.add(name)
+            if len(pool) >= top_k:
+                break
+
+        for name in depth23_names:
+            if name not in seen and len(pool) < top_k:
+                pool.append(name)
+                seen.add(name)
+
+        return pool[:top_k]
 
     def _structural_hooks(self):
         """Structural hook methods run once after all strata."""

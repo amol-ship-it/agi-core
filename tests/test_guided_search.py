@@ -44,3 +44,78 @@ class TestWakeContextDepth1Scores:
         ctx.depth1_scores["mirror_h"] = 0.02
         assert len(ctx.depth1_scores) == 2
         assert ctx.depth1_scores["mirror_h"] == 0.02
+
+
+from core.learner import Learner
+from core.interfaces import Environment, Grammar, DriveSignal, Memory
+
+
+def _make_learner():
+    """Create a minimal Learner with mock interfaces."""
+    from unittest.mock import MagicMock
+    env = MagicMock(spec=Environment)
+    grammar = MagicMock(spec=Grammar)
+    drive = MagicMock(spec=DriveSignal)
+    memory = MagicMock(spec=Memory)
+    memory.get_library.return_value = []
+    return Learner(env, grammar, drive, memory)
+
+
+class TestSelectGuidedPool:
+    def test_basic_pool_selection(self):
+        learner = _make_learner()
+        ctx = _WakeContext(
+            task=Task(task_id="t1", train_examples=[], test_inputs=[]),
+            all_prims=[],
+            cfg=SearchConfig(),
+            eval_budget=1000,
+            record=False,
+        )
+        ctx.depth1_scores = {
+            "mirror_h": 0.02,
+            "rotate_90": 0.15,
+            "fill_enclosed": 0.30,
+            "gravity_down": 0.50,
+            "transpose": 0.70,
+            "identity": 0.90,
+        }
+        ctx.enum_candidates = [
+            ScoredProgram(
+                program=Program(root="outline", children=[Program(root="erode")]),
+                energy=0.1, prediction_error=0.05, complexity_cost=0.002,
+            ),
+        ]
+
+        pool = learner._select_guided_pool(ctx, top_k=4)
+        assert len(pool) == 4
+        assert pool[0] == "mirror_h"
+        assert pool[1] == "rotate_90"
+        assert "outline" in pool or "erode" in pool or "fill_enclosed" in pool
+
+    def test_pool_respects_top_k(self):
+        learner = _make_learner()
+        ctx = _WakeContext(
+            task=Task(task_id="t1", train_examples=[], test_inputs=[]),
+            all_prims=[],
+            cfg=SearchConfig(),
+            eval_budget=1000,
+            record=False,
+        )
+        ctx.depth1_scores = {f"prim_{i}": i * 0.01 for i in range(50)}
+        ctx.enum_candidates = []
+        pool = learner._select_guided_pool(ctx, top_k=10)
+        assert len(pool) == 10
+
+    def test_pool_empty_scores(self):
+        learner = _make_learner()
+        ctx = _WakeContext(
+            task=Task(task_id="t1", train_examples=[], test_inputs=[]),
+            all_prims=[],
+            cfg=SearchConfig(),
+            eval_budget=1000,
+            record=False,
+        )
+        ctx.depth1_scores = {}
+        ctx.enum_candidates = []
+        pool = learner._select_guided_pool(ctx, top_k=10)
+        assert pool == []
