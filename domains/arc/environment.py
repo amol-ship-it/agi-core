@@ -2158,6 +2158,42 @@ class ARCEnv(Environment):
 
         rule_types.append(("8nbr_diag_local_rule", _learn_8nbr_diag, _apply_8nbr_diag))
 
+        # Rule type 8: (center, min_nonzero_8neighbor_color) → output
+        def _learn_min_nz_nbr(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        mn = min((inp[r+dr][c+dc]
+                                  for dr in range(-1, 2) for dc in range(-1, 2)
+                                  if (dr or dc) and 0 <= r+dr < h and 0 <= c+dc < w
+                                  and inp[r+dr][c+dc] != 0),
+                                 default=-1)
+                        key = (inp[r][c], mn)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_min_nz_nbr(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    mn = min((grid[r+dr][c+dc]
+                              for dr in range(-1, 2) for dc in range(-1, 2)
+                              if (dr or dc) and 0 <= r+dr < h and 0 <= c+dc < w
+                              and grid[r+dr][c+dc] != 0),
+                             default=-1)
+                    row.append(rule.get((grid[r][c], mn), grid[r][c]))
+                result.append(row)
+            return result
+
+        rule_types.append(("min_nz_nbr_local_rule", _learn_min_nz_nbr, _apply_min_nz_nbr))
+
         for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
             rule = learn_fn(examples)
