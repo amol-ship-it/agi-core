@@ -424,10 +424,13 @@ class ARCEnv(Environment):
             return split_fn
 
         # Try with original input and also with pre-transforms
-        from .transformation_primitives import trim_rows, trim_cols, crop_to_content
+        from .transformation_primitives import (
+            trim_rows, trim_cols, crop_to_content, fill_enclosed,
+        )
         input_variants = [("", lambda g: g, first_inp)]
         for pname, pfn in [("trim_rows_", trim_rows), ("trim_cols_", trim_cols),
-                           ("crop_", crop_to_content)]:
+                           ("crop_", crop_to_content),
+                           ("fill_enclosed_", fill_enclosed)]:
             try:
                 ti = pfn(first_inp)
                 if isinstance(ti, list) and ti and isinstance(ti[0], list):
@@ -2080,6 +2083,40 @@ class ARCEnv(Environment):
                      for c in range(w)] for r in range(h)]
 
         rule_types.append(("ncolors_local_rule", _learn_ncolors, _apply_ncolors))
+
+        # Rule type 6: (center, sorted_set_of_4neighbor_colors) → output
+        def _learn_nbr_set(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        nbr = tuple(sorted(set(
+                            inp[r+dr][c+dc]
+                            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]
+                            if 0 <= r+dr < h and 0 <= c+dc < w)))
+                        key = (inp[r][c], nbr)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_nbr_set(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    nbr = tuple(sorted(set(
+                        grid[r+dr][c+dc]
+                        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]
+                        if 0 <= r+dr < h and 0 <= c+dc < w)))
+                    row.append(rule.get((grid[r][c], nbr), grid[r][c]))
+                result.append(row)
+            return result
+
+        rule_types.append(("nbr_set_local_rule", _learn_nbr_set, _apply_nbr_set))
 
         for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
