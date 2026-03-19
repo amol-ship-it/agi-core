@@ -2477,6 +2477,78 @@ class ARCEnv(Environment):
 
         rule_types.append(("row_col_pos_rule", _learn_row_col_pos, _apply_row_col_pos))
 
+        # Rule type 18: (center, n_nz_8, majority_8neighbor_color) → output
+        def _learn_count8_maj(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        nbrs = [inp[r+dr][c+dc]
+                                for dr in range(-1, 2) for dc in range(-1, 2)
+                                if (dr or dc) and 0 <= r+dr < h and 0 <= c+dc < w]
+                        nz = [n for n in nbrs if n > 0]
+                        maj = Counter(nz).most_common(1)[0][0] if nz else 0
+                        key = (inp[r][c], len(nz), maj)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_count8_maj(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    nbrs = [grid[r+dr][c+dc]
+                            for dr in range(-1, 2) for dc in range(-1, 2)
+                            if (dr or dc) and 0 <= r+dr < h and 0 <= c+dc < w]
+                    nz = [n for n in nbrs if n > 0]
+                    maj = Counter(nz).most_common(1)[0][0] if nz else 0
+                    row.append(rule.get((grid[r][c], len(nz), maj), grid[r][c]))
+                result.append(row)
+            return result
+
+        rule_types.append(("count8_maj_rule", _learn_count8_maj, _apply_count8_maj))
+
+        # Rule type 19: (center, max_nonzero_8neighbor_color) → output
+        def _learn_max_nz_nbr(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        mx = max((inp[r+dr][c+dc]
+                                  for dr in range(-1, 2) for dc in range(-1, 2)
+                                  if (dr or dc) and 0 <= r+dr < h and 0 <= c+dc < w
+                                  and inp[r+dr][c+dc] != 0),
+                                 default=-1)
+                        key = (inp[r][c], mx)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_max_nz_nbr(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    mx = max((grid[r+dr][c+dc]
+                              for dr in range(-1, 2) for dc in range(-1, 2)
+                              if (dr or dc) and 0 <= r+dr < h and 0 <= c+dc < w
+                              and grid[r+dr][c+dc] != 0),
+                             default=-1)
+                    row.append(rule.get((grid[r][c], mx), grid[r][c]))
+                result.append(row)
+            return result
+
+        rule_types.append(("max_nz_nbr_rule", _learn_max_nz_nbr, _apply_max_nz_nbr))
+
         for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
             rule = learn_fn(examples)
@@ -2523,10 +2595,16 @@ class ARCEnv(Environment):
             return (rule_name, fn)
 
         # Also try: local rules on TRANSFORMED inputs (depth-2 composition)
-        from .transformation_primitives import fill_enclosed, dilate
+        from .transformation_primitives import (
+            fill_enclosed, dilate, erode,
+            connect_same_color_h, connect_same_color_v,
+        )
         for transform_name, transform_fn in [
             ("fill_enclosed", fill_enclosed),
             ("dilate", dilate),
+            ("erode", erode),
+            ("connect_h", connect_same_color_h),
+            ("connect_v", connect_same_color_v),
         ]:
             transformed_examples = []
             ok = True
@@ -2550,6 +2628,8 @@ class ARCEnv(Environment):
                 ("rowcol_nz_rule", _learn_rowcol_nz, _apply_rowcol_nz),
                 ("diag_nbr_rule", _learn_diag_nbr, _apply_diag_nbr),
                 ("cross_context_rule", _learn_cross_context, _apply_cross_context),
+                ("count8_maj_rule", _learn_count8_maj, _apply_count8_maj),
+                ("nbr_set_local_rule", _learn_nbr_set, _apply_nbr_set),
             ]:
                 rule = learn_fn(transformed_examples)
                 if rule is None:
