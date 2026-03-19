@@ -57,6 +57,7 @@ class InMemoryStore(Memory):
         self._solutions: dict[str, ScoredProgram] = {}
         self._best_attempts: dict[str, ScoredProgram] = {}
         self._primitive_scores: dict[str, float] = {}
+        self._stratum_stats: dict[str, dict] = {}
         self._capacity = capacity
         self._reuse_bonus = reuse_bonus
 
@@ -140,6 +141,25 @@ class InMemoryStore(Memory):
         if pruned > 0:
             logger.debug(f"Pruned {pruned} dead library entries (usefulness < {min_usefulness})")
         return pruned
+
+    # --- Stratum-level culture transfer ---
+
+    def record_stratum_solve(self, stratum_name: str, task_id: str) -> None:
+        """Record that a given stratum solved a task.
+
+        Accumulates solved_count and task_ids per stratum.  Used to track
+        which search strategies work, persisted in the culture file.
+        """
+        if stratum_name not in self._stratum_stats:
+            self._stratum_stats[stratum_name] = {"solved_count": 0, "task_ids": []}
+        entry = self._stratum_stats[stratum_name]
+        entry["solved_count"] += 1
+        if task_id not in entry["task_ids"]:
+            entry["task_ids"].append(task_id)
+
+    def get_stratum_stats(self) -> dict[str, dict]:
+        """Return a copy of stratum-level solve statistics."""
+        return dict(self._stratum_stats)
 
     # --- Primitive ROI scores ---
 
@@ -227,6 +247,7 @@ class InMemoryStore(Memory):
                 for task_id, sp in self._best_attempts.items()
             },
             "primitive_scores": self._primitive_scores,
+            "stratum_stats": self._stratum_stats,
             "solutions_count": len(self._solutions),
             "best_attempts_count": len(self._best_attempts),
             "library_count": len(self._library),
@@ -276,6 +297,9 @@ class InMemoryStore(Memory):
 
         # Load primitive scores
         self._primitive_scores.update(data.get("primitive_scores", {}))
+
+        # Load stratum stats (merge, not replace)
+        self._stratum_stats.update(data.get("stratum_stats", {}))
 
         # Post-load truncation: if loaded library exceeds capacity, keep top-N
         if self._capacity > 0 and len(self._library) > self._capacity:

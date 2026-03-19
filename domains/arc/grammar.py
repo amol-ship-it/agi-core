@@ -38,6 +38,16 @@ class ARCGrammar(Grammar):
         self._rng = random.Random(seed)
         self._task_prims: list[Primitive] = []
         self._vocabulary = vocabulary
+        self._generality_scores: dict[str, float] = {}
+
+    def set_primitive_generality(self, scores: dict[str, float]) -> None:
+        """Store generality scores for use in propose_strata().
+
+        Higher score = primitive solves more diverse tasks.  Primitives
+        within each stratum are sorted by generality (descending) so the
+        most transferable primitives are searched first.
+        """
+        self._generality_scores = dict(scores)
 
     def allow_structural_phases(self) -> bool:
         """Enable structural search phases (per-object, cross-reference, etc.)."""
@@ -133,7 +143,12 @@ class ARCGrammar(Grammar):
         from .fingerprint import fingerprint_task
 
         fp = fingerprint_task(task)
-        all_names = [p.name for p in primitives]
+        # Sort all primitives by generality score (descending) so most transferable
+        # primitives are searched first within each stratum.
+        def _gen_key(name: str) -> float:
+            return self._generality_scores.get(name, 0.0)
+
+        all_names = sorted([p.name for p in primitives], key=_gen_key, reverse=True)
 
         # --- Define stratum triggers and their primitive filters ---
         # Each entry: (name, condition, name_substrings, metadata)

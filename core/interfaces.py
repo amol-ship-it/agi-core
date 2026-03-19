@@ -275,6 +275,16 @@ class Grammar(ABC):
         """
         return True
 
+    def set_primitive_generality(self, scores: dict[str, float]) -> None:
+        """Set per-primitive generality scores from the loaded culture.
+
+        Grammars can use these to order primitives within strata during
+        propose_strata() so the most general (transferable) primitives
+        are searched first.
+
+        Default: no-op.
+        """
+
     def prepare_for_task(self, task: Task) -> None:
         """Called before the wake phase begins on a task.
 
@@ -493,6 +503,22 @@ class Memory(ABC):
         """Per-primitive generality: n_distinct_tasks_solved / total_solved.
         Higher = primitive solves diverse tasks (more transferable).
         Default: empty (uniform generality).
+        """
+        return {}
+
+    def record_stratum_solve(self, stratum_name: str, task_id: str) -> None:
+        """Record that a given stratum solved a task.
+
+        Used for stratum-level culture transfer: tracks which search
+        strategies work so future runs can prioritize them.
+        Default: no-op.
+        """
+
+    def get_stratum_stats(self) -> dict[str, dict]:
+        """Return stratum-level solve statistics.
+
+        Returns dict mapping stratum_name → {"solved_count": int, "task_ids": list}.
+        Default: empty dict.
         """
         return {}
 

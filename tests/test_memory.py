@@ -308,5 +308,76 @@ class TestPrimitiveGenerality(unittest.TestCase):
         self.assertAlmostEqual(gen["mirror_h"], 0.5)  # used in 1/2 tasks
 
 
+class TestStratumStats(unittest.TestCase):
+    """Tests for stratum-level culture transfer (Task 20)."""
+
+    def test_record_stratum_solve_basic(self):
+        store = InMemoryStore()
+        store.record_stratum_solve("exhaustive_core", "task_001")
+        stats = store.get_stratum_stats()
+        self.assertIn("exhaustive_core", stats)
+        self.assertEqual(stats["exhaustive_core"]["solved_count"], 1)
+        self.assertIn("task_001", stats["exhaustive_core"]["task_ids"])
+
+    def test_record_stratum_solve_accumulates(self):
+        store = InMemoryStore()
+        store.record_stratum_solve("color_logic", "task_001")
+        store.record_stratum_solve("color_logic", "task_002")
+        store.record_stratum_solve("object_transform", "task_003")
+        stats = store.get_stratum_stats()
+        self.assertEqual(stats["color_logic"]["solved_count"], 2)
+        self.assertIn("task_002", stats["color_logic"]["task_ids"])
+        self.assertEqual(stats["object_transform"]["solved_count"], 1)
+
+    def test_get_stratum_stats_empty_by_default(self):
+        store = InMemoryStore()
+        self.assertEqual(store.get_stratum_stats(), {})
+
+    def test_stratum_stats_culture_round_trip(self):
+        import tempfile, os
+
+        store = InMemoryStore()
+        store.record_stratum_solve("exhaustive_core", "t1")
+        store.record_stratum_solve("exhaustive_core", "t2")
+        store.record_stratum_solve("color_logic", "t3")
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            store.save_culture(path)
+            store2 = InMemoryStore()
+            store2.load_culture(path)
+            stats = store2.get_stratum_stats()
+            self.assertIn("exhaustive_core", stats)
+            self.assertEqual(stats["exhaustive_core"]["solved_count"], 2)
+            self.assertIn("t1", stats["exhaustive_core"]["task_ids"])
+            self.assertIn("t2", stats["exhaustive_core"]["task_ids"])
+            self.assertIn("color_logic", stats)
+            self.assertEqual(stats["color_logic"]["solved_count"], 1)
+        finally:
+            os.unlink(path)
+
+    def test_stratum_stats_merge_on_load(self):
+        """Loading culture merges stats (update, not replace)."""
+        import tempfile, os
+
+        store = InMemoryStore()
+        store.record_stratum_solve("exhaustive_core", "t1")
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            store.save_culture(path)
+            store2 = InMemoryStore()
+            store2.record_stratum_solve("color_logic", "t2")
+            store2.load_culture(path)
+            stats = store2.get_stratum_stats()
+            # Both pre-existing and loaded stats are present
+            self.assertIn("exhaustive_core", stats)
+            self.assertIn("color_logic", stats)
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()

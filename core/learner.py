@@ -733,8 +733,13 @@ class Learner:
             ctx.best_so_far = top_sp
         if ts is None and ctx.best_so_far is not None:
             te, ts, tss = self._evaluate_on_test(ctx.best_so_far, ctx.task)
+        # Tag overfit: train solved but test fails (informational; LOOCV is the real gate)
+        if ts is False and ctx.best_so_far is not None:
+            ctx.best_so_far.metadata["overfit"] = True
         ctx.best_so_far = self._try_simplify(ctx.best_so_far, ctx.task)
         ctx.best_so_far.task_id = ctx.task.task_id
+        # Record which stratum solved this task for culture transfer
+        self.memory.record_stratum_solve(phase_name, ctx.task.task_id)
         self._record_solve(ctx)
         front = self._extract_pareto_front(ctx.pareto)
         wall = time.time() - ctx.t0
@@ -1051,6 +1056,10 @@ class Learner:
             logger.info(f"=== Round {round_num + 1}/{cfg.wake_sleep_rounds} ===")
             logger.info(f"    Library size: {len(self.memory.get_library())}")
             logger.info(f"    Workers: {cfg.workers}")
+
+            # Update grammar with generality scores from memory so primitives
+            # are ordered by transferability within each stratum.
+            self.grammar.set_primitive_generality(self.memory.get_primitive_generality())
 
             # Rounds 3+ (index >= 2): only search tasks not yet solved.
             # This focuses compute on the hardest remaining problems while

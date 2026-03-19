@@ -1646,5 +1646,169 @@ class TestBidirectionalSearch(unittest.TestCase):
                              f"{name} should map to itself (self-inverse)")
 
 
+# =============================================================================
+# Task 21: Overfit detection tests
+# =============================================================================
+
+class TestOverfitTag(unittest.TestCase):
+    """Test that the overfit metadata tag is set correctly (Task 21)."""
+
+    def test_overfit_metadata_can_be_set(self):
+        """ScoredProgram metadata can hold an overfit flag."""
+        sp = ScoredProgram(
+            program=Program(root="complex"),
+            energy=0.0, prediction_error=0.0, complexity_cost=10.0,
+        )
+        sp.metadata["overfit"] = True
+        self.assertTrue(sp.metadata.get("overfit"))
+
+    def test_non_overfit_has_no_flag(self):
+        """Normal solved programs should not have overfit tag."""
+        sp = ScoredProgram(
+            program=Program(root="simple"),
+            energy=0.0, prediction_error=0.0, complexity_cost=1.0,
+        )
+        self.assertFalse(sp.metadata.get("overfit", False))
+
+    def test_overfit_tag_set_when_test_fails(self):
+        """Wake phase sets overfit=True on best_so_far when test_solved is False."""
+        # Build a learner where test produces wrong output (train right, test wrong).
+        class OverfitEnv(StubEnv):
+            def __init__(self):
+                self._test_called = 0
+
+            def execute(self, program, input_data):
+                # Alternate correct/wrong based on call count
+                # Simpler: identity works for inputs 5,3,7 but not for 99
+                return super().execute(program, input_data)
+
+        learner = _make_learner()
+        # Task: train: identity examples; test: double examples (identity fails)
+        task = Task(
+            task_id="overfit_test",
+            train_examples=[(5.0, 5.0), (3.0, 3.0), (7.0, 7.0)],
+            test_inputs=[1.0],
+            test_outputs=[2.0],  # expects doubled, identity gives 1.0
+        )
+        result = learner.wake_on_task(task)
+        if result.train_solved and not result.test_solved:
+            # overfit tag should be set
+            self.assertTrue(result.best.metadata.get("overfit", False),
+                            "Expected overfit=True on a train-solved/test-failed program")
+
+
+# =============================================================================
+# Task 22: Primitive generality scoring in ARCGrammar
+# =============================================================================
+
+class TestPrimitiveGeneralityInARCGrammar(unittest.TestCase):
+    """Test that ARCGrammar.set_primitive_generality sorts primitives by generality."""
+
+    def test_set_primitive_generality_stores_scores(self):
+        """set_primitive_generality should store scores for later use."""
+        from domains.arc.grammar import ARCGrammar
+        grammar = ARCGrammar()
+        scores = {"rotate_90_clockwise": 0.8, "mirror_horizontal": 0.4}
+        grammar.set_primitive_generality(scores)
+        # No crash, scores are stored
+        self.assertEqual(grammar._generality_scores, scores)
+
+    def test_propose_strata_sorts_by_generality(self):
+        """Primitives in strata should be sorted by generality (higher first)."""
+        from domains.arc.grammar import ARCGrammar
+        from core.types import Task
+
+        grammar = ARCGrammar()
+        # Set generality scores: "b" is more general than "a", "c" has none (default 0)
+        grammar.set_primitive_generality({"b": 0.9, "a": 0.3})
+
+        # Create stub primitives with those names
+        prims = [
+            Primitive("a", 0, None),
+            Primitive("b", 0, None),
+            Primitive("c", 0, None),
+        ]
+
+        # Minimal task (won't parse fingerprint details, uses defaults)
+        task = Task(
+            task_id="test_gen",
+            train_examples=[
+                ([[0, 1], [1, 0]], [[0, 1], [1, 0]]),
+            ],
+            test_inputs=[[[0, 1], [1, 0]]],
+        )
+        strata = grammar.propose_strata(task, prims)
+
+        # Find the exhaustive_core stratum
+        core = next((s for s in strata if s.name == "exhaustive_core"), None)
+        self.assertIsNotNone(core)
+
+        # "b" (score=0.9) should appear before "a" (score=0.3) which should
+        # appear before "c" (no score, default 0)
+        names = core.primitive_names
+        # All three primitives should be present
+        self.assertIn("a", names)
+        self.assertIn("b", names)
+        self.assertIn("c", names)
+        # b before a, a before c
+        self.assertLess(names.index("b"), names.index("a"))
+        self.assertLess(names.index("a"), names.index("c"))
+
+    def test_default_no_generality_scores(self):
+        """Without set_primitive_generality, propose_strata works normally."""
+        from domains.arc.grammar import ARCGrammar
+        from core.types import Task
+
+        grammar = ARCGrammar()
+        prims = [
+            Primitive("rotate_90_clockwise", 0, None),
+            Primitive("mirror_horizontal", 0, None),
+        ]
+        task = Task(
+            task_id="default_test",
+            train_examples=[
+                ([[0, 1], [1, 0]], [[0, 1], [1, 0]]),
+            ],
+            test_inputs=[[[0, 1], [1, 0]]],
+        )
+        # Should not raise
+        strata = grammar.propose_strata(task, prims)
+        self.assertGreater(len(strata), 0)
+
+    def test_grammar_base_class_has_set_primitive_generality(self):
+        """Grammar base class should have set_primitive_generality as a no-op."""
+        from core.interfaces import Grammar
+        # Create a concrete subclass with only required abstract methods
+        class MinimalGrammar(Grammar):
+            def base_primitives(self): return []
+            def compose(self, outer, inner_programs): return Program(root=outer.name)
+            def mutate(self, program, primitives, transition_matrix=None): return program
+            def crossover(self, a, b): return a
+
+        g = MinimalGrammar()
+        # Should not raise — it's a no-op
+        g.set_primitive_generality({"some_prim": 0.5})
+
+    def test_run_curriculum_calls_set_primitive_generality(self):
+        """run_curriculum should call grammar.set_primitive_generality each round."""
+        call_log = []
+
+        class TrackingGrammar(StubGrammar):
+            def set_primitive_generality(self, scores):
+                call_log.append(scores)
+
+        learner = Learner(
+            environment=StubEnv(),
+            grammar=TrackingGrammar(),
+            drive=StubDrive(),
+            memory=InMemoryStore(),
+            search_config=SearchConfig(beam_width=5, max_generations=3, seed=42),
+        )
+        tasks = [_make_identity_task()]
+        learner.run_curriculum(tasks, CurriculumConfig(wake_sleep_rounds=2, workers=1))
+        # set_primitive_generality should have been called (at least once per round)
+        self.assertGreaterEqual(len(call_log), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
