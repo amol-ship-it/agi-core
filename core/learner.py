@@ -55,7 +55,7 @@ class _WakeContext:
     __slots__ = (
         "task", "all_prims", "cfg", "eval_budget", "record", "t0",
         "best_so_far", "n_evals", "total_deduped", "gens_used",
-        "pareto", "enum_candidates", "beam_scored",
+        "pareto", "enum_candidates", "beam_scored", "depth1_scores",
     )
 
     def __init__(self, task, all_prims, cfg, eval_budget, record):
@@ -73,6 +73,7 @@ class _WakeContext:
         self.pareto: dict[int, ParetoEntry] = {}
         self.enum_candidates: list[ScoredProgram] = []
         self.beam_scored: list[ScoredProgram] = []
+        self.depth1_scores: dict[str, float] = {}
 
     def budget_ok(self) -> bool:
         return self.eval_budget <= 0 or self.n_evals < self.eval_budget
@@ -232,6 +233,13 @@ class Learner:
             self._update_pareto_front(ctx.pareto, sp)
             ctx.update_best(sp)
         ctx.enum_candidates.extend(candidates)
+
+        # Capture depth-1 scores for guided search pool selection
+        for sp in candidates:
+            name = sp.program.root
+            if not sp.program.children and name not in ctx.depth1_scores:
+                ctx.depth1_scores[name] = sp.prediction_error
+
         logger.debug(f"  [wake] Stratum '{stratum.name}': {time.time()-t:.2f}s, {n_evals} evals, {len(candidates)} cands")
 
         # Restore budget
