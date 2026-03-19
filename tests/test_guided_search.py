@@ -119,3 +119,50 @@ class TestSelectGuidedPool:
         ctx.enum_candidates = []
         pool = learner._select_guided_pool(ctx, top_k=10)
         assert pool == []
+
+
+class TestGuidedDeepSearch:
+    def test_guided_search_returns_none_when_no_budget(self):
+        learner = _make_learner()
+        ctx = _WakeContext(
+            task=Task(task_id="t1", train_examples=[], test_inputs=[]),
+            all_prims=[],
+            cfg=SearchConfig(eval_budget=100, guided_budget_fraction=0.30),
+            eval_budget=100,
+            record=False,
+        )
+        ctx.n_evals = 100
+        ctx.depth1_scores = {"prim_a": 0.1}
+        result = learner._guided_deep_search(ctx)
+        assert result is None
+
+    def test_guided_search_returns_none_when_already_solved(self):
+        learner = _make_learner()
+        ctx = _WakeContext(
+            task=Task(task_id="t1", train_examples=[], test_inputs=[]),
+            all_prims=[],
+            cfg=SearchConfig(),
+            eval_budget=10000,
+            record=False,
+        )
+        ctx.depth1_scores = {"prim_a": 0.1}
+        ctx.best_so_far = ScoredProgram(
+            program=Program(root="prim_a"),
+            energy=0.001, prediction_error=0.0, complexity_cost=0.001,
+            max_example_error=0.0,
+        )
+        result = learner._guided_deep_search(ctx)
+        assert result is None
+
+    def test_guided_search_returns_none_when_no_depth1_scores(self):
+        learner = _make_learner()
+        ctx = _WakeContext(
+            task=Task(task_id="t1", train_examples=[], test_inputs=[]),
+            all_prims=[],
+            cfg=SearchConfig(),
+            eval_budget=10000,
+            record=False,
+        )
+        ctx.depth1_scores = {}
+        result = learner._guided_deep_search(ctx)
+        assert result is None

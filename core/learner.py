@@ -298,6 +298,123 @@ class Learner:
 
         return pool[:top_k]
 
+    def _guided_deep_search(self, ctx: _WakeContext) -> Optional[str]:
+        """Guided depth-4/5 search using leftover budget after depth-3.
+
+        Three strategies in priority order (early exit on solve):
+        1. Near-miss extension: wrap top-M near-miss programs with each primitive
+        2. Depth-4 enumeration: top-K primitives, K^4 programs
+        3. Depth-5 enumeration: top-K' primitives, K'^5 programs
+
+        Returns phase name if solved, None otherwise.
+        """
+        cfg = ctx.cfg
+        if ctx.solved or not ctx.depth1_scores:
+            return None
+
+        # Compute guided budget from remaining + fraction cap
+        if ctx.eval_budget > 0:
+            remaining = ctx.eval_budget - ctx.n_evals
+            fraction_cap = int(ctx.eval_budget * cfg.guided_budget_fraction)
+            guided_budget = min(remaining, fraction_cap)
+            if guided_budget < 100:
+                return None
+        else:
+            guided_budget = 0  # unlimited
+
+        guided_evals = 0
+        solve_thresh = cfg.solve_threshold
+
+        def _gbudget_ok() -> bool:
+            return guided_budget <= 0 or guided_evals < guided_budget
+
+        # Collect unary transform primitives for wrapping
+        wrap_prims = [p for p in ctx.all_prims
+                      if p.arity <= 1 and p.kind == "transform"]
+
+        # --- Strategy 1: Near-miss extension ---
+        near_misses = sorted(
+            [sp for sp in ctx.enum_candidates
+             if sp.prediction_error > solve_thresh],
+            key=lambda sp: sp.prediction_error,
+        )[:cfg.guided_nearmiss_top_k]
+
+        for nm in near_misses:
+            if not _gbudget_ok():
+                break
+            for wp in wrap_prims:
+                if not _gbudget_ok():
+                    break
+                prog = Program(root=wp.name, children=[nm.program])
+                sp = self._evaluate_program(prog, ctx.task)
+                guided_evals += 1
+                ctx.n_evals += 1
+                ctx.update_best(sp)
+                if sp.prediction_error <= solve_thresh:
+                    return "guided_nearmiss"
+
+        # --- Strategy 2: Depth-4 enumeration ---
+        pool4 = self._select_guided_pool(ctx, cfg.guided_depth4_top_k)
+        if pool4 and _gbudget_ok():
+            for a in pool4:
+                if not _gbudget_ok():
+                    break
+                for b in pool4:
+                    if not _gbudget_ok():
+                        break
+                    for c in pool4:
+                        if not _gbudget_ok():
+                            break
+                        for d in pool4:
+                            if not _gbudget_ok():
+                                break
+                            if a == b == c == d:
+                                continue
+                            prog = Program(root=a, children=[
+                                Program(root=b, children=[
+                                    Program(root=c, children=[
+                                        Program(root=d)])])])
+                            sp = self._evaluate_program(prog, ctx.task)
+                            guided_evals += 4
+                            ctx.n_evals += 4
+                            ctx.update_best(sp)
+                            if sp.prediction_error <= solve_thresh:
+                                return "guided_depth4"
+
+        # --- Strategy 3: Depth-5 enumeration ---
+        pool5 = self._select_guided_pool(ctx, cfg.guided_depth5_top_k)
+        if pool5 and _gbudget_ok():
+            for a in pool5:
+                if not _gbudget_ok():
+                    break
+                for b in pool5:
+                    if not _gbudget_ok():
+                        break
+                    for c in pool5:
+                        if not _gbudget_ok():
+                            break
+                        for d in pool5:
+                            if not _gbudget_ok():
+                                break
+                            for e in pool5:
+                                if not _gbudget_ok():
+                                    break
+                                if a == b == c == d == e:
+                                    continue
+                                prog = Program(root=a, children=[
+                                    Program(root=b, children=[
+                                        Program(root=c, children=[
+                                            Program(root=d, children=[
+                                                Program(root=e)])])])])
+                                sp = self._evaluate_program(prog, ctx.task)
+                                guided_evals += 5
+                                ctx.n_evals += 5
+                                ctx.update_best(sp)
+                                if sp.prediction_error <= solve_thresh:
+                                    return "guided_depth5"
+
+        return None
+
     def _structural_hooks(self):
         """Structural hook methods run once after all strata."""
         return [
