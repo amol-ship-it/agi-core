@@ -2194,6 +2194,32 @@ class ARCEnv(Environment):
 
         rule_types.append(("min_nz_nbr_local_rule", _learn_min_nz_nbr, _apply_min_nz_nbr))
 
+        # Rule type 9: (center, left_color, right_color) → output
+        def _learn_lr(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        key = (inp[r][c],
+                               inp[r][c-1] if c > 0 else -1,
+                               inp[r][c+1] if c < w-1 else -1)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_lr(grid, rule):
+            h, w = len(grid), len(grid[0])
+            return [[rule.get((grid[r][c],
+                               grid[r][c-1] if c > 0 else -1,
+                               grid[r][c+1] if c < w-1 else -1),
+                              grid[r][c])
+                     for c in range(w)] for r in range(h)]
+
+        rule_types.append(("lr_context_rule", _learn_lr, _apply_lr))
+
         for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
             rule = learn_fn(examples)
