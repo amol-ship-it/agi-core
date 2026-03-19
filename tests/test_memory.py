@@ -288,5 +288,25 @@ class TestEviction(unittest.TestCase):
             os.unlink(path)
 
 
+class TestPrimitiveGenerality(unittest.TestCase):
+
+    def test_primitive_generality_default(self):
+        store = InMemoryStore()
+        self.assertEqual(store.get_primitive_generality(), {})
+
+    def test_primitive_generality_with_solutions(self):
+        store = InMemoryStore()
+        # Two tasks, both use "rotate_90_cw", only one uses "mirror_h"
+        store.store_solution("t1", ScoredProgram(
+            program=Program(root="rotate_90_cw", children=[Program(root="mirror_h")]),
+            energy=0.0, prediction_error=0.0, complexity_cost=2.0, task_id="t1"))
+        store.store_solution("t2", ScoredProgram(
+            program=Program(root="rotate_90_cw"),
+            energy=0.0, prediction_error=0.0, complexity_cost=1.0, task_id="t2"))
+        gen = store.get_primitive_generality()
+        self.assertAlmostEqual(gen["rotate_90_cw"], 1.0)  # used in 2/2 tasks
+        self.assertAlmostEqual(gen["mirror_h"], 0.5)  # used in 1/2 tasks
+
+
 if __name__ == "__main__":
     unittest.main()

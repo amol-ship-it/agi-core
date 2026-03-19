@@ -149,6 +149,25 @@ class InMemoryStore(Memory):
     def update_primitive_score(self, name: str, delta: float) -> None:
         self._primitive_scores[name] = self._primitive_scores.get(name, 0.0) + delta
 
+    def get_primitive_generality(self) -> dict[str, float]:
+        """Compute generality from solutions: how many distinct tasks use each primitive."""
+        if not self._solutions:
+            return {}
+        total = len(self._solutions)
+        prim_tasks: dict[str, set[str]] = {}
+        for task_id, sp in self._solutions.items():
+            for name in self._extract_primitive_names(sp.program):
+                prim_tasks.setdefault(name, set()).add(task_id)
+        return {name: len(tasks) / total for name, tasks in prim_tasks.items()}
+
+    @staticmethod
+    def _extract_primitive_names(prog) -> list[str]:
+        """Recursively extract all primitive names from a program tree."""
+        names = [prog.root]
+        for child in prog.children:
+            names.extend(InMemoryStore._extract_primitive_names(child))
+        return names
+
     # --- Solutions ---
 
     def store_solution(self, task_id: str, scored: ScoredProgram) -> None:

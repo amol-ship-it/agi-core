@@ -489,6 +489,13 @@ class Memory(ABC):
         Default: no-op.
         """
 
+    def get_primitive_generality(self) -> dict[str, float]:
+        """Per-primitive generality: n_distinct_tasks_solved / total_solved.
+        Higher = primitive solves diverse tasks (more transferable).
+        Default: empty (uniform generality).
+        """
+        return {}
+
     # --- Best attempts (unsolved programs for sleep learning) ---
 
     def store_best_attempt(self, task_id: str, scored: ScoredProgram) -> None:
