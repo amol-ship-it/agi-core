@@ -206,6 +206,12 @@ class Learner:
             if solved_by is not None:
                 return self._make_solved_result(ctx, solved_by)
 
+        # Stage 1.5: Guided depth-4/5 search (adaptive budget)
+        if not ctx.solved:
+            solved_by = self._guided_deep_search(ctx)
+            if solved_by is not None:
+                return self._make_solved_result(ctx, solved_by)
+
         # Stage 2: Structural hooks (run once with aggregated candidates)
         if not ctx.solved and self.grammar.allow_structural_phases():
             for hook_fn in self._structural_hooks():

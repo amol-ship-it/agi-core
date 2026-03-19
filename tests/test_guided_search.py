@@ -166,3 +166,19 @@ class TestGuidedDeepSearch:
         ctx.depth1_scores = {}
         result = learner._guided_deep_search(ctx)
         assert result is None
+
+
+class TestGuidedSearchIntegration:
+    def test_wake_core_calls_guided_search(self):
+        from unittest.mock import MagicMock
+        learner = _make_learner()
+        learner._guided_deep_search = MagicMock(return_value=None)
+        learner.grammar.prepare_for_task = MagicMock()
+        learner.grammar.base_primitives = MagicMock(return_value=[])
+        learner.grammar.inject_library = MagicMock(return_value=[])
+        learner.grammar.propose_strata = MagicMock(return_value=[])
+        learner.grammar.allow_structural_phases = MagicMock(return_value=False)
+        learner.memory.get_library = MagicMock(return_value=[])
+        task = Task(task_id="t1", train_examples=[], test_inputs=[])
+        learner._wake_core(task, record=False)
+        learner._guided_deep_search.assert_called_once()
