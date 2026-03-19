@@ -170,5 +170,33 @@ class TestDriveSignalDefaults(unittest.TestCase):
         self.assertAlmostEqual(total, 1.0 * 2.0 + 0.01 * 1.0)
 
 
+class TestSearchStratum(unittest.TestCase):
+
+    def test_search_stratum_defaults(self):
+        from core.types import SearchStratum
+        s = SearchStratum(name="test", primitive_names=["rotate_90_cw", "mirror_h"])
+        self.assertEqual(s.name, "test")
+        self.assertEqual(s.primitive_names, ["rotate_90_cw", "mirror_h"])
+        self.assertEqual(s.max_depth, 3)
+        self.assertAlmostEqual(s.budget_fraction, 0.1)
+        self.assertTrue(s.try_corrections)
+        self.assertEqual(s.metadata, {})
+
+    def test_search_stratum_custom(self):
+        from core.types import SearchStratum
+        s = SearchStratum(
+            name="inpainting",
+            primitive_names=["inpaint_diagonal"],
+            max_depth=4,
+            budget_fraction=0.3,
+            try_corrections=False,
+            metadata={"run_local_rules": True},
+        )
+        self.assertEqual(s.max_depth, 4)
+        self.assertAlmostEqual(s.budget_fraction, 0.3)
+        self.assertFalse(s.try_corrections)
+        self.assertTrue(s.metadata["run_local_rules"])
+
+
 if __name__ == "__main__":
     unittest.main()

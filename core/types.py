@@ -136,3 +136,18 @@ class LibraryEntry:
     reuse_count: int = 0    # times reused in subsequent solutions
     source_tasks: list[str] = field(default_factory=list)  # which tasks it came from
     domain: str = ""        # which domain it was learned in ("" = cross-domain)
+
+
+@dataclass
+class SearchStratum:
+    """A focused search context with its own primitive subset and budget.
+
+    The core learner iterates over strata proposed by the Grammar.
+    Each stratum runs exhaustive enumeration over its primitive subset.
+    """
+    name: str
+    primitive_names: list[str]   # subset of primitives to search over
+    max_depth: int = 3
+    budget_fraction: float = 0.1  # share of task compute budget
+    try_corrections: bool = True
+    metadata: dict = field(default_factory=dict)
