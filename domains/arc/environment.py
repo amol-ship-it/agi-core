@@ -2118,6 +2118,46 @@ class ARCEnv(Environment):
 
         rule_types.append(("nbr_set_local_rule", _learn_nbr_set, _apply_nbr_set))
 
+        # Rule type 7: (center, n_nonzero_8neighbors, has_diagonal_nonzero)
+        def _learn_8nbr_diag(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        n_nz = sum(1 for dr in range(-1, 2) for dc in range(-1, 2)
+                                   if (dr or dc) and 0 <= r+dr < h and 0 <= c+dc < w
+                                   and inp[r+dr][c+dc] != 0)
+                        has_diag = int(any(
+                            0 <= r+dr < h and 0 <= c+dc < w
+                            and inp[r+dr][c+dc] != 0
+                            for dr, dc in [(-1,-1),(-1,1),(1,-1),(1,1)]))
+                        key = (inp[r][c], n_nz, has_diag)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_8nbr_diag(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    n_nz = sum(1 for dr in range(-1, 2) for dc in range(-1, 2)
+                               if (dr or dc) and 0 <= r+dr < h and 0 <= c+dc < w
+                               and grid[r+dr][c+dc] != 0)
+                    has_diag = int(any(
+                        0 <= r+dr < h and 0 <= c+dc < w
+                        and grid[r+dr][c+dc] != 0
+                        for dr, dc in [(-1,-1),(-1,1),(1,-1),(1,1)]))
+                    row.append(rule.get((grid[r][c], n_nz, has_diag), grid[r][c]))
+                result.append(row)
+            return result
+
+        rule_types.append(("8nbr_diag_local_rule", _learn_8nbr_diag, _apply_8nbr_diag))
+
         for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
             rule = learn_fn(examples)
