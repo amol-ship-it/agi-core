@@ -257,6 +257,24 @@ class Grammar(ABC):
         examples for constant optimization).  Default: no-op.
         """
 
+    def propose_strata(
+        self, task: Task, primitives: list[Primitive]
+    ) -> list["SearchStratum"]:
+        """Propose search strata for this task based on structural analysis.
+
+        Each stratum is a focused search over a primitive subset.
+        The core learner runs each stratum independently and keeps the best
+        program found across all strata.
+
+        Default: single stratum with all primitives (backward compatible).
+        """
+        from .types import SearchStratum
+        return [SearchStratum(
+            name="default",
+            primitive_names=[p.name for p in primitives],
+            budget_fraction=1.0,
+        )]
+
     def inject_library(self, entries: list[LibraryEntry]) -> list[Primitive]:
         """
         Convert library entries into primitives usable by the grammar.

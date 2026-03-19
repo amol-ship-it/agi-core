@@ -170,6 +170,34 @@ class TestDriveSignalDefaults(unittest.TestCase):
         self.assertAlmostEqual(total, 1.0 * 2.0 + 0.01 * 1.0)
 
 
+class TestGrammarProposeStrata(unittest.TestCase):
+
+    def test_grammar_propose_strata_default(self):
+        """Default propose_strata returns single stratum with all primitives."""
+        from core.types import Primitive, Task, SearchStratum
+        from core.interfaces import Grammar
+
+        class MinGrammar(Grammar):
+            def base_primitives(self):
+                return [Primitive("a", 1, lambda x: x), Primitive("b", 1, lambda x: x)]
+            def compose(self, outer, inner_programs):
+                from core.types import Program
+                return Program(root=outer.name, children=inner_programs)
+            def mutate(self, program, primitives, transition_matrix=None):
+                return program
+            def crossover(self, a, b):
+                return a
+
+        g = MinGrammar()
+        task = Task("t1", [(1, 2)], [3])
+        prims = g.base_primitives()
+        strata = g.propose_strata(task, prims)
+        assert len(strata) == 1
+        assert strata[0].name == "default"
+        assert set(strata[0].primitive_names) == {"a", "b"}
+        assert strata[0].budget_fraction == 1.0
+
+
 class TestSearchStratum(unittest.TestCase):
 
     def test_search_stratum_defaults(self):
