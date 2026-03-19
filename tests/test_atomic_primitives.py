@@ -19,9 +19,9 @@ class TestAtomicPrimitivesPlaceholder(unittest.TestCase):
         )
         from domains.arc.perception_primitives import build_perception_primitives
 
-        self.assertEqual(len(build_atomic_primitives()), 54)
+        self.assertEqual(len(build_atomic_primitives()), 68)  # 54 + 14 new Tier 1
         self.assertEqual(len(build_parameterized_primitives()), 9)
-        self.assertEqual(len(build_perception_primitives()), 12)
+        self.assertEqual(len(build_perception_primitives()), 13)  # 12 + n_objects
 
 
 class TestExtractLargestCC(unittest.TestCase):

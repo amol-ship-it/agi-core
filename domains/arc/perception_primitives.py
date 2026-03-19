@@ -131,6 +131,34 @@ def grid_max_dim(grid: Grid) -> int:
 
 
 # =============================================================================
+# Object perception
+# =============================================================================
+
+def n_objects(grid: Grid) -> int:
+    """Count connected components (4-connected, ignoring color 0)."""
+    if not grid or not grid[0]:
+        return 0
+    h, w = len(grid), len(grid[0])
+    visited = [[False] * w for _ in range(h)]
+    count = 0
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0 and not visited[r][c]:
+                count += 1
+                # BFS flood fill
+                queue = [(r, c)]
+                visited[r][c] = True
+                while queue:
+                    cr, cc = queue.pop(0)
+                    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr][nc] and grid[nr][nc] != 0:
+                            visited[nr][nc] = True
+                            queue.append((nr, nc))
+    return count
+
+
+# =============================================================================
 # Build functions
 # =============================================================================
 
@@ -149,6 +177,8 @@ def build_perception_primitives() -> list[Primitive]:
         ("grid_width",              grid_width),
         ("grid_min_dim",            grid_min_dim),
         ("grid_max_dim",            grid_max_dim),
+        # Object perception — new Tier 1 (1)
+        ("n_objects",               n_objects),
     ]
     return [
         Primitive(name=name, arity=0, fn=fn, domain="arc", kind="perception")

@@ -1185,6 +1185,382 @@ def mask_by(grid1: Grid, grid2: Grid) -> Grid:
 
 
 # =============================================================================
+# Inpainting primitives
+# =============================================================================
+
+def inpaint_by_neighbors(grid: Grid) -> Grid:
+    """Fill zeros with majority color of non-zero 4-neighbors.
+
+    Iterates until no more changes or max(h,w) iterations.
+    """
+    from collections import Counter
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    max_iters = max(h, w)
+    for _ in range(max_iters):
+        changed = False
+        new = [row[:] for row in result]
+        for r in range(h):
+            for c in range(w):
+                if result[r][c] == 0:
+                    neighbors = []
+                    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < h and 0 <= nc < w and result[nr][nc] != 0:
+                            neighbors.append(result[nr][nc])
+                    if neighbors:
+                        new[r][c] = Counter(neighbors).most_common(1)[0][0]
+                        changed = True
+        result = new
+        if not changed:
+            break
+    return result
+
+
+def symmetry_complete(grid: Grid) -> Grid:
+    """Detect nearest symmetry axis, fill zeros with symmetric counterpart.
+
+    Scores horizontal and vertical mirror axes by matching non-zero pairs.
+    Uses the better axis if score ratio > 0.5.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    def score_horizontal():
+        """Score horizontal (left-right) mirror symmetry."""
+        matches = total = 0
+        for r in range(h):
+            for c in range(w):
+                mc = w - 1 - c
+                if mc <= c:
+                    continue
+                a, b = grid[r][c], grid[r][mc]
+                if a != 0 or b != 0:
+                    total += 1
+                    if a == b:
+                        matches += 1
+        return matches / total if total > 0 else 0.0
+
+    def score_vertical():
+        """Score vertical (top-bottom) mirror symmetry."""
+        matches = total = 0
+        for r in range(h):
+            mr = h - 1 - r
+            if mr <= r:
+                continue
+            for c in range(w):
+                a, b = grid[r][c], grid[mr][c]
+                if a != 0 or b != 0:
+                    total += 1
+                    if a == b:
+                        matches += 1
+        return matches / total if total > 0 else 0.0
+
+    h_score = score_horizontal()
+    v_score = score_vertical()
+    result = [row[:] for row in grid]
+
+    if h_score >= v_score and h_score > 0.5:
+        # Fill using horizontal mirror
+        for r in range(h):
+            for c in range(w):
+                mc = w - 1 - c
+                if result[r][c] == 0 and result[r][mc] != 0:
+                    result[r][c] = result[r][mc]
+    elif v_score > h_score and v_score > 0.5:
+        # Fill using vertical mirror
+        for r in range(h):
+            mr = h - 1 - r
+            for c in range(w):
+                if result[r][c] == 0 and result[mr][c] != 0:
+                    result[r][c] = result[mr][c]
+    return result
+
+
+def fill_by_row_col_pattern(grid: Grid) -> Grid:
+    """Find dominant non-zero color per row and col, fill zeros preferring row color."""
+    from collections import Counter
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+
+    row_color = []
+    for r in range(h):
+        nz = [grid[r][c] for c in range(w) if grid[r][c] != 0]
+        row_color.append(Counter(nz).most_common(1)[0][0] if nz else 0)
+
+    col_color = []
+    for c in range(w):
+        nz = [grid[r][c] for r in range(h) if grid[r][c] != 0]
+        col_color.append(Counter(nz).most_common(1)[0][0] if nz else 0)
+
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if result[r][c] == 0:
+                if row_color[r] != 0:
+                    result[r][c] = row_color[r]
+                elif col_color[c] != 0:
+                    result[r][c] = col_color[c]
+    return result
+
+
+def inpaint_diagonal(grid: Grid) -> Grid:
+    """Fill zeros on diagonals where all non-zero values share the same color.
+
+    Collects top-left to bottom-right diagonals; if all non-zero values on
+    a diagonal are the same color, fills zeros on that diagonal with it.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    # Diagonals indexed by (r - c), ranging from -(w-1) to (h-1)
+    for diag in range(-(w - 1), h):
+        cells = []
+        for r in range(h):
+            c = r - diag
+            if 0 <= c < w:
+                cells.append((r, c))
+        nz_colors = set(grid[r][c] for r, c in cells if grid[r][c] != 0)
+        if len(nz_colors) == 1:
+            color = next(iter(nz_colors))
+            for r, c in cells:
+                if result[r][c] == 0:
+                    result[r][c] = color
+    return result
+
+
+def inpaint_from_template(grid: Grid) -> Grid:
+    """Find most common NxN pattern in non-zero regions, stamp into zero regions.
+
+    Tries 2x2 then 3x3 patterns. A candidate pattern is stamped into a zero
+    region when its non-zero cells match the existing non-zero cells at that
+    location.
+    """
+    from collections import Counter
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+
+    for n in (2, 3):
+        if h < n or w < n:
+            continue
+        # Collect all NxN patches from non-zero regions
+        patch_counts: Counter = Counter()
+        for r in range(h - n + 1):
+            for c in range(w - n + 1):
+                patch = tuple(grid[r + dr][c + dc]
+                              for dr in range(n) for dc in range(n))
+                if all(v != 0 for v in patch):
+                    patch_counts[patch] += 1
+        if not patch_counts:
+            continue
+        best_patch = patch_counts.most_common(1)[0][0]
+        # Stamp pattern into regions where existing non-zero cells match
+        for r in range(h - n + 1):
+            for c in range(w - n + 1):
+                positions = [(r + dr, c + dc) for dr in range(n) for dc in range(n)]
+                current = [grid[rr][cc] for rr, cc in positions]
+                # Check: non-zero cells must match the pattern
+                matches = all(cur == 0 or cur == pat
+                              for cur, pat in zip(current, best_patch))
+                has_zero = any(cur == 0 for cur in current)
+                if matches and has_zero:
+                    for (rr, cc), pat in zip(positions, best_patch):
+                        if result[rr][cc] == 0:
+                            result[rr][cc] = pat
+        break  # Stop after first successful size
+    return result
+
+
+# =============================================================================
+# Denoising primitives
+# =============================================================================
+
+def remove_isolated(grid: Grid) -> Grid:
+    """Remove non-zero pixels with no non-zero 4-neighbors."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                has_neighbor = False
+                for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] != 0:
+                        has_neighbor = True
+                        break
+                if not has_neighbor:
+                    result[r][c] = 0
+    return result
+
+
+def majority_filter_3x3(grid: Grid) -> Grid:
+    """Replace each pixel with the majority color in its 3x3 neighborhood."""
+    from collections import Counter
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            neighborhood = []
+            for dr in range(-1, 2):
+                for dc in range(-1, 2):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w:
+                        neighborhood.append(grid[nr][nc])
+            if neighborhood:
+                result[r][c] = Counter(neighborhood).most_common(1)[0][0]
+    return result
+
+
+def morphological_close(grid: Grid) -> Grid:
+    """Morphological closing: dilate then erode."""
+    return erode(dilate(grid))
+
+
+# =============================================================================
+# Grid structure primitives
+# =============================================================================
+
+def remove_border(grid: Grid) -> Grid:
+    """Strip outermost row and column on all sides."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    if h < 3 or w < 3:
+        return grid
+    return [row[1:-1] for row in grid[1:-1]]
+
+
+# =============================================================================
+# Cardinal extension primitives
+# =============================================================================
+
+def extend_up(grid: Grid) -> Grid:
+    """Each non-zero pixel extends upward, filling zeros until hitting another non-zero.
+
+    Scan bottom-to-top so upper pixels don't overwrite each other.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h - 2, -1, -1):
+        for c in range(w):
+            if result[r][c] == 0 and result[r + 1][c] != 0:
+                result[r][c] = result[r + 1][c]
+    return result
+
+
+def extend_left(grid: Grid) -> Grid:
+    """Each non-zero pixel extends leftward, filling zeros until hitting another non-zero."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w - 2, -1, -1):
+            if result[r][c] == 0 and result[r][c + 1] != 0:
+                result[r][c] = result[r][c + 1]
+    return result
+
+
+def extend_right(grid: Grid) -> Grid:
+    """Each non-zero pixel extends rightward, filling zeros until hitting another non-zero."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(1, w):
+            if result[r][c] == 0 and result[r][c - 1] != 0:
+                result[r][c] = result[r][c - 1]
+    return result
+
+
+# =============================================================================
+# Object relationship primitives
+# =============================================================================
+
+def draw_line_between_objects(grid: Grid) -> Grid:
+    """For each pair of same-color non-zero pixels on same row or column, fill the gap.
+
+    Fills the gap between same-color pixels on the same row or column with
+    that color.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    # Horizontal: same row, same color
+    for r in range(h):
+        color_positions: dict[int, list[int]] = {}
+        for c in range(w):
+            if grid[r][c] != 0:
+                color_positions.setdefault(grid[r][c], []).append(c)
+        for color, positions in color_positions.items():
+            if len(positions) >= 2:
+                lo, hi = min(positions), max(positions)
+                for c in range(lo, hi + 1):
+                    result[r][c] = color
+    # Vertical: same column, same color
+    for c in range(w):
+        color_positions = {}
+        for r in range(h):
+            if grid[r][c] != 0:
+                color_positions.setdefault(grid[r][c], []).append(r)
+        for color, positions in color_positions.items():
+            if len(positions) >= 2:
+                lo, hi = min(positions), max(positions)
+                for r in range(lo, hi + 1):
+                    result[r][c] = color
+    return result
+
+
+def color_by_object_rank(grid: Grid) -> Grid:
+    """Find connected components, rank by size (largest=1), recolor with rank."""
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    visited = [[False] * w for _ in range(h)]
+    components = []
+
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0 and not visited[r][c]:
+                # BFS flood fill
+                comp = []
+                queue = [(r, c)]
+                visited[r][c] = True
+                while queue:
+                    cr, cc = queue.pop(0)
+                    comp.append((cr, cc))
+                    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and not visited[nr][nc] and grid[nr][nc] != 0:
+                            visited[nr][nc] = True
+                            queue.append((nr, nc))
+                components.append(comp)
+
+    # Sort by size descending; rank 1 = largest
+    components.sort(key=lambda comp: len(comp), reverse=True)
+    result = [row[:] for row in grid]
+    for rank, comp in enumerate(components, start=1):
+        for r, c in comp:
+            result[r][c] = rank
+    return result
+
+
+# =============================================================================
 # Build functions
 # =============================================================================
 
@@ -1264,6 +1640,25 @@ def build_atomic_primitives() -> list[Primitive]:
         ("remove_separators",           remove_separators),
         # Tiling (1)
         ("tile_v",                      tile_v),
+        # Inpainting — new Tier 1 (5)
+        ("inpaint_by_neighbors",        inpaint_by_neighbors),
+        ("symmetry_complete",           symmetry_complete),
+        ("fill_by_row_col_pattern",     fill_by_row_col_pattern),
+        ("inpaint_diagonal",            inpaint_diagonal),
+        ("inpaint_from_template",       inpaint_from_template),
+        # Denoising — new Tier 1 (3)
+        ("remove_isolated",             remove_isolated),
+        ("majority_filter_3x3",         majority_filter_3x3),
+        ("morphological_close",         morphological_close),
+        # Grid structure — new Tier 1 (1)
+        ("remove_border",               remove_border),
+        # Cardinal extensions — new Tier 1 (3)
+        ("extend_up",                   extend_up),
+        ("extend_left",                 extend_left),
+        ("extend_right",                extend_right),
+        # Object relationships — new Tier 1 (2)
+        ("draw_line_between_objects",   draw_line_between_objects),
+        ("color_by_object_rank",        color_by_object_rank),
     ]
     prims = [Primitive(name=name, arity=1, fn=fn, domain="arc")
              for name, fn in unary_ops]
