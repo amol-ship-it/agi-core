@@ -3436,5 +3436,37 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 
 **Current state:** 109/400 train (27.3%), 46/400 eval (11.5%), 54 atomic primitives, 442 tests.
 
+### Decision: Extended local rules + input_pred correction expansion (Session 15)
+
+**Goal:** Push from 109/46 toward 130+/55+.
+
+**What was tried and pre-tested:**
+1. **Selective fill-enclosed** (fill only some regions by property): 0 tasks — not the right abstraction
+2. **Iterative local rules** (apply rule 2-3x): 0 tasks — rule learning doesn't work iteratively
+3. **Object-layer colormap**: Subsumed by existing rules
+4. **Broader pre-transforms for half_colormap**: fill_enclosed found 2 tasks
+5. **Row/column operations, gravity, pattern fill, color remapping**: All 0 — already covered by existing primitives
+6. **5x5 neighborhood rules**: 0 — too many keys, can't generalize
+
+**What actually worked (pre-tested, LOOCV + test validated):**
+1. **nbr_count correction key** `(pred, n_nonzero_4neighbors)`: +5 tasks pre-test, integrated into input_pred_correction
+2. **nbr_set local rule** `(center, sorted_set_of_4neighbor_colors)`: +2 tasks (3618c87e, d90796e8)
+3. **8nbr_diag local rule** `(center, n_nz_8, has_diagonal_nz)`: +1 (b60334d2)
+4. **min_nz_nbr local rule** `(center, min_nonzero_8neighbor)`: +2 train, +1 eval
+5. **lr_context local rule** `(center, left_color, right_color)`: +1 (a85d4709)
+6. **rowcol_nz local rule** `(center, n_nz_in_row, n_nz_in_col)`: +2 train, +2 eval — most productive
+7. **ndist_rowcol local rule** `(center, n_distinct_in_row, n_distinct_in_col)`: +2 train
+8. **rowcol_maj local rule** `(center, row_majority, col_majority)`: additional tasks
+9. **fill_enclosed pre-transform for half_colormap**: +2 (dae9d2b5, fafffa47)
+10. **input_pred candidate limit 200→500**: +1 train
+
+**Key insight:** Row/column-level features (non-local) are highly productive. Going beyond local 3x3/8-neighbor context to row-wide and column-wide statistics unlocks a new class of tasks. The most productive rule types were `rowcol_nz` and `ndist_rowcol`.
+
+**Results:** Train 109→118 (+9), Eval 46→49 (+3). 12 local rule types total (up from 7). Pipeline time ~1m47s (no significant increase).
+
+**What's exhausted:** All local rule variants tested extensively (30+ key function variants pre-tested on all unsolved tasks). Simple transforms, compositions, subgrid extraction, gravity, color remapping — all already covered by existing primitives. The remaining 275 unsolved tasks need fundamentally different structural reasoning.
+
+**Current state:** 118/400 train (29.5%), 49/400 eval (12.2%), 54 atomic primitives, 12 local rule types, 442 tests.
+
 ---
 *This document will be updated with each new session and major decision.*

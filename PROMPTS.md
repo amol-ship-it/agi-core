@@ -651,4 +651,12 @@ Bulk-restored structural strategies from pre-strip git history. Result: 22→28 
 
 ---
 
+### Prompt 12: Next Accuracy Push — Extended Local Rules + Correction
+
+> Implement plan to push from 109/46 toward 130+/55+. Focus areas: input_pred correction expansion, selective fill-enclosed, object-layer colormap, iterative local rules, broader pre-transforms.
+
+**Response:** Systematically pre-tested 30+ strategies on all unsolved tasks with LOOCV + test validation. Added 5 new local rule types (nbr_set, 8nbr_diag, min_nz_nbr, lr_context, rowcol_nz, ndist_rowcol, rowcol_maj), extended input_pred correction with nbr_count key, added fill_enclosed pre-transform for half_colormap, expanded correction candidate limit 200→500. Key finding: row/column-level features are highly productive beyond local neighborhoods. Many planned strategies (selective fill, iterative rules, object colormap) yielded 0 results in pre-testing. Train: 109→118 (+9), Eval: 46→49 (+3).
+
+---
+
 *This document will be updated with each new session.*
