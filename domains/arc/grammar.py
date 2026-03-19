@@ -43,6 +43,22 @@ class ARCGrammar(Grammar):
         """Enable structural search phases (per-object, cross-reference, etc.)."""
         return True
 
+    def inverse_primitives(self) -> dict[str, str]:
+        """Map invertible ARC primitives to their inverses for bidirectional search.
+
+        These are all self-inverse or have known exact inverses.
+        rotate_90_cw and rotate_90_ccw are each other's inverse.
+        rotate_180, mirror_h, mirror_v, transpose are all self-inverse.
+        """
+        return {
+            "rotate_90_clockwise":        "rotate_90_counterclockwise",
+            "rotate_90_counterclockwise": "rotate_90_clockwise",
+            "rotate_180":                 "rotate_180",
+            "mirror_horizontal":          "mirror_horizontal",
+            "mirror_vertical":            "mirror_vertical",
+            "transpose":                  "transpose",
+        }
+
     def get_predicates(self) -> list[tuple[str, callable]]:
         """Return input->bool predicates for conditional search."""
         from collections import Counter

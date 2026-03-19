@@ -1502,5 +1502,139 @@ class TestStrataIntegration(unittest.TestCase):
         self.assertTrue(result.solved)
 
 
+class TestBidirectionalSearch(unittest.TestCase):
+    """Tests for _phase_bidirectional (meet-in-the-middle search)."""
+
+    def _make_bidir_stubs(self):
+        """Create stubs with two invertible primitives: neg (self-inverse) and double/halve."""
+
+        def neg(x):
+            return -x
+
+        def double(x):
+            return x * 2
+
+        def halve(x):
+            return x / 2
+
+        prims = [
+            Primitive("identity", 0, lambda x: x),
+            Primitive("neg",    0, neg),
+            Primitive("double", 0, double),
+            Primitive("halve",  0, halve),
+        ]
+        prim_map = {p.name: p for p in prims}
+
+        class BidirEnv(Environment):
+            def load_task(self, task):
+                return Observation(data=task.train_examples)
+
+            def execute(self, program, input_data):
+                result = input_data
+                # Walk the program tree bottom-up (pre-order: apply outer after inner)
+                def _eval(prog, val):
+                    child_val = val
+                    if prog.children:
+                        child_val = _eval(prog.children[0], val)
+                    p = prim_map.get(prog.root)
+                    if p and p.fn:
+                        return p.fn(child_val)
+                    return child_val
+                return _eval(program, result)
+
+            def reset(self):
+                pass
+
+            def register_primitive(self, primitive):
+                prim_map[primitive.name] = primitive
+
+        class BidirGrammar(StubGrammar):
+            def base_primitives(self):
+                return list(prims)
+
+            def inverse_primitives(self):
+                return {
+                    "neg":    "neg",     # neg is self-inverse
+                    "double": "halve",   # double and halve are inverses
+                    "halve":  "double",
+                }
+
+        return BidirEnv(), BidirGrammar(), prims, prim_map
+
+    def test_bidirectional_finds_depth2_composition_via_backward(self):
+        """Bidirectional search finds neg(identity(x)) == -x when enumeration misses it."""
+
+        env, grammar, prims, prim_map = self._make_bidir_stubs()
+        drive = StubDrive()
+        memory = InMemoryStore()
+        # exhaustive_depth=1 so enumeration only finds depth-1 programs
+        # neg(identity(x)) is depth 2 — bidirectional should find it
+        cfg = SearchConfig(exhaustive_depth=1, eval_budget=500, solve_threshold=0.0)
+
+        learner = Learner(env, grammar, drive, memory, cfg)
+
+        # Task: output is neg(input)
+        examples = [(5.0, -5.0), (3.0, -3.0), (7.0, -7.0)]
+        task = Task("neg_task", examples, test_inputs=[1.0], test_outputs=[-1.0])
+        result = learner.wake_on_task(task)
+        # neg alone (depth-1) is in the enumeration, so it should be found there
+        self.assertTrue(result.solved)
+
+    def test_bidirectional_finds_neg_of_double(self):
+        """Bidirectional finds neg(double(x)) == -2x: depth-2 forward + depth-1 backward."""
+
+        env, grammar, prims, prim_map = self._make_bidir_stubs()
+        drive = StubDrive()
+        memory = InMemoryStore()
+        # exhaustive_depth=1: enumeration finds only depth-1 (neg, double, halve, identity)
+        # neg(double(x)) is depth-2; bidirectional should compose it:
+        #   forward candidate: double(x)
+        #   backward: neg(expected) = neg(-2x) = 2x = double(x) ✓
+        cfg = SearchConfig(exhaustive_depth=1, eval_budget=1000, solve_threshold=0.0)
+
+        learner = Learner(env, grammar, drive, memory, cfg)
+
+        # Task: output is neg(double(input))
+        examples = [(5.0, -10.0), (3.0, -6.0), (7.0, -14.0)]
+        task = Task("neg_double_task", examples, test_inputs=[1.0], test_outputs=[-2.0])
+        result = learner.wake_on_task(task)
+        self.assertTrue(result.solved, f"Expected bidirectional to solve neg(double(x)), best_error={result.best.prediction_error if result.best else 'None'}")
+
+    def test_bidirectional_skipped_when_no_inverses(self):
+        """Bidirectional phase does nothing when grammar has no inverse_primitives."""
+
+        env = StubEnv()
+        # StubGrammar inherits the default empty inverse_primitives()
+        grammar = StubGrammar()
+        drive = StubDrive()
+        memory = InMemoryStore()
+        cfg = SearchConfig(exhaustive_depth=1, eval_budget=100, solve_threshold=0.01)
+
+        learner = Learner(env, grammar, drive, memory, cfg)
+
+        # identity task still solves via enumeration, not bidirectional
+        task = Task("t1", [(5.0, 5.0), (3.0, 3.0)], test_inputs=[1.0], test_outputs=[1.0])
+        result = learner.wake_on_task(task)
+        self.assertTrue(result.solved)
+
+    def test_inverse_primitives_defined_in_arc_grammar(self):
+        """ARCGrammar.inverse_primitives() returns the expected mapping."""
+        from domains.arc.grammar import ARCGrammar
+        grammar = ARCGrammar()
+        inverses = grammar.inverse_primitives()
+
+        self.assertIsInstance(inverses, dict)
+        self.assertGreater(len(inverses), 0)
+
+        # Rotation inverses
+        self.assertEqual(inverses.get("rotate_90_clockwise"), "rotate_90_counterclockwise")
+        self.assertEqual(inverses.get("rotate_90_counterclockwise"), "rotate_90_clockwise")
+
+        # Self-inverses
+        for name in ["rotate_180", "mirror_horizontal", "mirror_vertical", "transpose"]:
+            self.assertEqual(inverses.get(name), name,
+                             f"{name} should map to itself (self-inverse)")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -250,6 +250,7 @@ class Learner:
             self._phase_conditional_search,
             self._phase_color_fix,
             self._phase_input_pred_correction,
+            self._phase_bidirectional,
         ]
 
     def _phase_exhaustive(self, ctx: _WakeContext) -> Optional[str]:
@@ -565,6 +566,160 @@ class Learner:
 
         logger.debug(f"  [wake] Input-pred correction: {time.time()-t:.2f}s")
         return "input-pred correction" if ctx.solved else None
+
+    def _phase_bidirectional(self, ctx: _WakeContext) -> Optional[str]:
+        """Meet-in-the-middle search: depth-2 backward meets depth-1/2 forward.
+
+        For each invertible primitive inv_name (with forward fwd_name):
+          - For each candidate C in enum_candidates (forward programs):
+              Check if fwd(C(input)) == expected_output for ALL training examples.
+              Equivalently: C(input) == inv(expected_output) for all examples.
+          - If found, the solution is fwd(C), i.e. Program(fwd_name, [C.program]).
+
+        This can find depth-4 programs (when C itself is depth 3) or depth-2/3
+        programs that happen not to be in the enumeration set.
+
+        Also tries depth-2 backward: fwd2(fwd1(C(input))) == expected.
+        Equivalently: C(input) == inv1(inv2(expected)).
+        """
+        if ctx.solved:
+            return None
+        inverses = self.grammar.inverse_primitives()
+        if not inverses:
+            return None
+
+        t = time.time()
+        task = ctx.task
+        solve_thresh = self.search_cfg.solve_threshold
+
+        # Build lookup of inverse callable by name, from the primitive map via env
+        # env.execute on a single-node program invokes the primitive by name
+        def _apply_named(name: str, grid):
+            """Apply a named primitive to a grid using env.execute."""
+            return self.env.execute(Program(root=name), grid)
+
+        # Phase A: depth-1 backward
+        # For each candidate C and each invertible prim fwd_name:
+        #   Check if C(input) == inv(expected) for all train examples.
+        #   If yes, solution is Program(fwd_name, [C.program]).
+        n_cands = min(200, len(ctx.enum_candidates))
+        candidates = ctx.enum_candidates[:n_cands]
+
+        for fwd_name, inv_name in inverses.items():
+            # Pre-compute inv(expected) for each training example
+            inv_targets = []
+            targets_ok = True
+            for inp, expected in task.train_examples:
+                try:
+                    inv_out = _apply_named(inv_name, expected)
+                    if inv_out is None:
+                        targets_ok = False
+                        break
+                    inv_targets.append(inv_out)
+                except Exception:
+                    targets_ok = False
+                    break
+            if not targets_ok:
+                continue
+
+            # For each forward candidate, see if its outputs match inv_targets
+            for cand in candidates:
+                if cand.prediction_error <= solve_thresh:
+                    continue  # already perfect, skip
+
+                match = True
+                for i, (inp, _expected) in enumerate(task.train_examples):
+                    try:
+                        pred = self.env.execute(cand.program, inp)
+                        if pred is None:
+                            match = False
+                            break
+                        if pred != inv_targets[i]:
+                            match = False
+                            break
+                    except Exception:
+                        match = False
+                        break
+
+                if match:
+                    composed = Program(root=fwd_name, children=[cand.program])
+                    sp = self._evaluate_program(composed, task)
+                    ctx.n_evals += 1
+                    self._update_pareto_front(ctx.pareto, sp)
+                    ctx.update_best(sp)
+                    ctx.enum_candidates.append(sp)
+                    if sp.prediction_error <= solve_thresh:
+                        logger.debug(
+                            f"  [wake] Bidirectional-1: {fwd_name}({repr(cand.program)[:30]}) "
+                            f"SOLVED in {time.time()-t:.2f}s")
+                        return "bidirectional"
+
+        # Phase B: depth-2 backward
+        # For each pair (fwd1, fwd2) and candidate C:
+        #   Check if C(input) == inv1(inv2(expected)) for all train examples.
+        #   If yes, solution is Program(fwd2, [Program(fwd1, [C.program])]).
+        n_cands_b = min(100, len(ctx.enum_candidates))
+        candidates_b = ctx.enum_candidates[:n_cands_b]
+
+        for fwd2_name, inv2_name in inverses.items():
+            for fwd1_name, inv1_name in inverses.items():
+                # Pre-compute inv1(inv2(expected)) for all train examples
+                inv2_targets = []
+                targets_ok = True
+                for inp, expected in task.train_examples:
+                    try:
+                        inv2_out = _apply_named(inv2_name, expected)
+                        if inv2_out is None:
+                            targets_ok = False
+                            break
+                        inv1_out = _apply_named(inv1_name, inv2_out)
+                        if inv1_out is None:
+                            targets_ok = False
+                            break
+                        inv2_targets.append(inv1_out)
+                    except Exception:
+                        targets_ok = False
+                        break
+                if not targets_ok:
+                    continue
+
+                for cand in candidates_b:
+                    if cand.prediction_error <= solve_thresh:
+                        continue
+
+                    match = True
+                    for i, (inp, _expected) in enumerate(task.train_examples):
+                        try:
+                            pred = self.env.execute(cand.program, inp)
+                            if pred is None:
+                                match = False
+                                break
+                            if pred != inv2_targets[i]:
+                                match = False
+                                break
+                        except Exception:
+                            match = False
+                            break
+
+                    if match:
+                        # solution: fwd2(fwd1(C))
+                        composed = Program(
+                            root=fwd2_name,
+                            children=[Program(root=fwd1_name, children=[cand.program])]
+                        )
+                        sp = self._evaluate_program(composed, task)
+                        ctx.n_evals += 1
+                        self._update_pareto_front(ctx.pareto, sp)
+                        ctx.update_best(sp)
+                        ctx.enum_candidates.append(sp)
+                        if sp.prediction_error <= solve_thresh:
+                            logger.debug(
+                                f"  [wake] Bidirectional-2: {fwd2_name}({fwd1_name}("
+                                f"{repr(cand.program)[:20]})) SOLVED in {time.time()-t:.2f}s")
+                            return "bidirectional"
+
+        logger.debug(f"  [wake] Bidirectional: {time.time()-t:.2f}s")
+        return None
 
     # -------------------------------------------------------------------------
     # Wake result builders
