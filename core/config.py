@@ -106,6 +106,13 @@ class SearchConfig:
     # Verbose worker output (per-task diagnostic prints). Set False in batch mode.
     verbose: bool = True
 
+    # Guided depth-4/5 search: after exhaustive depth-3 fails, search deeper
+    # with a pruned primitive set ranked by depth-1/2/3 results.
+    guided_depth4_top_k: int = 20       # primitives for depth-4 enumeration
+    guided_depth5_top_k: int = 10       # primitives for depth-5 enumeration
+    guided_nearmiss_top_k: int = 5      # near-miss programs to extend by 1 step
+    guided_budget_fraction: float = 0.30  # max fraction of original budget for guided phase
+
 
 @dataclass
 class SleepConfig:
