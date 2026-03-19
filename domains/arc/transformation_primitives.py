@@ -1644,6 +1644,131 @@ def color_by_object_rank(grid: Grid) -> Grid:
 
 
 # =============================================================================
+# Near-miss high-impact primitives
+# =============================================================================
+
+def snap_to_column_majority(grid: Grid) -> Grid:
+    """Replace each cell with the most common non-zero value in its column.
+
+    If the column has no non-zero values, keep the original cell value.
+    """
+    if not grid:
+        return grid
+    from collections import Counter
+    h, w = len(grid), len(grid[0])
+    col_maj = []
+    for c in range(w):
+        nz = [grid[r][c] for r in range(h) if grid[r][c] != 0]
+        col_maj.append(Counter(nz).most_common(1)[0][0] if nz else 0)
+    return [[col_maj[c] if col_maj[c] != 0 else grid[r][c] for c in range(w)] for r in range(h)]
+
+
+def snap_to_row_majority(grid: Grid) -> Grid:
+    """Replace each cell with the most common non-zero value in its row.
+
+    If the row has no non-zero values, keep the original cell value.
+    """
+    if not grid:
+        return grid
+    from collections import Counter
+    h, w = len(grid), len(grid[0])
+    result = []
+    for r in range(h):
+        nz = [grid[r][c] for c in range(w) if grid[r][c] != 0]
+        maj = Counter(nz).most_common(1)[0][0] if nz else 0
+        result.append([maj if maj != 0 else grid[r][c] for c in range(w)])
+    return result
+
+
+def complete_4fold_symmetry(grid: Grid) -> Grid:
+    """Fill missing pixels to enforce 4-fold rotational symmetry.
+
+    For square grids, uses rotational 4-fold symmetry (0°, 90°, 180°, 270°).
+    For non-square grids, uses horizontal + vertical reflection instead.
+    A non-zero value at any of the 4 symmetric positions fills all zero
+    counterparts.
+    """
+    if not grid:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    if h == w:
+        # Rotational 4-fold symmetry
+        for r in range(h):
+            for c in range(w):
+                positions = [
+                    (r, c),
+                    (c, h - 1 - r),
+                    (h - 1 - r, w - 1 - c),
+                    (w - 1 - c, r),
+                ]
+                # Find non-zero value among the 4 positions
+                val = 0
+                for pr, pc in positions:
+                    if 0 <= pr < h and 0 <= pc < w and grid[pr][pc] != 0:
+                        val = grid[pr][pc]
+                        break
+                if val != 0:
+                    for pr, pc in positions:
+                        if 0 <= pr < h and 0 <= pc < w and result[pr][pc] == 0:
+                            result[pr][pc] = val
+    else:
+        # Horizontal + vertical reflection
+        for r in range(h):
+            for c in range(w):
+                mr, mc = h - 1 - r, w - 1 - c
+                if result[r][c] == 0 and result[r][mc] != 0:
+                    result[r][c] = result[r][mc]
+                if result[r][c] == 0 and result[mr][c] != 0:
+                    result[r][c] = result[mr][c]
+                if result[r][c] == 0 and result[mr][mc] != 0:
+                    result[r][c] = result[mr][mc]
+    return result
+
+
+def fill_concave_hull(grid: Grid) -> Grid:
+    """Fill the bounding box of each same-color connected component.
+
+    For each 4-connected component of a single color, computes its bounding
+    box and fills any zero cells within that bbox with the component's color.
+    """
+    if not grid:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    visited = [[False] * w for _ in range(h)]
+
+    for r in range(h):
+        for c in range(w):
+            if visited[r][c] or grid[r][c] == 0:
+                continue
+            # BFS to find component
+            color = grid[r][c]
+            component = []
+            queue = [(r, c)]
+            visited[r][c] = True
+            min_r, max_r, min_c, max_c = r, r, c, c
+            while queue:
+                cr, cc = queue.pop(0)
+                component.append((cr, cc))
+                min_r, max_r = min(min_r, cr), max(max_r, cr)
+                min_c, max_c = min(min_c, cc), max(max_c, cc)
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = cr + dr, cc + dc
+                    if (0 <= nr < h and 0 <= nc < w
+                            and not visited[nr][nc] and grid[nr][nc] == color):
+                        visited[nr][nc] = True
+                        queue.append((nr, nc))
+            # Fill bbox interior
+            comp_set = set(component)
+            for fr in range(min_r, max_r + 1):
+                for fc in range(min_c, max_c + 1):
+                    if (fr, fc) not in comp_set and result[fr][fc] == 0:
+                        result[fr][fc] = color
+    return result
+
+
+# =============================================================================
 # Build functions
 # =============================================================================
 
@@ -1745,6 +1870,11 @@ def build_atomic_primitives() -> list[Primitive]:
         # Morphological growth/shrink — Tier 3 (2)
         ("extrapolate_growth",          extrapolate_growth),
         ("shrink_objects",              shrink_objects),
+        # Near-miss high-impact primitives — (4)
+        ("snap_to_column_majority",     snap_to_column_majority),
+        ("snap_to_row_majority",        snap_to_row_majority),
+        ("complete_4fold_symmetry",     complete_4fold_symmetry),
+        ("fill_concave_hull",           fill_concave_hull),
     ]
     prims = [Primitive(name=name, arity=1, fn=fn, domain="arc")
              for name, fn in unary_ops]

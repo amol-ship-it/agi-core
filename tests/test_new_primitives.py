@@ -277,3 +277,55 @@ def test_shrink_objects_single_pixel():
 def test_shrink_objects_empty():
     from domains.arc.transformation_primitives import shrink_objects
     assert shrink_objects([]) == []
+
+
+# =============================================================================
+# Near-miss high-impact primitives
+# =============================================================================
+
+def test_snap_to_column_majority():
+    from domains.arc.transformation_primitives import snap_to_column_majority
+    grid = [[1, 2], [1, 3], [1, 2]]
+    result = snap_to_column_majority(grid)
+    assert result[0][0] == 1  # column 0 majority is 1
+    assert result[0][1] == 2  # column 1 majority is 2
+    assert result[1][1] == 2  # was 3, snapped to 2
+
+def test_snap_to_row_majority():
+    from domains.arc.transformation_primitives import snap_to_row_majority
+    grid = [[1, 1, 2], [3, 3, 4]]
+    result = snap_to_row_majority(grid)
+    assert result[0][2] == 1  # was 2, snapped to 1
+    assert result[1][2] == 3  # was 4, snapped to 3
+
+def test_complete_4fold_symmetry():
+    from domains.arc.transformation_primitives import complete_4fold_symmetry
+    grid = [[1, 0, 0], [0, 0, 0], [0, 0, 0]]
+    result = complete_4fold_symmetry(grid)
+    assert result[0][2] == 1  # 90° rotation
+    assert result[2][2] == 1  # 180° rotation
+    assert result[2][0] == 1  # 270° rotation
+
+def test_fill_concave_hull():
+    from domains.arc.transformation_primitives import fill_concave_hull
+    # L-shaped object, fill the interior
+    grid = [[1, 1, 1], [1, 0, 0], [1, 0, 0]]
+    result = fill_concave_hull(grid)
+    assert result[1][1] == 1  # filled
+    assert result[1][2] == 1  # filled
+    assert result[2][1] == 1  # filled
+    assert result[2][2] == 1  # filled
+
+def test_connect_same_color_h():
+    from domains.arc.transformation_primitives import connect_same_color_h
+    grid = [[1, 0, 0, 1], [0, 0, 0, 0]]
+    result = connect_same_color_h(grid)
+    assert result[0] == [1, 1, 1, 1]
+    assert result[1] == [0, 0, 0, 0]
+
+def test_connect_same_color_v():
+    from domains.arc.transformation_primitives import connect_same_color_v
+    grid = [[1, 0], [0, 0], [1, 0]]
+    result = connect_same_color_v(grid)
+    assert result[1][0] == 1  # gap filled
+    assert result[1][1] == 0  # no change
