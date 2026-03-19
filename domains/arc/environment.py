@@ -2311,6 +2311,172 @@ class ARCEnv(Environment):
 
         rule_types.append(("rowcol_maj_rule", _learn_rowcol_maj, _apply_rowcol_maj))
 
+        # Rule type 13: (center, NW, NE, SW, SE) diagonal neighbors
+        def _learn_diag_nbr(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        nw = inp[r-1][c-1] if r > 0 and c > 0 else -1
+                        ne = inp[r-1][c+1] if r > 0 and c < w-1 else -1
+                        sw = inp[r+1][c-1] if r < h-1 and c > 0 else -1
+                        se = inp[r+1][c+1] if r < h-1 and c < w-1 else -1
+                        key = (inp[r][c], nw, ne, sw, se)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_diag_nbr(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    nw = grid[r-1][c-1] if r > 0 and c > 0 else -1
+                    ne = grid[r-1][c+1] if r > 0 and c < w-1 else -1
+                    sw = grid[r+1][c-1] if r < h-1 and c > 0 else -1
+                    se = grid[r+1][c+1] if r < h-1 and c < w-1 else -1
+                    key = (grid[r][c], nw, ne, sw, se)
+                    row.append(rule.get(key, grid[r][c]))
+                result.append(row)
+            return result
+
+        rule_types.append(("diag_nbr_rule", _learn_diag_nbr, _apply_diag_nbr))
+
+        # Rule type 14: (center, up, down, left, right) — individual cardinal neighbor colors
+        def _learn_cross_context(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        up    = inp[r-1][c] if r > 0 else -1
+                        down  = inp[r+1][c] if r < h-1 else -1
+                        left  = inp[r][c-1] if c > 0 else -1
+                        right = inp[r][c+1] if c < w-1 else -1
+                        key = (inp[r][c], up, down, left, right)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_cross_context(grid, rule):
+            h, w = len(grid), len(grid[0])
+            result = []
+            for r in range(h):
+                row = []
+                for c in range(w):
+                    up    = grid[r-1][c] if r > 0 else -1
+                    down  = grid[r+1][c] if r < h-1 else -1
+                    left  = grid[r][c-1] if c > 0 else -1
+                    right = grid[r][c+1] if c < w-1 else -1
+                    key = (grid[r][c], up, down, left, right)
+                    row.append(rule.get(key, grid[r][c]))
+                result.append(row)
+            return result
+
+        rule_types.append(("cross_context_rule", _learn_cross_context, _apply_cross_context))
+
+        # Rule type 15: (center, min_dist_to_nearest_edge)
+        def _learn_dist_border(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        dist = min(r, h-1-r, c, w-1-c)
+                        key = (inp[r][c], dist)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_dist_border(grid, rule):
+            h, w = len(grid), len(grid[0])
+            return [[rule.get((grid[r][c], min(r, h-1-r, c, w-1-c)), grid[r][c])
+                     for c in range(w)] for r in range(h)]
+
+        rule_types.append(("dist_border_rule", _learn_dist_border, _apply_dist_border))
+
+        # Rule type 16: (center, is_member_of_largest_object) — flood-fill 4-connected
+        def _get_largest_obj_mask(grid):
+            """Return set of (r,c) belonging to the largest 4-connected component
+            of non-zero pixels."""
+            h, w = len(grid), len(grid[0])
+            visited = [[False]*w for _ in range(h)]
+            components = []
+            for sr in range(h):
+                for sc in range(w):
+                    if grid[sr][sc] != 0 and not visited[sr][sc]:
+                        # BFS flood fill
+                        comp = []
+                        stack = [(sr, sc)]
+                        visited[sr][sc] = True
+                        while stack:
+                            cr, cc = stack.pop()
+                            comp.append((cr, cc))
+                            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                                nr2, nc2 = cr+dr, cc+dc
+                                if (0 <= nr2 < h and 0 <= nc2 < w
+                                        and not visited[nr2][nc2]
+                                        and grid[nr2][nc2] != 0):
+                                    visited[nr2][nc2] = True
+                                    stack.append((nr2, nc2))
+                        components.append(comp)
+            if not components:
+                return set()
+            largest = max(components, key=len)
+            return set(largest)
+
+        def _learn_obj_membership(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                largest_mask = _get_largest_obj_mask(inp)
+                for r in range(h):
+                    for c in range(w):
+                        is_member = 1 if (r, c) in largest_mask else 0
+                        key = (inp[r][c], is_member)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_obj_membership(grid, rule):
+            h, w = len(grid), len(grid[0])
+            largest_mask = _get_largest_obj_mask(grid)
+            return [[rule.get((grid[r][c], 1 if (r, c) in largest_mask else 0), grid[r][c])
+                     for c in range(w)] for r in range(h)]
+
+        rule_types.append(("obj_membership_rule", _learn_obj_membership, _apply_obj_membership))
+
+        # Rule type 17: (center, r, c) — absolute position
+        def _learn_row_col_pos(exs):
+            rule = {}
+            for inp, out in exs:
+                h, w = len(inp), len(inp[0])
+                for r in range(h):
+                    for c in range(w):
+                        key = (inp[r][c], r, c)
+                        val = out[r][c]
+                        if key in rule and rule[key] != val:
+                            return None
+                        rule[key] = val
+            return rule
+
+        def _apply_row_col_pos(grid, rule):
+            h, w = len(grid), len(grid[0])
+            return [[rule.get((grid[r][c], r, c), grid[r][c])
+                     for c in range(w)] for r in range(h)]
+
+        rule_types.append(("row_col_pos_rule", _learn_row_col_pos, _apply_row_col_pos))
+
         for rule_name, learn_fn, apply_fn in rule_types:
             # First: check if rule is consistent on ALL training
             rule = learn_fn(examples)
@@ -2382,6 +2548,8 @@ class ARCEnv(Environment):
                 ("compact_local_rule", _learn_compact, _apply_compact),
                 ("count_local_rule", _learn_v2, _apply_v2),
                 ("rowcol_nz_rule", _learn_rowcol_nz, _apply_rowcol_nz),
+                ("diag_nbr_rule", _learn_diag_nbr, _apply_diag_nbr),
+                ("cross_context_rule", _learn_cross_context, _apply_cross_context),
             ]:
                 rule = learn_fn(transformed_examples)
                 if rule is None:

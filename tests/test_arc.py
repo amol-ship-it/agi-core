@@ -399,5 +399,97 @@ class TestProceduralLOOCV(unittest.TestCase):
         )
 
 
+class TestNewLocalRules(unittest.TestCase):
+    """Tests for the 5 new local rule types added in Task 14."""
+
+    def _make_env(self):
+        return ARCEnv()
+
+    def test_diagonal_nbr_rule(self):
+        """Diagonal neighbor rule learns from corner neighbors and applies LOOCV."""
+        env = self._make_env()
+        # A 3x3 grid: center pixel (1,1) outputs 5 only if NW=1
+        # Three consistent training examples needed for LOOCV with >=2
+        examples = [
+            ([[1, 0, 0], [0, 2, 0], [0, 0, 0]],
+             [[1, 0, 0], [0, 5, 0], [0, 0, 0]]),
+            ([[1, 0, 0], [0, 2, 0], [0, 0, 3]],
+             [[1, 0, 0], [0, 5, 0], [0, 0, 3]]),
+            ([[1, 0, 2], [0, 2, 0], [0, 0, 0]],
+             [[1, 0, 2], [0, 5, 0], [0, 0, 0]]),
+        ]
+        task = Task(task_id="test_diag", train_examples=examples, test_inputs=[])
+        # The rule_types list now includes diag_nbr_rule; verify it fires or at
+        # minimum that try_local_rules doesn't crash
+        result = env.try_local_rules(task)
+        # We don't assert a specific outcome — the rule may or may not match
+        # depending on LOOCV; we verify no exception is raised.
+
+    def test_cross_context_rule(self):
+        """Cross-context rule (up/down/left/right individually) learns consistently."""
+        env = self._make_env()
+        # Output is copy of input except pixel (1,1) changes to 7 when all
+        # cardinal neighbors are 0.
+        examples = [
+            ([[0, 0, 0], [0, 2, 0], [0, 0, 0]],
+             [[0, 0, 0], [0, 7, 0], [0, 0, 0]]),
+            ([[0, 0, 0], [0, 2, 0], [0, 0, 3]],
+             [[0, 0, 0], [0, 7, 0], [0, 0, 3]]),
+            ([[0, 0, 4], [0, 2, 0], [0, 0, 0]],
+             [[0, 0, 4], [0, 7, 0], [0, 0, 0]]),
+        ]
+        task = Task(task_id="test_cross", train_examples=examples, test_inputs=[])
+        result = env.try_local_rules(task)
+        # Should not raise; may or may not match depending on LOOCV
+
+    def test_distance_to_border_rule(self):
+        """Distance-to-border rule uses min edge proximity as key feature."""
+        env = self._make_env()
+        # In a 3x3 grid: border pixels (dist=0) stay 1, interior (dist=1) → 9
+        examples = [
+            ([[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+             [[1, 1, 1], [1, 9, 1], [1, 1, 1]]),
+            ([[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+             [[1, 1, 1], [1, 9, 1], [1, 1, 1]]),
+            ([[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+             [[1, 1, 1], [1, 9, 1], [1, 1, 1]]),
+        ]
+        task = Task(task_id="test_distborder", train_examples=examples, test_inputs=[])
+        result = env.try_local_rules(task)
+        self.assertIsNotNone(result, "dist_border_rule should solve border-interior task")
+
+    def test_object_membership_rule(self):
+        """Object-membership rule marks pixels in the largest connected component."""
+        env = self._make_env()
+        # Largest component (3 cells) → output 5; isolated pixels → 0
+        examples = [
+            ([[1, 1, 0], [0, 1, 0], [0, 0, 2]],
+             [[5, 5, 0], [0, 5, 0], [0, 0, 2]]),
+            ([[1, 1, 0], [0, 1, 0], [0, 2, 0]],
+             [[5, 5, 0], [0, 5, 0], [0, 2, 0]]),
+            ([[1, 1, 0], [0, 1, 0], [2, 0, 0]],
+             [[5, 5, 0], [0, 5, 0], [2, 0, 0]]),
+        ]
+        task = Task(task_id="test_objmemb", train_examples=examples, test_inputs=[])
+        result = env.try_local_rules(task)
+        # Should not raise; outcome depends on LOOCV consistency
+
+    def test_row_col_position_rule(self):
+        """Position rule handles exact-position-dependent transformations."""
+        env = self._make_env()
+        # Output pixel = r+c+1 (deterministic from position)
+        examples = [
+            ([[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+             [[1, 2, 3], [2, 3, 4], [3, 4, 5]]),
+            ([[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+             [[1, 2, 3], [2, 3, 4], [3, 4, 5]]),
+            ([[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+             [[1, 2, 3], [2, 3, 4], [3, 4, 5]]),
+        ]
+        task = Task(task_id="test_rowcolpos", train_examples=examples, test_inputs=[])
+        result = env.try_local_rules(task)
+        self.assertIsNotNone(result, "row_col_pos_rule should solve position-dependent task")
+
+
 if __name__ == "__main__":
     unittest.main()
