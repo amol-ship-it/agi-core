@@ -398,7 +398,7 @@ class Learner:
         ]
 
         # Try ALL same-dims candidates (correction only works when dims match)
-        candidates = sorted(ctx.enum_candidates, key=lambda s: s.prediction_error)[:200]
+        candidates = sorted(ctx.enum_candidates, key=lambda s: s.prediction_error)[:500]
 
         for nm in candidates:
             if nm.prediction_error <= solve_thresh:
