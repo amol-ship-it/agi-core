@@ -154,6 +154,22 @@ class Environment(ABC):
         """
         return None
 
+    def try_local_rules(
+        self, task: "Task",
+    ) -> Optional[tuple[str, Any]]:
+        """Try solving via learned pixel-level neighborhood rules.
+        Default: not supported (returns None).
+        """
+        return None
+
+    def try_procedural(
+        self, task: "Task",
+    ) -> Optional[tuple[str, Any]]:
+        """Try solving via procedural object DSL (per-object action learning).
+        Default: not supported (returns None).
+        """
+        return None
+
 
 # =============================================================================
 # Interface 2: Grammar (primitives + composition rules)
@@ -216,6 +232,15 @@ class Grammar(ABC):
         Default: no predicates.
         """
         return []
+
+    def inverse_primitives(self) -> dict[str, str]:
+        """Map primitive names to their inverses for bidirectional search.
+
+        Used by bidirectional search: if f(x)=y, then f_inv(y)=x.
+        Only invertible primitives need entries.
+        Default: empty (no invertible primitives).
+        """
+        return {}
 
     def essential_pair_concepts(self) -> frozenset[str]:
         """Return names of primitives that should always be included in pair/triple

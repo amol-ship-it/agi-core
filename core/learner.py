@@ -282,8 +282,6 @@ class Learner:
         """Learn cellular automaton rules from training examples."""
         if ctx.solved or not self.grammar.allow_structural_phases():
             return None
-        if not hasattr(self.env, 'try_local_rules'):
-            return None
         t = time.time()
         result = self.env.try_local_rules(ctx.task)
         if result is not None:
@@ -299,8 +297,6 @@ class Learner:
     def _phase_procedural(self, ctx: _WakeContext) -> Optional[str]:
         """Learn per-object action rules from pixel diffs."""
         if ctx.solved or not self.grammar.allow_structural_phases():
-            return None
-        if not hasattr(self.env, 'try_procedural'):
             return None
         t = time.time()
         result = self.env.try_procedural(ctx.task)

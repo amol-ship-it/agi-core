@@ -170,6 +170,39 @@ class TestDriveSignalDefaults(unittest.TestCase):
         self.assertAlmostEqual(total, 1.0 * 2.0 + 0.01 * 1.0)
 
 
+class TestGrammarInversePrimitives(unittest.TestCase):
+
+    def test_grammar_inverse_primitives_default(self):
+        from core.types import Primitive
+        from core.interfaces import Grammar
+
+        class MinGrammar(Grammar):
+            def base_primitives(self): return []
+            def compose(self, outer, inner_programs):
+                from core.types import Program
+                return Program(root=outer.name, children=inner_programs)
+            def mutate(self, program, primitives, tm=None): return program
+            def crossover(self, a, b): return a
+
+        g = MinGrammar()
+        assert g.inverse_primitives() == {}
+
+
+class TestEnvTryLocalRulesDefault(unittest.TestCase):
+
+    def test_env_try_local_rules_default(self):
+        from core.interfaces import Environment
+        class MinEnv(Environment):
+            def load_task(self, task): return None
+            def execute(self, program, input_data): return None
+            def reset(self): pass
+        env = MinEnv()
+        from core.types import Task
+        task = Task("t1", [(1, 2)], [3])
+        assert env.try_local_rules(task) is None
+        assert env.try_procedural(task) is None
+
+
 class TestGrammarProposeStrata(unittest.TestCase):
 
     def test_grammar_propose_strata_default(self):
