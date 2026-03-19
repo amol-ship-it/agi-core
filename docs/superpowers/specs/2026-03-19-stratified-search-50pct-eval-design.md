@@ -63,9 +63,16 @@ class SearchStratum:
     budget_fraction: float = 0.1  # share of task compute budget
     try_corrections: bool = True
     metadata: dict = field(default_factory=dict)
+    # Expected metadata keys (domain-specific, core ignores unknown keys):
+    #   "run_object_decomp": bool — run try_object_decomposition in structural stage
+    #   "run_cross_ref": bool — run try_cross_reference in structural stage
+    #   "run_local_rules": bool — run try_local_rules in structural stage
+    #   "run_procedural": bool — run try_procedural in structural stage
+    #   "run_for_each_object": bool — run try_for_each_object in structural stage
+    #   "run_conditional": bool — run try_conditional_per_object in structural stage
 ```
 
-**New method on `Environment` in `core/interfaces.py`:**
+**New method on `Grammar` in `core/interfaces.py`:**
 
 ```python
 def propose_strata(
@@ -86,9 +93,42 @@ def propose_strata(
     )]
 ```
 
-**Core learner change:** The wake loop iterates over `env.propose_strata(task, primitives)` instead of calling 10 hardcoded phase methods. Each stratum runs exhaustive enumeration over its primitive subset. Existing phase methods (`try_object_decomposition`, `try_cross_reference`, etc.) remain as optional hooks that strata can invoke via metadata flags.
+**Rationale for Grammar (not Environment):** `Grammar` already owns search-planning concerns — `task_priority_primitives()`, `essential_pair_concepts()`, and `prepare_for_task()` all live there. Strata are a natural extension of "what to search with." Placing `propose_strata()` on `Environment` would split search-planning across two interfaces.
 
-**Invariant preserved:** Core never imports domain code. `SearchStratum` is a pure data type. The domain decides what strata to propose; the core decides how to search within each.
+**Core learner change — explicit wake loop structure:**
+
+The wake loop has two stages per task:
+
+1. **Stratum enumeration stage:** For each stratum from `grammar.propose_strata(task, primitives)`, run exhaustive enumeration (depth 1..max_depth) over that stratum's primitive subset with that stratum's budget fraction. Collect best candidates across all strata into a unified candidate pool.
+
+2. **Structural hooks stage:** Run the existing structural methods once globally using the aggregated candidates from stage 1:
+   - `env.try_object_decomposition(task, stratum_primitives)` — per-object transforms
+   - `env.try_for_each_object(task, candidates)` — top-K per-object
+   - `env.try_cross_reference(task, stratum_primitives)` — separator/colormap ops
+   - `env.try_local_rules(task)` — local neighborhood rules (promoted to interface)
+   - `env.try_procedural(task)` — procedural object DSL (promoted to interface)
+   - `env.try_conditional_per_object(task, candidates, predicates)` — conditional per-object
+   - If `stratum.try_corrections`: `env.infer_output_correction()` on best candidate
+
+This preserves current behavior while allowing strata to focus the enumeration stage. The structural hooks are NOT duplicated per stratum — they run once with the combined candidate pool.
+
+**Interface cleanup:** `try_local_rules()` and `try_procedural()` are promoted from ad-hoc `hasattr` checks to first-class optional methods on `Environment` with default `return None`:
+
+```python
+def try_local_rules(self, task: Task) -> Optional[tuple[str, Any]]:
+    """Try solving via learned pixel-level neighborhood rules.
+    Default: not supported (returns None).
+    """
+    return None
+
+def try_procedural(self, task: Task) -> Optional[tuple[str, Any]]:
+    """Try solving via procedural object DSL (per-object action learning).
+    Default: not supported (returns None).
+    """
+    return None
+```
+
+**Invariant preserved:** Core never imports domain code. `SearchStratum` is a pure data type. The domain's Grammar decides what strata to propose; the core decides how to search within each.
 
 ### 2.2 Backward Compatibility
 
@@ -142,27 +182,31 @@ def fingerprint_task(task: Task) -> TaskFingerprint:
 
 ### 4.1 The 12 Strata
 
-| # | Stratum | Trigger | Primitives | Est. Tasks |
-|---|---------|---------|------------|------------|
-| 1 | `exhaustive_core` | Always | All current 48 transforms + learned | Baseline |
-| 2 | `inpainting` | `has_holes` or `symmetry_broken` or `has_periodic` | inpaint_* family (existing + 5 new) | 15-20 |
-| 3 | `separator_algebra` | `has_separators` | extract_section, overlay_sections, separator ops, cross-ref hooks | 20-30 |
-| 4 | `object_transform` | `n_objects >= 2` and `dim_change == "same"` | per-object transforms, recolor strategies, sort/align objects | 40-50 |
-| 5 | `object_extraction` | `n_objects >= 2` and `dim_change == "shrink"` | extract_by_property, filter objects, crop prims | 20-30 |
-| 6 | `local_rules` | `dim_change == "same"` and `pixel_diff_ratio < 0.5` | all 12 + 5 new local rule types | 30-40 |
-| 7 | `tiling_scaling` | `dim_change == "grow"` or `input_is_subgrid` | tile/scale/mirror_tile + border ops | 10-15 |
-| 8 | `color_logic` | `is_recoloring` or `colors_added > 0` | swap/replace/keep/erase + sequential coloring | 15-20 |
-| 9 | `pattern_completion` | `symmetry_broken` or `has_periodic` | symmetry_complete, extrapolate_pattern | 10-15 |
-| 10 | `line_drawing` | `n_objects >= 2` and `colors_added > 0` | connect objects, draw lines, extend rays | 10-15 |
-| 11 | `template_stamping` | `n_sections >= 2` or same-size objects | template extraction + application | 15-20 |
-| 12 | `denoising` | `pixel_diff_ratio < 0.1` and `dim_change == "same"` | remove_isolated, majority_filter, morph_close | 5-10 |
+| # | Stratum | Trigger | Primitives | Est. Train | Est. Eval |
+|---|---------|---------|------------|------------|-----------|
+| 1 | `exhaustive_core` | Always | All current 48 transforms + learned | Baseline | Baseline |
+| 2 | `inpainting` | `has_holes` or `symmetry_broken` or `has_periodic` | inpaint_* family (existing + 5 new) | 10-15 | 5-10 |
+| 3 | `separator_algebra` | `has_separators` | extract_section, overlay_sections, separator ops, cross-ref hooks | 12-18 | 8-15 |
+| 4 | `object_transform` | `n_objects >= 2` and `dim_change == "same"` | per-object transforms, recolor strategies, sort/align objects | 25-35 | 15-25 |
+| 5 | `object_extraction` | `n_objects >= 2` and `dim_change == "shrink"` | extract_by_property, filter objects, crop prims | 12-18 | 8-15 |
+| 6 | `local_rules` | `dim_change == "same"` and `pixel_diff_ratio < 0.5` | all 12 + 5 new local rule types | 18-25 | 10-15 |
+| 7 | `tiling_scaling` | `dim_change == "grow"` or `input_is_subgrid` | tile/scale/mirror_tile + border ops | 6-10 | 4-8 |
+| 8 | `color_logic` | `is_recoloring` or `colors_added > 0` | swap/replace/keep/erase + sequential coloring | 8-12 | 6-10 |
+| 9 | `pattern_completion` | `symmetry_broken` or `has_periodic` | symmetry_complete, extrapolate_pattern | 6-10 | 4-8 |
+| 10 | `line_drawing` | `n_objects >= 2` and `colors_added > 0` | connect objects, draw lines, extend rays | 6-10 | 4-8 |
+| 11 | `template_stamping` | `n_sections >= 2` or same-size objects | template extraction + application | 8-12 | 6-10 |
+| 12 | `denoising` | `pixel_diff_ratio < 0.1` and `dim_change == "same"` | remove_isolated, majority_filter, morph_close | 3-6 | 2-5 |
 
 ### 4.2 Budget Allocation
 
 - `exhaustive_core`: 40% of task compute budget (proven workhorse)
 - Triggered strata share remaining 60% equally
 - Minimum floor: 5% per stratum (prevents starvation)
+- Maximum cap: no single triggered stratum gets more than 30% (prevents one stratum starving others)
 - Example: if 4 strata trigger → core gets 40%, each triggered stratum gets 15%
+- Example: if 8 strata trigger → core gets 40%, each gets max(5%, 60%/8) = 7.5%
+
+**Relationship to `task_priority_primitives()`:** `task_priority_primitives()` provides priority ordering WITHIN a stratum's primitive set (which primitives to try first in exhaustive enumeration). Strata provide the partitioning (which primitives are in scope at all). These are complementary, not redundant.
 
 ### 4.3 Mapping from Current Phases
 
@@ -233,8 +277,10 @@ def fingerprint_task(task: Task) -> TaskFingerprint:
 | Primitive | Kind | Description |
 |-----------|------|-------------|
 | `color_by_object_rank` | transform | Recolor objects by size rank |
-| `overlay_and` | binary | Keep pixels non-zero in both grids |
-| `color_intersection` | binary | Keep grid1 color where both non-zero |
+| `overlay_and` | transform (arity-2) | Keep pixels non-zero in both grids |
+| `color_intersection` | transform (arity-2) | Keep grid1 color where both non-zero |
+
+**Note on arity-2 primitives:** These compose as `Program(root="overlay_and", children=[prog_A, prog_B])` where both children are evaluated independently on the same input. The grammar's `compose()` handles arity-2 nodes by evaluating each child program on the input grid, then applying the binary operation. The environment's `_eval_tree()` already supports this pattern via the existing `overlay`, `mask_by`, `subtract_grid`, and `xor_grid` primitives.
 
 ### 5.3 Tier 3 — Speculative
 
@@ -299,15 +345,29 @@ Activated when `SearchStratum.max_depth >= 4`.
 
 ### 7.3 Multi-Round Compounding (Core)
 
-Increase from 2 to 5 rounds with progressive budget:
+Increase from 2 to 5 rounds with progressive budget.
 
-| Round | Budget Share | Purpose |
-|-------|-------------|---------|
-| 1 | 40% | Initial sweep, build base library |
-| 2 | 25% | Compound: depth-1 over learned = depth-3+ |
-| 3 | 15% | Deep compound: depth-2 over learned = depth-5+ |
-| 4 | 10% | Refinement: corrections, rare strata |
-| 5 | 10% | Final sweep with full library |
+**Budget model:** The `compute_cap` parameter defines total compute across ALL rounds (not per-round). The `derive_rounds()` function in `config.py` is updated to return 5 rounds when `compute_cap >= 10M`. Each round's per-task budget is `compute_cap * round_share / n_tasks_in_round`.
+
+| Round | Budget Share | Tasks Searched | Purpose |
+|-------|-------------|----------------|---------|
+| 1 | 40% | All 400 | Initial sweep, build base library |
+| 2 | 25% | All 400 | Compound: depth-1 over learned = depth-3+ |
+| 3 | 15% | Unsolved only (~280) | Deep compound: depth-2 over learned = depth-5+ |
+| 4 | 10% | Unsolved only (~240) | Refinement: corrections, rare strata |
+| 5 | 10% | Unsolved only (~220) | Final sweep with full library |
+
+**Key optimization:** Rounds 3-5 only search unsolved tasks. Since each later round has fewer tasks to search, the per-task budget actually INCREASES despite the smaller total budget share. E.g., Round 3 has 15% of total budget but only ~280 tasks → more compute per task than Round 1 at 40%/400.
+
+**Concrete budget example (contest mode, compute_cap=50M):**
+
+| Round | Total Ops | Tasks | Per-Task Ops |
+|-------|-----------|-------|-------------|
+| 1 | 20M | 400 | 50K |
+| 2 | 12.5M | 400 | 31K |
+| 3 | 7.5M | ~280 | ~27K |
+| 4 | 5M | ~240 | ~21K |
+| 5 | 5M | ~220 | ~23K |
 
 Library pruning between rounds removes entries with zero reuse.
 
@@ -362,16 +422,17 @@ This is the single biggest lever for closing the generalization gap.
 
 ## 9. Implementation Phases
 
-### Phase 1: Foundation (Fingerprinting + Stratification)
+### Phase 1: Foundation (Fingerprinting + Stratification + LOOCV)
 
 **Changes:**
 - `core/types.py`: Add `SearchStratum` dataclass
-- `core/interfaces.py`: Add `propose_strata()` to `Environment`, `inverse_primitives()` to `Grammar`, `get_primitive_generality()` to `Memory`
-- `core/learner.py`: Refactor wake loop to iterate over strata
+- `core/interfaces.py`: Add `propose_strata()` to `Grammar`, `inverse_primitives()` to `Grammar`, `get_primitive_generality()` to `Memory`, promote `try_local_rules()` and `try_procedural()` to `Environment` interface
+- `core/learner.py`: Refactor wake loop to two-stage model (stratum enumeration + structural hooks)
 - `domains/arc/fingerprint.py`: New file — `TaskFingerprint` + `fingerprint_task()`
-- `domains/arc/environment.py`: Implement `propose_strata()` using fingerprint
+- `domains/arc/grammar.py`: Implement `propose_strata()` using fingerprint
+- `domains/arc/environment.py`: Extend LOOCV to colormaps, procedural, and input-pred corrections (moved from Phase 4 — low risk, high impact on generalization gap, independent of other changes)
 
-**Checkpoint:** Full benchmark = same score as current (118/49 ± 2). Zero regression allowed.
+**Checkpoint:** Full benchmark = same score as current (118/49 ± 2). Zero regression allowed. LOOCV extension may cause small eval improvement even without new primitives.
 
 ### Phase 2: New Primitives + Local Rules
 
@@ -381,28 +442,31 @@ This is the single biggest lever for closing the generalization gap.
 - Each primitive tagged with stratum
 
 **Sub-phases (measure after each):**
-- 2a: Tier 1 (14 primitives) → target train 140+ (35%), eval 65+ (16%)
-- 2b: Tier 2 (9 primitives) → target train 160+ (40%), eval 80+ (20%)
-- 2c: Tier 3 (2 primitives) → target train 165+ (41%), eval 85+ (21%)
+- 2a: Tier 1 (14 primitives) → target train 130+ (32%), eval 55+ (14%)
+- 2b: Tier 2 (9 primitives) → target train 140+ (35%), eval 65+ (16%)
+- 2c: Tier 3 (2 primitives) → target train 145+ (36%), eval 70+ (17%)
 
-**Checkpoint:** Train 160+ (40%), Eval 80+ (20%).
+**Checkpoint:** Train 140+ (35%), Eval 65+ (16%). Note: primitives alone cannot reach 50% — they provide the building blocks that Phases 3-4 will compose and generalize.
 
 ### Phase 3: Search Evolution
 
 **Changes:**
 - `core/learner.py`: Correction-as-composition, bidirectional search, 5-round compounding
+- `core/config.py`: Update `derive_rounds()` for 5 rounds at compute_cap >= 10M
 - `domains/arc/grammar.py`: Implement `inverse_primitives()`
 
-**Checkpoint:** Train 200+ (50%), Eval 140+ (35%).
+**Checkpoint:** Train 180+ (45%), Eval 120+ (30%). Multi-round compounding should show measurable gains in rounds 3-5. Bidirectional search may contribute 5-10 additional solves (limited by small invertible primitive set).
 
-### Phase 4: Generalization
+### Phase 4: Generalization & Culture Transfer
 
 **Changes:**
 - `core/learner.py`: Stratum culture transfer, overfit detection
 - `core/memory.py`: Primitive generality tracking
-- `domains/arc/environment.py`: Extend LOOCV to colormaps, procedural, corrections
+- Culture JSON format extended with stratum_stats
 
-**Checkpoint:** Train 220+ (55%), Eval 200+ (50%).
+**Checkpoint:** Train 220+ (55%), Eval 200+ (50%). The train/eval gap should shrink from ~17% to ~5%.
+
+**Documentation:** Every phase checkpoint is recorded in DECISIONS.md with measured before/after numbers, rationale for any deviations from targets, and hyperparameter values used.
 
 ---
 
@@ -426,10 +490,12 @@ Every result logged in DECISIONS.md with before/after numbers.
 |------|-----------|
 | Search dilution from new primitives | Stratification — new prims only in relevant strata |
 | Fingerprint errors misclassifying tasks | `exhaustive_core` always runs; strata are additive |
-| Bidirectional search compute cost | Only activated when `max_depth >= 4`; small invertible subset |
+| Bidirectional search compute cost | Only activated when `max_depth >= 4`; small invertible subset. Expected yield: 5-10 tasks (limited by only 5 invertible primitives). May be deprioritized if ROI is too low. |
 | Regression from refactoring | Phase 1 checkpoint requires zero regression |
 | Overfit detection too aggressive | Complexity gate tunable; start conservative, relax if needed |
-| 5 rounds too slow | Progressive budget — later rounds are cheaper; total ~10-15 min |
+| 5 rounds too slow | Progressive budget — later rounds search only unsolved tasks; total ~10-15 min |
+| Many strata trigger simultaneously | Budget floor (5%) and cap (30%) per stratum. With 8 strata: core=40%, each=7.5%. Worst case with all 11 triggered: core=40%, each=5.4%. Budget arithmetic always adds to 100%. |
+| Phase 1 refactoring causes subtle bugs in later phases | Branch per phase. If Phase 2 reveals Phase 1 issues, fix on Phase 1 branch and merge forward. |
 
 ---
 
@@ -439,8 +505,9 @@ Every result logged in DECISIONS.md with before/after numbers.
 | File | Change |
 |------|--------|
 | `core/types.py` | Add `SearchStratum` dataclass |
-| `core/interfaces.py` | Add `propose_strata()`, `inverse_primitives()`, `get_primitive_generality()` |
-| `core/learner.py` | Refactor wake loop, add correction-as-composition, bidirectional search, 5-round compounding |
+| `core/interfaces.py` | Add `propose_strata()` and `inverse_primitives()` to Grammar; promote `try_local_rules()` and `try_procedural()` to Environment; add `get_primitive_generality()` to Memory |
+| `core/learner.py` | Refactor wake loop to two-stage model, add correction-as-composition, bidirectional search, 5-round compounding |
+| `core/config.py` | Update `derive_rounds()` for 5-round support |
 | `core/memory.py` | Add primitive generality tracking |
 
 ### Domain (ARC-specific)
@@ -448,8 +515,8 @@ Every result logged in DECISIONS.md with before/after numbers.
 |------|--------|
 | `domains/arc/fingerprint.py` | **New** — TaskFingerprint + fingerprint_task() |
 | `domains/arc/transformation_primitives.py` | Add 25 new primitives |
-| `domains/arc/environment.py` | Implement propose_strata(), 5 new local rules, extend LOOCV |
-| `domains/arc/grammar.py` | Implement inverse_primitives() |
+| `domains/arc/environment.py` | 5 new local rules, extend LOOCV to colormaps/procedural/corrections, remove hasattr checks for try_local_rules/try_procedural |
+| `domains/arc/grammar.py` | Implement `propose_strata()` using fingerprint, implement `inverse_primitives()` |
 
 ### Tests
 | File | Change |
