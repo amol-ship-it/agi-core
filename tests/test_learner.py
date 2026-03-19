@@ -935,7 +935,7 @@ class TestRunnerHelpers(unittest.TestCase):
             exhaustive_pair_top_k=None, exhaustive_triple_top_k=None,
         )
         resolved = resolve_from_preset(args, PRESETS["contest"])
-        self.assertEqual(resolved["rounds"], 3)  # auto: 50M >= 20M
+        self.assertEqual(resolved["rounds"], 5)  # auto: 50M >= 10M → 5 rounds
         self.assertEqual(resolved["compute_cap"], 50_000_000)
         # Auto-derived: wide pools from 50M budget (beam search removed)
         self.assertEqual(resolved["exhaustive_pair_top_k"], 48)
@@ -1312,8 +1312,18 @@ class TestDeriveSearchParams(unittest.TestCase):
 
     def test_derive_rounds_high(self):
         from core.config import derive_rounds
-        self.assertEqual(derive_rounds(20_000_000), 3)
-        self.assertEqual(derive_rounds(50_000_000), 3)
+        # 10M+ → 5 rounds (contest mode with unsolved-only search in rounds 3-5)
+        self.assertEqual(derive_rounds(10_000_000), 5)
+        self.assertEqual(derive_rounds(20_000_000), 5)
+        self.assertEqual(derive_rounds(50_000_000), 5)
+
+    def test_derive_rounds_5_for_high_compute(self):
+        from core.config import derive_rounds
+        assert derive_rounds(50_000_000) == 5
+        assert derive_rounds(10_000_000) == 5
+        assert derive_rounds(9_999_999) == 2
+        assert derive_rounds(200_000) == 2
+        assert derive_rounds(100_000) == 1
 
     def test_resolve_auto_derives(self):
         """resolve_from_preset with no CLI overrides produces valid params."""

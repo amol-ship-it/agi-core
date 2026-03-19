@@ -1052,13 +1052,39 @@ class Learner:
             logger.info(f"    Library size: {len(self.memory.get_library())}")
             logger.info(f"    Workers: {cfg.workers}")
 
+            # Rounds 3+ (index >= 2): only search tasks not yet solved.
+            # This focuses compute on the hardest remaining problems while
+            # still benefiting from the culture built in earlier rounds.
+            if round_num >= 2:
+                solved_ids = set(self.memory.get_solutions().keys())
+                round_tasks = [t for t in tasks if t.task_id not in solved_ids]
+                logger.info(
+                    f"    Round {round_num + 1}: {len(round_tasks)}/{len(tasks)} "
+                    f"unsolved tasks (skipping {len(solved_ids)} already solved)"
+                )
+            else:
+                round_tasks = tasks
+
             wake_results = self._wake_parallel(
-                tasks, cfg.workers, round_num + 1, on_task_done)
+                round_tasks, cfg.workers, round_num + 1, on_task_done)
 
             sleep_result = self.sleep()
 
-            train_solved = sum(1 for w in wake_results if w.train_solved)
-            total = len(wake_results)
+            # For rounds 3+, wake_results only covers unsolved tasks.
+            # We use the full task count and add carry-forward solved tasks
+            # so that metrics (solve_rate, tasks_solved) reflect the full set.
+            total = len(tasks)
+            new_train_solved = sum(1 for w in wake_results if w.train_solved)
+            carry_forward_solved = 0
+            if round_num >= 2:
+                # Carry forward all tasks already solved in previous rounds.
+                # Subtract newly solved this round to avoid double-counting.
+                carry_solved_ids = set(self.memory.get_solutions().keys())
+                new_solved_ids = {w.task_id for w in wake_results if w.train_solved}
+                carry_forward_solved = len(carry_solved_ids - new_solved_ids)
+                train_solved = carry_forward_solved + new_train_solved
+            else:
+                train_solved = new_train_solved
             train_rate = train_solved / total if total > 0 else 0.0
 
             rr = RoundResult(
@@ -1069,6 +1095,7 @@ class Learner:
                 tasks_total=total,
                 train_solve_rate=train_rate,
                 cumulative_library_size=len(self.memory.get_library()),
+                carry_forward_solved=carry_forward_solved,
             )
             results.append(rr)
 

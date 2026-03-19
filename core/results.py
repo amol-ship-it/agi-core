@@ -69,15 +69,21 @@ class RoundResult:
     round_number: int
     wake_results: list[WakeResult]
     sleep_result: SleepResult
-    train_solved: int      # tasks matching training examples
+    train_solved: int      # tasks matching training examples (incl. carry-forward)
     tasks_total: int
     train_solve_rate: float
     cumulative_library_size: int
+    # Carry-forward: tasks already solved in prior rounds (rounds 3+ only).
+    # These are not in wake_results but count toward cumulative solve totals.
+    carry_forward_solved: int = 0
 
     @property
     def solved(self) -> int:
-        """Tasks solved = test-verified (falls back to train when no test data)."""
-        return sum(1 for w in self.wake_results if w.solved)
+        """Tasks solved = test-verified (falls back to train when no test data).
+
+        Includes carry-forward solves from previous rounds for rounds 3+.
+        """
+        return sum(1 for w in self.wake_results if w.solved) + self.carry_forward_solved
 
     @property
     def solve_rate(self) -> float:

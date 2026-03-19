@@ -52,9 +52,11 @@ def derive_rounds(compute_cap: int) -> int:
 
     Round 2 gives +50% solves (huge ROI, always worth it).
     Round 3 gives +15% solves (only worth it at high budget).
+    Rounds 4-5 (contest mode, 10M+): search only unsolved tasks,
+    compounding library benefits on the hardest remaining problems.
     """
-    if compute_cap >= 20_000_000:
-        return 3
+    if compute_cap >= 10_000_000:
+        return 5  # contest mode: 5 rounds
     if compute_cap >= 200_000:
         return 2
     return 1
