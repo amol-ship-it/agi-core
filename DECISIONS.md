@@ -3495,5 +3495,18 @@ dilutes the search space and causes regressions (confirmed: 3 tiling primitives 
 
 **Current state:** 116/400 train (29.0%), 52/400 eval (13.0%), 75 primitives, 12 local rule types, 469 tests.
 
+### Decision 117: Tier 1 Primitives — No Regression, No Gain Yet
+
+**Context:** Added 14 new primitives (5 inpainting, 3 denoising, 1 grid structure, 3 cardinal extensions, 1 perception, 2 object relationship). Also confirmed LOOCV already exists for all colormap and procedural learning paths.
+
+**Benchmark after Tier 1:**
+| Mode | Train | Eval | Primitives |
+|------|-------|------|------------|
+| default | 116/400 (29.0%) | 52/400 (13.0%) | 90 (was 75) |
+
+**Verdict:** No regression, no new solves. This is expected — the new primitives are available in search but none of them alone (or in depth-2/3 compositions with existing primitives) solve previously unsolved tasks. The overfit count went up slightly (8→10). The real gains will come from: (a) new local rule types that directly produce pixel-level solutions, (b) search evolution enabling deeper compositions, (c) correction-as-composition.
+
+**Current state:** 116/400 train (29.0%), 52/400 eval (13.0%), 90 primitives, 12 local rule types, 500 tests.
+
 ---
 *This document will be updated with each new session and major decision.*
