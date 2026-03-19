@@ -192,3 +192,88 @@ def test_color_by_object_rank_empty():
     grid = [[0, 0], [0, 0]]
     result = color_by_object_rank(grid)
     assert result == grid
+
+
+# =============================================================================
+# Tasks 13 & 15: Tier 2-3 primitives
+# =============================================================================
+
+def test_overlay_and():
+    from domains.arc.transformation_primitives import overlay_and
+    g1 = [[1, 2, 0], [0, 3, 0]]
+    g2 = [[1, 0, 4], [0, 5, 0]]
+    result = overlay_and(g1, g2)
+    assert result[0][0] == 1  # both non-zero → keep g1
+    assert result[0][1] == 0  # g2 is zero → 0
+    assert result[0][2] == 0  # g1 is zero → 0
+    assert result[1][1] == 3  # both non-zero → keep g1
+    assert result[1][0] == 0  # both zero → 0
+
+def test_overlay_and_size_mismatch():
+    from domains.arc.transformation_primitives import overlay_and
+    g1 = [[1, 2], [3, 4]]
+    g2 = [[1, 2, 3], [4, 5, 6]]
+    result = overlay_and(g1, g2)
+    assert result == g1  # size mismatch → return g1
+
+def test_overlay_xor():
+    from domains.arc.transformation_primitives import overlay_xor
+    g1 = [[1, 2, 0], [0, 3, 0]]
+    g2 = [[1, 0, 4], [0, 5, 0]]
+    result = overlay_xor(g1, g2)
+    assert result[0][0] == 0  # both non-zero → 0
+    assert result[0][1] == 2  # only g1 → 2
+    assert result[0][2] == 4  # only g2 → 4
+    assert result[1][1] == 0  # both non-zero → 0
+    assert result[1][0] == 0  # both zero → 0
+
+def test_overlay_xor_size_mismatch():
+    from domains.arc.transformation_primitives import overlay_xor
+    g1 = [[1, 2], [3, 4]]
+    g2 = [[1, 2, 3]]
+    result = overlay_xor(g1, g2)
+    assert result == g1  # size mismatch → return g1
+
+def test_extrapolate_growth():
+    from domains.arc.transformation_primitives import extrapolate_growth
+    grid = [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
+    result = extrapolate_growth(grid)
+    assert result[0][1] == 1  # grew up
+    assert result[1][0] == 1  # grew left
+    assert result[1][2] == 1  # grew right
+    assert result[2][1] == 1  # grew down
+    assert result[1][1] == 1  # original pixel kept
+
+def test_extrapolate_growth_no_overwrite():
+    from domains.arc.transformation_primitives import extrapolate_growth
+    # Existing non-zero pixel should not be overwritten by growth
+    grid = [[0, 2, 0], [0, 1, 0], [0, 0, 0]]
+    result = extrapolate_growth(grid)
+    assert result[0][1] == 2  # original pixel preserved, not overwritten by growth from (1,1)
+
+def test_extrapolate_growth_empty():
+    from domains.arc.transformation_primitives import extrapolate_growth
+    assert extrapolate_growth([]) == []
+
+def test_shrink_objects():
+    from domains.arc.transformation_primitives import shrink_objects
+    grid = [[1, 1, 1], [1, 1, 1], [1, 1, 1]]
+    result = shrink_objects(grid)
+    assert result[1][1] == 1  # center kept (has 4 neighbors)
+    # corners have exactly 2 same-color neighbors → kept (threshold is < 2)
+    assert result[0][0] == 1
+    assert result[0][2] == 1
+    assert result[2][0] == 1
+    assert result[2][2] == 1
+    # Edge midpoints have 3 neighbors → kept
+    assert result[0][1] == 1
+
+def test_shrink_objects_single_pixel():
+    from domains.arc.transformation_primitives import shrink_objects
+    grid = [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
+    result = shrink_objects(grid)
+    assert result[1][1] == 0  # single pixel → 0 neighbors → removed
+
+def test_shrink_objects_empty():
+    from domains.arc.transformation_primitives import shrink_objects
+    assert shrink_objects([]) == []

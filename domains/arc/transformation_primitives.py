@@ -1035,6 +1035,89 @@ def xor_grid(grid1: Grid, grid2: Grid) -> Grid:
     return result
 
 
+def overlay_and(grid1: Grid, grid2: Grid) -> Grid:
+    """Logical AND of two grids: keep pixels non-zero in BOTH, using grid1's color.
+
+    output[r][c] = grid1[r][c] if both grid1[r][c] != 0 and grid2[r][c] != 0, else 0.
+    If sizes differ, return grid1 unchanged.
+    """
+    if not grid1 or not grid2:
+        return grid1 or grid2 or []
+    if len(grid1) != len(grid2) or len(grid1[0]) != len(grid2[0]):
+        return grid1
+    h, w = len(grid1), len(grid1[0])
+    return [[grid1[r][c] if (grid1[r][c] != 0 and grid2[r][c] != 0) else 0
+             for c in range(w)] for r in range(h)]
+
+
+def overlay_xor(grid1: Grid, grid2: Grid) -> Grid:
+    """XOR overlay: keep pixels non-zero in exactly ONE grid (not both).
+
+    Uses whichever grid has the non-zero value.
+    If both are non-zero or both are zero, output is 0.
+    If sizes differ, return grid1 unchanged.
+    """
+    if not grid1 or not grid2:
+        return grid1 or grid2 or []
+    if len(grid1) != len(grid2) or len(grid1[0]) != len(grid2[0]):
+        return grid1
+    h, w = len(grid1), len(grid1[0])
+    result = [[0] * w for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            a, b = grid1[r][c], grid2[r][c]
+            if a != 0 and b == 0:
+                result[r][c] = a
+            elif b != 0 and a == 0:
+                result[r][c] = b
+            # both non-zero or both zero → 0
+    return result
+
+
+def extrapolate_growth(grid: Grid) -> Grid:
+    """Grow each connected component (4-connected, non-zero) by 1 pixel in cardinal directions.
+
+    Uses the component's color. Does not overwrite existing non-zero pixels.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                color = grid[r][c]
+                for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] == 0:
+                        result[nr][nc] = color
+    return result
+
+
+def shrink_objects(grid: Grid) -> Grid:
+    """Erode connected non-zero components by removing boundary pixels.
+
+    A pixel is removed (set to 0) if it has fewer than 2 non-zero 4-neighbors
+    within the same component color. Interior pixels with >= 2 neighbors are kept.
+    """
+    if not grid or not grid[0]:
+        return grid
+    h, w = len(grid), len(grid[0])
+    result = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 0:
+                color = grid[r][c]
+                neighbor_count = 0
+                for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] == color:
+                        neighbor_count += 1
+                if neighbor_count < 2:
+                    result[r][c] = 0
+    return result
+
+
 def tile_v(grid: Grid) -> Grid:
     """Repeat grid vertically: grid on top, grid on bottom."""
     if not grid:
@@ -1659,6 +1742,9 @@ def build_atomic_primitives() -> list[Primitive]:
         # Object relationships — new Tier 1 (2)
         ("draw_line_between_objects",   draw_line_between_objects),
         ("color_by_object_rank",        color_by_object_rank),
+        # Morphological growth/shrink — Tier 3 (2)
+        ("extrapolate_growth",          extrapolate_growth),
+        ("shrink_objects",              shrink_objects),
     ]
     prims = [Primitive(name=name, arity=1, fn=fn, domain="arc")
              for name, fn in unary_ops]
@@ -1666,6 +1752,9 @@ def build_atomic_primitives() -> list[Primitive]:
     prims.append(Primitive(name="mask_by", arity=2, fn=mask_by, domain="arc"))
     prims.append(Primitive(name="subtract_grid", arity=2, fn=subtract_grid, domain="arc"))
     prims.append(Primitive(name="xor_grid", arity=2, fn=xor_grid, domain="arc"))
+    # Tier 2 binary primitives
+    prims.append(Primitive(name="overlay_and", arity=2, fn=overlay_and, domain="arc"))
+    prims.append(Primitive(name="overlay_xor", arity=2, fn=overlay_xor, domain="arc"))
     return prims
 
 
