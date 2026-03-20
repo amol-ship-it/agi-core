@@ -3580,5 +3580,37 @@ Pipeline: 35m24s total, 20 learned abstractions.
 
 **Next:** Tune hyperparameters — try higher budget fraction (50%) and different pool sizes.
 
+### Decision 121: Guided Depth-4/5 Search — Full 2-Round Benchmark (Tuned)
+
+**Context:** After hyperparameter tuning (Decision 120), ran full 2-round contest benchmark with optimized guided search parameters: `guided_depth4_top_k=8` (down from 20), `guided_depth5_top_k=5` (down from 10), `guided_budget_fraction=0.30`. The insight: 8^4×4=16,384 evals fits entirely within 30% budget (~18,750 evals), giving 100% depth-4 coverage with the top-8 prims.
+
+**2-Round Contest Results (run 173051):**
+
+| Metric | Baseline (153623) | Guided+Tuned (173051) | Delta |
+|--------|-------------------|----------------------|-------|
+| Train R2 | 120/400 | 121/400 | **+1** |
+| Eval R2 | 53/400 | 54/400 | **+1** |
+| Train evals | ~28.9M | 29.0M | ~same |
+| Eval evals | ~31.6M | 31.6M | ~same |
+
+**New solves from guided search:**
+- **Train [007bbfb7]**: `mask_by(learned_4, learned_7)` — R1 new solve from library compounding
+- **Train [90c28cc7]**: `compress_rows(compress_cols(extract_largest_cc))` — R2 solve enabled by compounding
+- **Eval [73182012]**: `crop_half_top(crop_half_left(extract_largest_cc))` — R2 found simpler depth-3 equivalent (was depth-4 `rotate_180(crop_half_bottom(crop_half_right(extract_largest_cc)))` in validation run)
+
+**Zero regression:** No lost solves in either split. Eval budget is ~same (guided search uses leftover budget efficiently).
+
+**Depth-4/5 programs found across both splits:**
+- 19 depth-4+ programs in train (including 2 depth-5)
+- 31 depth-4+ programs in eval (including 2 depth-5, 1 depth-6)
+- Many are interesting compositions: `morphological_close(fill_concave_hull(connect_same_color_v(extend_left)))`, `gravity_left(connect_same_color_h(symmetry_complete(sort_cols_by_nonzero)))`
+
+**Analysis:** The +1 eval / +1 train result is real but modest. The guided search successfully discovers depth-4/5 programs (50 found total), but most don't improve on the best depth-3 result for the same task. Key limiting factors:
+1. Many unsolved tasks need qualitatively different programs, not just deeper chains
+2. Depth-4 with 8 prims covers only the 8 most promising primitives — tasks needing rare primitives are missed
+3. The library compounding from R2 is the bigger win (e.g., 90c28cc7 solved via learned concept)
+
+**Decision:** Keep guided search with tuned params (8/5/0.30). It's zero-cost on solved tasks and provides valuable depth-4/5 exploration at modest additional compute. Further score improvements likely require new primitives and grammar improvements rather than deeper search.
+
 ---
 *This document will be updated with each new session and major decision.*

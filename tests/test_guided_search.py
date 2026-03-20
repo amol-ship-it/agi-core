@@ -6,8 +6,8 @@ from core.config import SearchConfig
 class TestGuidedSearchConfig:
     def test_default_guided_fields(self):
         cfg = SearchConfig()
-        assert cfg.guided_depth4_top_k == 20
-        assert cfg.guided_depth5_top_k == 10
+        assert cfg.guided_depth4_top_k == 8
+        assert cfg.guided_depth5_top_k == 5
         assert cfg.guided_nearmiss_top_k == 5
         assert cfg.guided_budget_fraction == 0.30
 
