@@ -3556,5 +3556,29 @@ Pipeline: 35m24s total, 20 learned abstractions.
 
 **Honest assessment:** The 50% eval target (200+/400) is not achievable with the current depth-3 exhaustive search architecture. The gap is ~147 eval tasks. Closing it would require fundamentally different search strategies: LLM-guided program synthesis, neural-symbolic hybrids, or dramatically deeper search (e.g., beam search with learned heuristics instead of exhaustive enumeration).
 
+### Decision 120: Guided Depth-4/5 Search — Initial Validation
+
+**Context:** Implemented guided depth-4/5 search as Stage 1.5 between exhaustive depth-3 and structural hooks. Three strategies: near-miss extension, depth-4 (top-20 prims), depth-5 (top-10 prims). Adaptive budget: uses leftover compute after depth-3 (30% fraction cap).
+
+**R1 Results (1-round contest, no compounding):**
+
+| Metric | Baseline | Guided | Delta |
+|--------|----------|--------|-------|
+| Train R1 | 118/400 | 120/400 | +2 |
+| Eval R1 | 53/400 | 54/400 | **+1** |
+| Train evals | 18.4M | 40.7M | +2.2x |
+| Eval evals | 20.4M | 41.9M | +2.1x |
+| Train time | 5m33s | 8m50s | +1.6x |
+| Eval time | 9m15s | 13m23s | +1.4x |
+
+**New eval solve:** `73182012` solved by `rotate_180(crop_half_bottom(crop_half_right(extract_largest_cc)))` — a **depth-4 program** impossible at depth-3. Proof of concept works.
+
+**Analysis:** The +1 eval gain is modest because:
+1. Budget fraction (30%) gives ~20K evals for guided search, but 20^4=160K combos needed
+2. Most depth-4 programs exhaust the guided budget before completing enumeration
+3. Near-miss extension (strategy 1) runs first but mostly wraps depth-2/3 programs that are already close
+
+**Next:** Tune hyperparameters — try higher budget fraction (50%) and different pool sizes.
+
 ---
 *This document will be updated with each new session and major decision.*
